@@ -25,6 +25,7 @@ namespace medico_backend.Model
         public DateTime? billeddate { get; set; }
         public double? billedquantity { get; set; }
         public double? billedamount { get; set; }
+        public string? particulars { get; set; }
         public string? tenant_code { get; set; }
         [Write(false)]
         public bool? paid_status { get; set; }

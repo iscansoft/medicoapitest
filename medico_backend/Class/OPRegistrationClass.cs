@@ -111,7 +111,7 @@ namespace medico_backend.Class
                         data.queue_no = seq;
                     }
 
-                        data.op_id = Guid.NewGuid();
+                    data.op_id = Guid.NewGuid();
                     data.op_no = await GenerateOpNo(db, data.tenant_code!);   // see note below
                     data.visit_status = "WAITING";
                     data.created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
@@ -1310,6 +1310,17 @@ AND b.tenant_code = @tenant_code
                             noSlotData.created_at,
                             noSlotData.updated_at
                         });
+                    var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+
+                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = noSlotData.op_id.ToString(),
+                        custid = noSlotData.custid,
+                        tcode = noSlotTcode,
+                        rate = noSlotRate,
+                        amount = noSlotAmount,
+                        quantity = 1
+                    }, tenant_code);
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}";
                 }
@@ -1419,6 +1430,19 @@ AND b.tenant_code = @tenant_code
               AND booked_count >= max_patients
               AND tenant_code = @tenant_code",
                     new { slot_detail_id = slot.slot_detail_id, tenant_code });
+
+                // ✅ NEW — add unbilled dressing charge
+                var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+
+                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                {
+                    op_id = data.op_id.ToString(),
+                    custid = data.custid,
+                    tcode = feeTcode,
+                    rate = feeRate,
+                    amount = feeAmount,
+                    quantity = 1
+                }, tenant_code);
 
                 return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{data.token_no}";
             }
@@ -1745,14 +1769,30 @@ AND b.tenant_code = @tenant_code
         private async Task<(int? tcode, double rate, double amount)> GetServiceCharge(
     IDbConnection db, string service_name, string tenant_code)
         {
+            // 1️⃣ Exact match first (case-insensitive) — avoids picking up
+            // unrelated rows that merely start with the same letters
+            // (e.g. "im" vs "Immunoglobulin G", "Immunofixation...", etc.)
             var test = await db.QueryFirstOrDefaultAsync(
                 @"SELECT tcode, amount FROM test_master
           WHERE TRIM(tenant_code) = TRIM(@tenant_code)
           AND   deleted     = false
-          AND   name ILIKE @name_pattern
+          AND   name ILIKE @exact_name
           ORDER BY tcode
           LIMIT 1",
-                new { tenant_code, name_pattern = $"{service_name}%" });
+                new { tenant_code, exact_name = service_name });
+
+            // 2️⃣ Fallback: prefix match, only if no exact match was found
+            if (test == null)
+            {
+                test = await db.QueryFirstOrDefaultAsync(
+                    @"SELECT tcode, amount FROM test_master
+              WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+              AND   deleted     = false
+              AND   name ILIKE @name_pattern
+              ORDER BY tcode
+              LIMIT 1",
+                    new { tenant_code, name_pattern = $"{service_name}%" });
+            }
 
             if (test == null)
             {

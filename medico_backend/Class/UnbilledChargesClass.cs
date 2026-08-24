@@ -32,11 +32,24 @@ namespace medico_backend.Class
 
                 if (already > 0)
                     return "Consultation charge already pending for this visit";
+                
+                // ✅ NEW — resolve item/test name for this tcode, so callers in
+                // OpRegistrationClass don't need to pass or know about it.
+                string? itemName = req.particulars;   // caller can still override if they passed one
+                if (string.IsNullOrWhiteSpace(itemName) && req.tcode.HasValue)
+                {
+                    itemName = await db.ExecuteScalarAsync<string?>(
+                        @"SELECT name FROM test_master
+                  WHERE tcode = @tcode
+                  AND   TRIM(tenant_code) = TRIM(@tenant_code)
+                  AND   deleted = false",
+                        new { req.tcode, tenant_code });
+                }
 
                 var row = new UnbilledChargeRow
                 {
                     unbilledid = Guid.NewGuid().ToString(),
-                    entrytype = "CONSULTATION",
+                    entrytype = itemName ?? "CONSULTATION",
                     entryid = req.op_id,
                     chargedate = DateTime.UtcNow,
                     custid = req.custid,
@@ -48,7 +61,8 @@ namespace medico_backend.Class
                     discount = 0,
                     charityamount = 0,
                     billedstatus = false,
-                    tenant_code = tenant_code
+                    tenant_code = tenant_code,
+                    particulars = itemName ?? "CONSULTATION"
                 };
 
                 await db.InsertAsync(row);
