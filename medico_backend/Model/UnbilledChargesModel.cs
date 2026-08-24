@@ -39,6 +39,7 @@ namespace medico_backend.Model
         public double rate { get; set; }
         public double amount { get; set; }
         public double quantity { get; set; } = 1;
+        public string? particulars { get; set; }   // NEW
     }
 
     public class UnbilledChargeSummary

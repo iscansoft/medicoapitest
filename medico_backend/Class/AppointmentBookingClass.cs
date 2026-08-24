@@ -82,32 +82,27 @@ namespace Medico_Backend.Class
 
             return await db.ExecuteScalarAsync<int>(sql, new { slot_detail_id, tenant_code });
         }
-
-        // ─────────────────────────────────────────
-        // BOOK APPOINTMENT
-        // ─────────────────────────────────────────
         public async Task<string> BookAppointment(AppointmentBookingModel data)
         {
             try
             {
                 using IDbConnection db = new NpgsqlConnection(_db_conn);
+                db.Open();
 
-                // Validate booking_type
                 var allowedTypes = new[] { "WALKIN", "ONLINE", "WHATSAPP" };
                 if (!allowedTypes.Contains(data.booking_type.ToUpper()))
                     return "Invalid booking_type. Allowed: WALKIN, ONLINE,WHATSAPP";
 
                 data.booking_type = data.booking_type.ToUpper();
 
-                // Fetch slot and check limits based on booking_type
                 string checkSql = @"SELECT slot_status, booked_count, max_patients,
-                                   walkin_count, max_walkin,
-                                   online_count, max_online
-                            FROM   doctor_appointment_slot_details  
-                            WHERE  slot_detail_id = @slot_detail_id
-                            AND    tenant_code    = @tenant_code
-                            AND    isdeleted      = false
-                            AND    is_active      = true";
+                           walkin_count, max_walkin,
+                           online_count, max_online
+                    FROM   doctor_appointment_slot_details  
+                    WHERE  slot_detail_id = @slot_detail_id
+                    AND    tenant_code    = @tenant_code
+                    AND    isdeleted      = false
+                    AND    is_active      = true";
 
                 var slot = await db.QueryFirstOrDefaultAsync(
                     checkSql, new { data.slot_detail_id, data.tenant_code });
@@ -124,83 +119,87 @@ namespace Medico_Backend.Class
                     return "Online booking limit reached for this slot";
 
                 data.booking_id = Guid.NewGuid();
-                data.token_no = await GetNextToken(data.slot_detail_id, data.tenant_code!);
                 data.booking_no = await GenerateBookingNo(db, data.tenant_code!);
                 data.created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
                 data.updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
 
-                // Only set BOOKED if not already RESCHEDULED
                 if (data.booking_status != "RESCHEDULED")
                     data.booking_status = "BOOKED";
 
-                string insertSql = @"INSERT INTO appointment_booking
+                string regTypeForToken = data.booking_type == "WALKIN" ? "WALKIN" : "ONLINE";
+
+                using var tx = db.BeginTransaction();
+                try
+                {
+                    // ✅ Single point of token assignment + seat consumption for
+                    // booking-based patients. walkin_count/online_count get bumped
+                    // exactly once, right here, inside GenerateTokenForBooking.
+                    var (opToken, opSeq) = await _opCls.GenerateTokenForBooking(
+                        db, tx, data.dcode, data.slot_detail_id, regTypeForToken,
+                        data.appointment_date, data.tenant_code!);
+
+                    data.op_token_no = opToken;
+                    data.op_queue_no = opSeq;
+                    data.token_no = await GetNextToken(data.slot_detail_id, data.tenant_code!);
+
+                    string insertSql = @"INSERT INTO appointment_booking
 (booking_id, custid, dcode, slot_detail_id, slot_master_id,
  appointment_date, slot_start_time, slot_end_time,
- token_no, booking_no, booking_status, booking_type, notes,    
+ token_no, op_token_no, op_queue_no, booking_no, booking_status, booking_type, notes,    
  rescheduled_from, reschedule_reason,
  tenant_code, isdeleted, usercode, created_at, updated_at)
 VALUES
 (@booking_id, @custid, @dcode, @slot_detail_id, @slot_master_id,
  @appointment_date, @slot_start_time, @slot_end_time,
- @token_no, @booking_no, @booking_status, @booking_type, @notes,
+ @token_no, @op_token_no, @op_queue_no, @booking_no, @booking_status, @booking_type, @notes,
  @rescheduled_from, @reschedule_reason,
  @tenant_code, @isdeleted, @usercode, @created_at, @updated_at)";
 
-                await db.ExecuteAsync(insertSql, new
-                {
-                    data.booking_id,
-                    data.custid,
-                    data.dcode,
-                    data.slot_detail_id,
-                    data.slot_master_id,
-                    appointment_date = data.appointment_date.ToDateTime(TimeOnly.MinValue),
-                    slot_start_time = data.slot_start_time.ToTimeSpan(),
-                    slot_end_time = data.slot_end_time.ToTimeSpan(),
-                    data.token_no,
-                    data.booking_no,
-                    data.booking_status,
-                    data.booking_type,
-                    data.notes,
-                    data.rescheduled_from,
-                    data.reschedule_reason,
-                    data.tenant_code,
-                    data.isdeleted,
-                    data.usercode,
-                    data.created_at,
-                    data.updated_at
-                });
+                    await db.ExecuteAsync(insertSql, new
+                    {
+                        data.booking_id,
+                        data.custid,
+                        data.dcode,
+                        data.slot_detail_id,
+                        data.slot_master_id,
+                        appointment_date = data.appointment_date.ToDateTime(TimeOnly.MinValue),
+                        slot_start_time = data.slot_start_time.ToTimeSpan(),
+                        slot_end_time = data.slot_end_time.ToTimeSpan(),
+                        data.token_no,
+                        data.op_token_no,
+                        data.op_queue_no,
+                        data.booking_no,
+                        data.booking_status,
+                        data.booking_type,
+                        data.notes,
+                        data.rescheduled_from,
+                        data.reschedule_reason,
+                        data.tenant_code,
+                        data.isdeleted,
+                        data.usercode,
+                        data.created_at,
+                        data.updated_at
+                    }, tx);
 
-                // Increment correct counter based on booking_type
-                string updateSlotSql = data.booking_type == "WALKIN"
-                    ? @"UPDATE doctor_appointment_slot_details
+                    // ✅ ONLY booked_count here — walkin_count/online_count were
+                    // already bumped above. Bumping them again here was the bug.
+                    await db.ExecuteAsync(@"
+                UPDATE doctor_appointment_slot_details
                 SET booked_count = booked_count + 1,
-                    walkin_count = walkin_count + 1,
                     slot_status  = CASE
                                      WHEN booked_count + 1 >= max_patients THEN 'FULL'
                                      ELSE 'OPEN'
                                    END,
                     updated_at   = now()
-                WHERE slot_detail_id = @slot_detail_id
-                AND   tenant_code    = @tenant_code"
+                WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
+                        new { data.slot_detail_id, data.tenant_code }, tx);
 
-                    : @"UPDATE doctor_appointment_slot_details
-                SET booked_count = booked_count + 1,
-                    online_count = online_count + 1,
-                    slot_status  = CASE
-                                     WHEN booked_count + 1 >= max_patients THEN 'FULL'
-                                     ELSE 'OPEN'
-                                   END,
-                    updated_at   = now()
-                WHERE slot_detail_id = @slot_detail_id
-                AND   tenant_code    = @tenant_code";
+                    tx.Commit();
+                }
+                catch { tx.Rollback(); throw; }
 
-                await db.ExecuteAsync(updateSlotSql,
-                    new { data.slot_detail_id, data.tenant_code });
-
-                // ✅ WALKIN → store usercode | ONLINE → store custid
                 string actionBy = data.booking_type == "WALKIN"
-                    ? data.usercode.ToString()
-                    : data.custid.ToString();
+                    ? data.usercode.ToString() : data.custid.ToString();
 
                 await WriteBookingLog(db, new AppointmentBookingLogModel
                 {
@@ -209,18 +208,14 @@ VALUES
                     custid = data.custid,
                     dcode = data.dcode,
                     action = "BOOKED",
-                    action_by = actionBy,   // ✅ WALKIN = usercode, ONLINE = custid
+                    action_by = actionBy,
                     new_slot_detail_id = data.slot_detail_id,
                     new_appointment_date = data.appointment_date,
                     new_slot_start_time = data.slot_start_time,
                     remarks = data.notes,
                     tenant_code = data.tenant_code!
                 });
-                // ✅ NEW — if this booking is a reschedule, immediately create the OP
-                // for the new date/slot too, instead of waiting for check-in.
-                // CreateOpRegistration pulls slot_detail_id/booking_no/reg_type itself
-                // from the appointment_booking row we just inserted, so we only need
-                // to pass the booking_id + patient/doctor + visit_date here.
+
                 if (data.rescheduled_from.HasValue && data.rescheduled_from != Guid.Empty)
                 {
                     var opResult = await _opCls.CreateOpRegistration(new OpRegistrationModel
@@ -228,17 +223,16 @@ VALUES
                         booking_id = data.booking_id,
                         custid = data.custid,
                         dcode = data.dcode,
-                        visit_type = "NEWVISIT",   // no visit_type stored on the booking itself — see note below
+                        visit_type = "NEWVISIT",
                         reg_type = data.booking_type,
                         visit_date = data.appointment_date,
                         notes = data.notes,
                         tenant_code = data.tenant_code!
                     });
-
-                    Console.WriteLine($"[RESCHEDULE-OP-DEBUG] BookingId={data.booking_id} CreateOpRegistration result={opResult}");
+                    Console.WriteLine($"[RESCHEDULE-OP-DEBUG] BookingId={data.booking_id} result={opResult}");
                 }
 
-                return $"Success|Token:{data.token_no}|BookingNo:{data.booking_no}|BookingId:{data.booking_id}";
+                return $"Success|Token:{data.token_no}|OpToken:{data.op_token_no}|BookingNo:{data.booking_no}|BookingId:{data.booking_id}";
             }
             catch (Exception ex) { return ex.Message; }
         }

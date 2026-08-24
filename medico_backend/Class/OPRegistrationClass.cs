@@ -64,12 +64,12 @@ namespace medico_backend.Class
                     return "booking_id is required. Both WALKIN and ONLINE must be pre-booked.";
 
                 string checkBookingSql = @"SELECT booking_status, token_no,
-                                  slot_detail_id, booking_type,
-                                  booking_no
-                           FROM   appointment_booking
-                           WHERE  booking_id  = @booking_id
-                           AND    tenant_code = @tenant_code
-                           AND    isdeleted   = false";
+                  slot_detail_id, booking_type,
+                  booking_no, op_token_no, op_queue_no
+           FROM   appointment_booking
+           WHERE  booking_id  = @booking_id
+           AND    tenant_code = @tenant_code
+           AND    isdeleted   = false";
 
                 var booking = await db.QueryFirstOrDefaultAsync(
                     checkBookingSql, new { data.booking_id, data.tenant_code });
@@ -97,13 +97,21 @@ namespace medico_backend.Class
                 using var tx = db.BeginTransaction();
                 try
                 {
-                    var (tokenNo, seq) = await GenerateNextTokenNo(
-    db, tx, data.dcode, data.slot_detail_id, data.reg_type,
-    data.visit_date, data.tenant_code!);
-                    data.token_no = tokenNo;
-                    data.queue_no = seq;
+                    if (!string.IsNullOrWhiteSpace((string?)booking.op_token_no))
+                    {
+                        data.token_no = (string)booking.op_token_no;
+                        data.queue_no = (int?)booking.op_queue_no;
+                    }
+                    else
+                    {
+                        var (tokenNo, seq) = await GenerateNextTokenNo(
+                        db, tx, data.dcode, data.slot_detail_id, data.reg_type,
+                        data.visit_date, data.tenant_code!);
+                        data.token_no = tokenNo;
+                        data.queue_no = seq;
+                    }
 
-                    data.op_id = Guid.NewGuid();
+                        data.op_id = Guid.NewGuid();
                     data.op_no = await GenerateOpNo(db, data.tenant_code!);   // see note below
                     data.visit_status = "WAITING";
                     data.created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
@@ -813,7 +821,6 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
             UPDATE doctor_appointment_slot_details
             SET
                 booked_count = booked_count + 1,
-                walkin_count = walkin_count + 1,
                 updated_at = now()
             WHERE slot_detail_id = @slot_detail_id
               AND tenant_code = @tenant_code",
@@ -1979,7 +1986,7 @@ AND b.tenant_code = @tenant_code
 
                 await db.ExecuteAsync(@"
             UPDATE doctor_appointment_slot_details
-            SET booked_count = booked_count + 1, walkin_count = walkin_count + 1, updated_at = now()
+            SET booked_count = booked_count + 1, updated_at = now()
             WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
                     new { slot_detail_id = slot.slot_detail_id, tenant_code });
 
@@ -1996,5 +2003,13 @@ AND b.tenant_code = @tenant_code
                 return ex.Message;
             }
         }
+        // Lets AppointmentBookingClass assign the OP-style token at BOOKING
+        // time — the single moment a seat is actually consumed. CreateOpRegistration
+        // must NOT call GenerateNextTokenNo again for a booking-based check-in.
+        public Task<(string token_no, int seq)> GenerateTokenForBooking(
+            IDbConnection db, IDbTransaction tx,
+            int dcode, Guid? slot_detail_id, string reg_type,
+            DateOnly visit_date, string tenant_code, int? service_id = null)
+            => GenerateNextTokenNo(db, tx, dcode, slot_detail_id, reg_type, visit_date, tenant_code, service_id);
     }
 }
