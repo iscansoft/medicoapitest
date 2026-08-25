@@ -4125,69 +4125,30 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
         }
     );
 }
-    public async Task<long> InsertStockTransfer(
-   stock_transfer_request request,
-   string tenantcode)
-    {
-        using var conn = new NpgsqlConnection(con);
-
-        await conn.OpenAsync();
-
-        using var transaction = await conn.BeginTransactionAsync();
-
-        try
+        public async Task<long> InsertStockTransfer(
+         stock_transfer_request request,
+         string tenantcode)
         {
-            // ----------------------------------------------------
-            // Generate Transfer Code
-            // ----------------------------------------------------
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var transaction = await conn.BeginTransactionAsync();
 
-            long transfercode =
-                await conn.ExecuteScalarAsync<long>(
+            try
+            {
+                // ----------------------------------------------------
+                // Insert Master — let the IDENTITY column generate
+                // transfercode. Do NOT compute it manually; it's a
+                // global PK, not scoped per tenant, and manual
+                // MAX()+1 logic collides across tenants / concurrent
+                // requests with the identity sequence.
+                // ----------------------------------------------------
+
+                long transfercode = await conn.ExecuteScalarAsync<long>(
                     @"
-                SELECT COALESCE(MAX(transfercode), 0) + 1
-                FROM stock_transfer_master
-                WHERE tenantcode = @tenantcode
-                ",
-                    new { tenantcode },
-                    transaction);
-
-
-            // ----------------------------------------------------
-            // Generate Indent Code
-            // ----------------------------------------------------
-
-            long indentcode =
-                await conn.ExecuteScalarAsync<long>(
-                    @"
-                SELECT COALESCE(MAX(indentcode), 0) + 1
-                FROM stock_transfer_master
-                WHERE tenantcode = @tenantcode
-                ",
-                    new { tenantcode },
-                    transaction);
-
-
-            // ----------------------------------------------------
-            // Transfer No
-            // ----------------------------------------------------
-
-            string transferno =
-                $"TRF-{transfercode:D6}";
-
-
-            // ----------------------------------------------------
-            // Insert Master
-            // ----------------------------------------------------
-
-            await conn.ExecuteAsync(
-                @"
             INSERT INTO stock_transfer_master
             (
-                transfercode,
-                transferno,
                 transferdate,
                 transfertype,
-                indentcode,
                 fromwarehousecode,
                 towarehousecode,
                 branchcode,
@@ -4200,11 +4161,8 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
             )
             VALUES
             (
-                @transfercode,
-                @transferno,
                 @transferdate,
                 @transfertype,
-                @indentcode,
                 @fromwarehousecode,
                 @towarehousecode,
                 @branchcode,
@@ -4215,221 +4173,163 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
                 CURRENT_TIMESTAMP,
                 @tenantcode
             )
-            ",
-                new
-                {
-                    transfercode,
-                    transferno,
-                    transferdate =
-                        request.master.transferdate,
-                    transfertype =
-                        request.master.transfertype,
-                    indentcode,
-                    fromwarehousecode =
-                        request.master.fromwarehousecode,
-                    towarehousecode =
-                        request.master.towarehousecode,
-                    branchcode =
-                        request.master.branchcode,
-                    reason =
-                        request.master.reason,
-                    remarks =
-                        request.master.remarks,
-                    createdby =
-                        request.master.createdby,
-                    tenantcode
-                },
-                transaction);
+            RETURNING transfercode;",
+                    new
+                    {
+                        transferdate = request.master.transferdate,
+                        transfertype = request.master.transfertype,
+                        fromwarehousecode = request.master.fromwarehousecode,
+                        towarehousecode = request.master.towarehousecode,
+                        branchcode = request.master.branchcode,
+                        reason = request.master.reason,
+                        remarks = request.master.remarks,
+                        createdby = request.master.createdby,
+                        tenantcode
+                    },
+                    transaction);
 
+                // ----------------------------------------------------
+                // Now that we have the real transfercode, build the
+                // human-readable transferno and store it.
+                // (indentcode left as-is — it isn't the PK, so the
+                // per-tenant MAX()+1 approach is fine for it.)
+                // ----------------------------------------------------
 
-            // ----------------------------------------------------
-            // Generate Detail Code
-            // ----------------------------------------------------
-
-            long detailcode =
-                await conn.ExecuteScalarAsync<long>(
+                long indentcode = await conn.ExecuteScalarAsync<long>(
                     @"
-                SELECT COALESCE(MAX(transferdetailcode), 0)
-                FROM stock_transfer_detail
-                WHERE tenantcode = @tenantcode
-                ",
+            SELECT COALESCE(MAX(indentcode), 0) + 1
+            FROM stock_transfer_master
+            WHERE tenantcode = @tenantcode
+            ",
                     new { tenantcode },
                     transaction);
 
+                string transferno = $"TRF-{transfercode:D6}";
 
-            // ----------------------------------------------------
-            // Insert Details
-            // ----------------------------------------------------
+                await conn.ExecuteAsync(
+                    @"
+            UPDATE stock_transfer_master
+            SET transferno = @transferno,
+                indentcode  = @indentcode
+            WHERE transfercode = @transfercode
+              AND tenantcode = @tenantcode;",
+                    new { transferno, indentcode, transfercode, tenantcode },
+                    transaction);
 
-            foreach (var detail in request.details)
-            {
-                detailcode++;
+                // ----------------------------------------------------
+                // Generate Detail Code
+                // ----------------------------------------------------
 
+                long detailcode = await conn.ExecuteScalarAsync<long>(
+                    @"
+            SELECT COALESCE(MAX(transferdetailcode), 0)
+            FROM stock_transfer_detail
+            WHERE tenantcode = @tenantcode
+            ",
+                    new { tenantcode },
+                    transaction);
 
-                // ------------------------------------------------
-                // Validate transfer quantity
-                // ------------------------------------------------
+                // ----------------------------------------------------
+                // Insert Details — let the IDENTITY column generate
+                // transferdetailcode. No manual MAX()+1 needed.
+                // ----------------------------------------------------
 
-                if (detail.transferqty <= 0)
+                foreach (var detail in request.details)
                 {
-                    throw new Exception(
-                        $"Transfer quantity must be greater than zero for Item {detail.itemcode}");
-                }
+                    if (detail.transferqty <= 0)
+                    {
+                        throw new Exception(
+                            $"Transfer quantity must be greater than zero for Item {detail.itemcode}");
+                    }
 
-
-                // ------------------------------------------------
-                // Check source stock
-                // IMPORTANT:
-                // warehouse + item + batch + tenant
-                // ------------------------------------------------
-
-                var sourceStock =
-                    await conn.QueryFirstOrDefaultAsync<stock_master>(
+                    var sourceStock = await conn.QueryFirstOrDefaultAsync<stock_master>(
                         @"
-                    SELECT *
-                    FROM stock_master
-                    WHERE warehousecode = @warehousecode
-                      AND itemcode = @itemcode
-                      AND batchno = @batchno
-                      AND tenantcode = @tenantcode
-                      AND deleted = false
-                      AND isactive = true
-                    FOR UPDATE
-                    ",
+        SELECT *
+        FROM stock_master
+        WHERE warehousecode = @warehousecode
+          AND itemcode = @itemcode
+          AND batchno = @batchno
+          AND tenantcode = @tenantcode
+          AND deleted = false
+          AND isactive = true
+        FOR UPDATE
+        ",
                         new
                         {
-                            warehousecode =
-                                request.master.fromwarehousecode,
-
-                            itemcode =
-                                detail.itemcode,
-
-                            batchno =
-                                detail.batchno,
-
+                            warehousecode = request.master.fromwarehousecode,
+                            itemcode = detail.itemcode,
+                            batchno = detail.batchno,
                             tenantcode
                         },
                         transaction);
 
-
-                if (sourceStock == null)
-                {
-                    throw new Exception(
-                        $"Stock not found. " +
-                        $"Warehouse: {request.master.fromwarehousecode}, " +
-                        $"Item: {detail.itemcode}, " +
-                        $"Batch: {detail.batchno}");
-                }
-
-
-                // ------------------------------------------------
-                // Validate available stock
-                // ------------------------------------------------
-
-                if (sourceStock.closingstock < detail.transferqty)
-                {
-                    throw new Exception(
-                        $"Insufficient stock for Item {detail.itemcode}, " +
-                        $"Batch {detail.batchno}. " +
-                        $"Available: {sourceStock.closingstock}, " +
-                        $"Transfer: {detail.transferqty}");
-                }
-
-
-                // ------------------------------------------------
-                // Insert Detail
-                // ------------------------------------------------
-
-                await conn.ExecuteAsync(
-                    @"
-                INSERT INTO stock_transfer_detail
-                (
-                    transferdetailcode,
-                    transfercode,
-                    itemcode,
-                    batchno,
-                    manufacturingdate,
-                    expirydate,
-                    uomcode,
-                    availableqty,
-                    requestedqty,
-                    approvedqty,
-                    transferqty,
-                    unitcost,
-                    stockvalue,
-                    remarks,
-                    tenantcode
-                )
-                VALUES
-                (
-                    @transferdetailcode,
-                    @transfercode,
-                    @itemcode,
-                    @batchno,
-                    @manufacturingdate,
-                    @expirydate,
-                    @uomcode,
-                    @availableqty,
-                    @requestedqty,
-                    0,
-                    @transferqty,
-                    @unitcost,
-                    @stockvalue,
-                    @remarks,
-                    @tenantcode
-                )
-                ",
-                    new
+                    if (sourceStock == null)
                     {
-                        transferdetailcode = detailcode,
-                        transfercode,
-                        itemcode =
-                            detail.itemcode,
-                        batchno =
-                            detail.batchno,
-                        manufacturingdate =
-                            detail.manufacturingdate,
-                        expirydate =
-                            detail.expirydate,
-                        uomcode =
-                            detail.uomcode,
-                        availableqty =
-                            sourceStock.closingstock,
-                        requestedqty =
-                            detail.requestedqty,
-                        transferqty =
-                            detail.transferqty,
-                        unitcost =
-                            detail.unitcost,
-                        stockvalue =
-                            detail.transferqty *
-                            detail.unitcost,
-                        remarks =
-                            detail.remarks,
-                        tenantcode
-                    },
-                    transaction);
+                        throw new Exception(
+                            $"Stock not found. Warehouse: {request.master.fromwarehousecode}, " +
+                            $"Item: {detail.itemcode}, Batch: {detail.batchno}");
+                    }
+
+                    if (sourceStock.closingstock < detail.transferqty)
+                    {
+                        throw new Exception(
+                            $"Insufficient stock for Item {detail.itemcode}, Batch {detail.batchno}. " +
+                            $"Available: {sourceStock.closingstock}, Transfer: {detail.transferqty}");
+                    }
+
+                    await conn.ExecuteAsync(
+                        @"
+        INSERT INTO stock_transfer_detail
+        (
+            transfercode, itemcode, batchno,
+            manufacturingdate, expirydate, uomcode,
+            availableqty, requestedqty, approvedqty, transferqty,
+            unitcost, stockvalue, remarks, tenantcode
+        )
+        VALUES
+        (
+            @transfercode, @itemcode, @batchno,
+            @manufacturingdate, @expirydate, @uomcode,
+            @availableqty, @requestedqty, 0, @transferqty,
+            @unitcost, @stockvalue, @remarks, @tenantcode
+        )
+        ",
+                        new
+                        {
+                            transfercode,
+                            itemcode = detail.itemcode,
+                            batchno = detail.batchno,
+                            manufacturingdate = detail.manufacturingdate,
+                            expirydate = detail.expirydate,
+                            uomcode = detail.uomcode,
+                            availableqty = sourceStock.closingstock,
+                            requestedqty = detail.requestedqty,
+                            transferqty = detail.transferqty,
+                            unitcost = detail.unitcost,
+                            stockvalue = detail.transferqty * detail.unitcost,
+                            remarks = detail.remarks,
+                            tenantcode
+                        },
+                        transaction);
+                }
+
+                await transaction.CommitAsync();
+                return transfercode;
             }
-
-
-            await transaction.CommitAsync();
-
-            return transfercode;
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
-        catch
-        {
-            await transaction.RollbackAsync();
-            throw;
-        }
-    }
 
 
-    // ============================================================
-    // UPDATE
-    // Only PENDING transfers can be updated
-    // ============================================================
+        // ============================================================
+        // UPDATE
+        // Only PENDING transfers can be updated
+        // ============================================================
 
-    public async Task<bool> UpdateStockTransfer(
+        public async Task<bool> UpdateStockTransfer(
         stock_transfer_request request,
         string tenantcode)
     {
@@ -4773,17 +4673,12 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
     }
 
 
-    // ============================================================
-    // GET ALL
-    // ============================================================
+        public async Task<IEnumerable<stock_transfer_request>> GetStockTransferList(string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
 
-    public async Task<IEnumerable<stock_transfer_master>>
-        GetStockTransferList(string tenantcode)
-    {
-        using var conn = new NpgsqlConnection(con);
-
-        return await conn.QueryAsync<stock_transfer_master>(
-            @"
+            var masters = (await conn.QueryAsync<stock_transfer_master>(
+                @"
         SELECT
             transfercode,
             transferno,
@@ -4809,15 +4704,31 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
         WHERE tenantcode = @tenantcode
         ORDER BY transfercode DESC
         ",
-            new { tenantcode });
-    }
+                new { tenantcode })).ToList();
+
+            var details = (await conn.QueryAsync<stock_transfer_detail>(
+                @"
+        SELECT *
+        FROM stock_transfer_detail
+        WHERE tenantcode = @tenantcode
+        ",
+                new { tenantcode })).ToList();
+
+            return masters.Select(m => new stock_transfer_request
+            {
+                master = m,
+                details = details
+                    .Where(d => d.transfercode == m.transfercode)
+                    .ToList()
+            });
+        }
 
 
-    // ============================================================
-    // GET BY CODE
-    // ============================================================
+        // ============================================================
+        // GET BY CODE
+        // ============================================================
 
-    public async Task<stock_transfer_request?>
+        public async Task<stock_transfer_request?>
         GetStockTransferByCode(
             long transfercode,
             string tenantcode)

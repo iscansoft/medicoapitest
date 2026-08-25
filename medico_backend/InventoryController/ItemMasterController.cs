@@ -2018,57 +2018,49 @@ long adjustmentlogcode)
    }
 
 
-   // ============================================================
-   // GET ALL
-   // ============================================================
+        [HttpGet("getallstocktransfer")]
+        public async Task<IActionResult> GetAllStockTransfer()
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
 
-   [HttpGet("getallstocktransfer")]
-   public async Task<IActionResult> GetAllStockTransfer()
-   {
-       try
-       {
-           string tenantcode =
-               HttpContext.Items["TenantCode"]?.ToString()
-               ?? Request.Headers["tenantcode"].FirstOrDefault()
-               ?? string.Empty;
+                if (string.IsNullOrEmpty(tenantcode))
+                {
+                    return BadRequest(new
+                    {
+                        status = false,
+                        message = "Tenant code not found."
+                    });
+                }
 
-           if (string.IsNullOrEmpty(tenantcode))
-           {
-               return BadRequest(new
-               {
-                   status = false,
-                   message = "Tenant code not found."
-               });
-           }
+                var result = await itemclass.GetStockTransferList(tenantcode);
 
-
-           var result =
-               await itemclass.GetStockTransferList(
-                   tenantcode);
-
-
-           return Ok(new
-           {
-               status = true,
-               data = result
-           });
-       }
-       catch (Exception ex)
-       {
-           return StatusCode(500, new
-           {
-               status = false,
-               message = ex.Message
-           });
-       }
-   }
+                return Ok(new
+                {
+                    status = true,
+                    data = result   // now each item has { master, details }
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    status = false,
+                    message = ex.Message
+                });
+            }
+        }
 
 
-   // ============================================================
-   // GET BY CODE
-   // ============================================================
+        // ============================================================
+        // GET BY CODE
+        // ============================================================
 
-   [HttpGet("getstocktransfer")]
+        [HttpGet("getstocktransfer")]
    public async Task<IActionResult> GetStockTransfer(
        long transfercode)
    {
