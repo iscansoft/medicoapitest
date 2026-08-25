@@ -46,6 +46,7 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS is_slot_required BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS op_age_wise_split BOOLEAN DEFAULT false;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_all_customers BOOLEAN DEFAULT false;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS critical_value_indication BOOLEAN DEFAULT false;
                 ";
                 await db.ExecuteAsync(sql);
             }

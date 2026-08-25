@@ -49,7 +49,7 @@ namespace medico_backend.Class
                 var row = new UnbilledChargeRow
                 {
                     unbilledid = Guid.NewGuid().ToString(),
-                    entrytype = itemName ?? "CONSULTATION",
+                    entrytype = "CONSULTATION",
                     entryid = req.op_id,
                     chargedate = DateTime.UtcNow,
                     custid = req.custid,
