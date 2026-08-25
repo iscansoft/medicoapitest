@@ -1838,6 +1838,480 @@ long adjustmentlogcode)
          });
      }
  }
+    [HttpPost("insertstocktransfer")]
+   public async Task<IActionResult> InsertStockTransfer(
+[FromBody] stock_transfer_request request)
+   {
+       try
+       {
+           string tenantcode =
+               HttpContext.Items["TenantCode"]?.ToString()
+               ?? Request.Headers["tenantcode"].FirstOrDefault()
+               ?? string.Empty;
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+           if (request == null || request.master == null)
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Invalid request."
+               });
+           }
+
+           if (request.details == null ||
+               request.details.Count == 0)
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "At least one item is required."
+               });
+           }
+
+           long transfercode =
+               await itemclass.InsertStockTransfer(
+                   request,
+                   tenantcode);
+
+           return Ok(new
+           {
+               status = true,
+               message = "Stock transfer created successfully.",
+               transfercode = transfercode
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+   // ============================================================
+   // UPDATE
+   // ============================================================
+
+   [HttpPost("updatestocktransfer")]
+   public async Task<IActionResult> UpdateStockTransfer(
+       [FromBody] stock_transfer_request request)
+   {
+       try
+       {
+           string tenantcode =
+              HttpContext.Items["TenantCode"]?.ToString()
+              ?? Request.Headers["tenantcode"].FirstOrDefault()
+              ?? string.Empty;
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           bool result =
+               await itemclass.UpdateStockTransfer(
+                   request,
+                   tenantcode);
+
+
+           if (!result)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message = "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               message =
+                   "Stock transfer updated successfully."
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // DELETE
+   // ============================================================
+
+   [HttpDelete("deletestocktransfer")]
+   public async Task<IActionResult> DeleteStockTransfer(
+       long transfercode)
+   {
+       try
+       {
+           string tenantcode =
+               HttpContext.Items["TenantCode"]?.ToString()
+               ?? Request.Headers["tenantcode"].FirstOrDefault()
+               ?? string.Empty;
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           bool result =
+               await 
+               itemclass.DeleteStockTransfer(
+                   transfercode,
+                   tenantcode);
+
+
+           if (!result)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message = "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               message =
+                   "Stock transfer deleted successfully."
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // GET ALL
+   // ============================================================
+
+   [HttpGet("getallstocktransfer")]
+   public async Task<IActionResult> GetAllStockTransfer()
+   {
+       try
+       {
+           string tenantcode =
+               HttpContext.Items["TenantCode"]?.ToString()
+               ?? Request.Headers["tenantcode"].FirstOrDefault()
+               ?? string.Empty;
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           var result =
+               await itemclass.GetStockTransferList(
+                   tenantcode);
+
+
+           return Ok(new
+           {
+               status = true,
+               data = result
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // GET BY CODE
+   // ============================================================
+
+   [HttpGet("getstocktransfer")]
+   public async Task<IActionResult> GetStockTransfer(
+       long transfercode)
+   {
+       try
+       {
+           string tenantcode =
+               HttpContext.Items["TenantCode"]?.ToString()
+               ?? Request.Headers["tenantcode"].FirstOrDefault()
+               ?? string.Empty;
+
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           var result =
+               await itemclass.GetStockTransferByCode(
+                   transfercode,
+                   tenantcode);
+
+
+           if (result == null)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message = "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               data = result
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // DISPATCH
+   // PENDING → IN_TRANSIT
+   // ============================================================
+
+   [HttpPost("dispatchstocktransfer")]
+   public async Task<IActionResult> DispatchStockTransfer(
+       [FromBody] stock_transfer_action_request request)
+   {
+       try
+       {
+           string tenantcode =
+               HttpContext.Items["TenantCode"]?.ToString()
+               ?? Request.Headers["tenantcode"].FirstOrDefault()
+               ?? string.Empty;
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           bool result =
+               await itemclass.DispatchStockTransfer(
+                   request.transfercode,
+                   request.usercode,
+                   tenantcode);
+
+
+           if (!result)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message =
+                       "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               message =
+                   "Stock transfer dispatched successfully. " +
+                   "Stock deducted from source warehouse."
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // RECEIVE
+   // IN_TRANSIT → RECEIVED
+   // ============================================================
+
+   [HttpPost("receivestocktransfer")]
+   public async Task<IActionResult> ReceiveStockTransfer(
+       [FromBody] stock_transfer_action_request request)
+   {
+       try
+       {
+           string tenantcode =
+                HttpContext.Items["TenantCode"]?.ToString()
+                ?? Request.Headers["tenantcode"].FirstOrDefault()
+                ?? string.Empty;
+
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           bool result =
+               await itemclass.ReceiveStockTransfer(
+                   request.transfercode,
+                   request.usercode,
+                   tenantcode);
+
+
+           if (!result)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message =
+                       "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               message =
+                   "Stock transfer received successfully. " +
+                   "Stock added to destination warehouse."
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
+
+
+   // ============================================================
+   // REJECT
+   // IN_TRANSIT → REJECTED
+   // ============================================================
+
+   [HttpPost("rejectstocktransfer")]
+   public async Task<IActionResult> RejectStockTransfer(
+       [FromBody] stock_transfer_action_request request)
+   {
+       try
+       {
+           string tenantcode =
+                HttpContext.Items["TenantCode"]?.ToString()
+                ?? Request.Headers["tenantcode"].FirstOrDefault()
+                ?? string.Empty;
+
+
+           if (string.IsNullOrEmpty(tenantcode))
+           {
+               return BadRequest(new
+               {
+                   status = false,
+                   message = "Tenant code not found."
+               });
+           }
+
+
+           bool result =
+               await itemclass.RejectStockTransfer(
+                   request.transfercode,
+                   request.usercode,
+                   tenantcode);
+
+
+           if (!result)
+           {
+               return NotFound(new
+               {
+                   status = false,
+                   message =
+                       "Stock transfer not found."
+               });
+           }
+
+
+           return Ok(new
+           {
+               status = true,
+               message =
+                   "Stock transfer rejected successfully. " +
+                   "Stock returned to source warehouse."
+           });
+       }
+       catch (Exception ex)
+       {
+           return StatusCode(500, new
+           {
+               status = false,
+               message = ex.Message
+           });
+       }
+   }
     }
 }
     
