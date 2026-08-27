@@ -6,7 +6,7 @@ namespace Medico_Backend.Model
     public class GroupMasterModel
     {
         [ExplicitKey]
-        public decimal gcode { get; set; }
+        public decimal? gcode { get; set; }
 
         public string? tenant_code { get; set; }
 

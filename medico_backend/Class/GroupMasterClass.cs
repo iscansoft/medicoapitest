@@ -38,7 +38,6 @@ namespace Medico_Backend.Class
                 using IDbConnection db = new NpgsqlConnection(db_conn);
 
                 data.tenant_code = tenant_code;
-                data.gcode = await GetNextGCode(tenant_code);
                 data.entereddate = DateTime.UtcNow;
                 data.ibsdate = DateTime.UtcNow;
                 data.deleted = false;
@@ -46,7 +45,6 @@ namespace Medico_Backend.Class
                 string sql = @"
                     INSERT INTO group_master
                     (
-                        gcode,
                         tenant_code,
                         dcode,
                         orderno,
@@ -69,7 +67,6 @@ namespace Medico_Backend.Class
                     )
                     VALUES
                     (
-                        @gcode,
                         @tenant_code,
                         @dcode,
                         @orderno,
