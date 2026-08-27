@@ -184,6 +184,23 @@ namespace Medico_Backend.Class
                         throw new Exception(
                             $"test_master with tcode={master.tcode} not found.");
 
+                    // ── delete removed result rows ───────────────────────────────  ← ADD THIS BLOCK
+                    if (dto.DeletedResultIds?.Count > 0)
+                    {
+                        var ids = dto.DeletedResultIds.ToArray();
+                        var p = new { ids, tenant_code };
+
+                        await db.ExecuteAsync(
+                            "DELETE FROM test_result_calculatedformula    WHERE testresultid=ANY(@ids) AND tenant_code=@tenant_code", p, tx);
+                        await db.ExecuteAsync(
+                            "DELETE FROM test_result_detailednormalvalues WHERE testresultid=ANY(@ids) AND tenant_code=@tenant_code", p, tx);
+                        await db.ExecuteAsync(
+                            "DELETE FROM test_result_textnormalvalues     WHERE testresultid=ANY(@ids) AND tenant_code=@tenant_code", p, tx);
+                        await db.ExecuteAsync(
+                            "DELETE FROM test_result_properties           WHERE testresultid=ANY(@ids) AND tenant_code=@tenant_code", p, tx);
+                        await db.ExecuteAsync(
+                            "DELETE FROM test_result_master               WHERE testresultid=ANY(@ids) AND tenant_code=@tenant_code", p, tx);
+                    }
                     // ── result rows ──────────────────────────────────────────
                     if (dto.ResultRows?.Count > 0)
                     {
