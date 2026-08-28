@@ -6256,7 +6256,20 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
                                     UNION ALL
                                     SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                    FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
+                                    FROM receipt_master rm WHERE (rm.opvisitid = op.op_id::text OR rm.cnttid = op.op_id::text) AND COALESCE(rm.deleted, false) = false AND COALESCE(rm.isdeleted, false) = false
+                                    UNION ALL
+                                    SELECT SUM(COALESCE(rd.receiptamount, 0)) AS amt
+                                    FROM receipt_details rd WHERE rd.opvisitid = op.op_id::text AND COALESCE(rd.deleted, false) = false
+                                    AND rd.receiptguid NOT IN (SELECT receiptguid FROM receipt_master WHERE (opvisitid = op.op_id::text OR cnttid = op.op_id::text) AND COALESCE(deleted, false) = false AND COALESCE(isdeleted, false) = false)
+                                    UNION ALL
+                                    SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
+                                    FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text AND COALESCE(uc.billedstatus, false) = true
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM lab_request_master lrm4 WHERE (lrm4.opvisitid = op.op_id::text OR lrm4.sheet_id = op.op_id::text) AND COALESCE(lrm4.deleted, false) = false
+                                    )
+                                    AND NOT EXISTS (
+                                        SELECT 1 FROM receipt_master rm3 WHERE (rm3.opvisitid = op.op_id::text OR rm3.cnttid = op.op_id::text) AND COALESCE(rm3.deleted, false) = false AND COALESCE(rm3.isdeleted, false) = false
+                                    )
                                 ) t
                             ), 0
                         ) AS paidamount,
@@ -6280,7 +6293,20 @@ WHERE lrd.requestguid::text = @requestguid::text
                                         FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
                                         UNION ALL
                                         SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                        FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
+                                        FROM receipt_master rm WHERE (rm.opvisitid = op.op_id::text OR rm.cnttid = op.op_id::text) AND COALESCE(rm.deleted, false) = false AND COALESCE(rm.isdeleted, false) = false
+                                        UNION ALL
+                                        SELECT SUM(COALESCE(rd.receiptamount, 0)) AS amt
+                                        FROM receipt_details rd WHERE rd.opvisitid = op.op_id::text AND COALESCE(rd.deleted, false) = false
+                                        AND rd.receiptguid NOT IN (SELECT receiptguid FROM receipt_master WHERE (opvisitid = op.op_id::text OR cnttid = op.op_id::text) AND COALESCE(deleted, false) = false AND COALESCE(isdeleted, false) = false)
+                                        UNION ALL
+                                        SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
+                                        FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text AND COALESCE(uc.billedstatus, false) = true
+                                        AND NOT EXISTS (
+                                            SELECT 1 FROM lab_request_master lrm4 WHERE (lrm4.opvisitid = op.op_id::text OR lrm4.sheet_id = op.op_id::text) AND COALESCE(lrm4.deleted, false) = false
+                                        )
+                                        AND NOT EXISTS (
+                                            SELECT 1 FROM receipt_master rm3 WHERE (rm3.opvisitid = op.op_id::text OR rm3.cnttid = op.op_id::text) AND COALESCE(rm3.deleted, false) = false AND COALESCE(rm3.isdeleted, false) = false
+                                        )
                                     ) t
                                 ), 0
                             )

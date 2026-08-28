@@ -5703,6 +5703,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "DeleteStockTransfer",
+    "RelativePath": "api/ItemMaster/deletestocktransfer",
+    "HttpMethod": "DELETE",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "transfercode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "Delete",
     "RelativePath": "api/ItemMaster/deleteuom",
     "HttpMethod": "GET",
@@ -5751,6 +5767,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "DispatchStockTransfer",
+    "RelativePath": "api/ItemMaster/dispatchstocktransfer",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_transfer_action_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "GetAllIndents",
     "RelativePath": "api/ItemMaster/getallindents",
     "HttpMethod": "GET",
@@ -5793,6 +5825,16 @@
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "GetAllStocks",
     "RelativePath": "api/ItemMaster/getallstocks",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllStockTransfer",
+    "RelativePath": "api/ItemMaster/getallstocktransfer",
     "HttpMethod": "GET",
     "IsController": true,
     "Order": 0,
@@ -6047,6 +6089,22 @@
     "Parameters": [
       {
         "Name": "itemcode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetStockTransfer",
+    "RelativePath": "api/ItemMaster/getstocktransfer",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "transfercode",
         "Type": "System.Int64",
         "IsRequired": false
       }
@@ -6311,6 +6369,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "InsertStockTransfer",
+    "RelativePath": "api/ItemMaster/insertstocktransfer",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_transfer_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "Insert",
     "RelativePath": "api/ItemMaster/insertuom",
     "HttpMethod": "POST",
@@ -6389,6 +6463,38 @@
       {
         "Name": "req",
         "Type": "medico_backend.InventoryModel.ReceivePrescriptionRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "ReceiveStockTransfer",
+    "RelativePath": "api/ItemMaster/receivestocktransfer",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_transfer_action_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "RejectStockTransfer",
+    "RelativePath": "api/ItemMaster/rejectstocktransfer",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_transfer_action_request",
         "IsRequired": true
       }
     ],
@@ -6565,6 +6671,22 @@
       {
         "Name": "stock",
         "Type": "medico_backend.InventoryModel.stock_master",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "UpdateStockTransfer",
+    "RelativePath": "api/ItemMaster/updatestocktransfer",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_transfer_request",
         "IsRequired": true
       }
     ],
@@ -13311,6 +13433,11 @@
         "IsRequired": false
       },
       {
+        "Name": "DeletedResultIds",
+        "Type": "System.Collections.Generic.List\u00601[[System.Guid, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
         "Name": "testImageFiles",
         "Type": "System.Collections.Generic.List\u00601[[Microsoft.AspNetCore.Http.IFormFile, Microsoft.AspNetCore.Http.Features, Version=9.0.0.0, Culture=neutral, PublicKeyToken=adb9793829ddae60]]",
         "IsRequired": false
@@ -13536,6 +13663,11 @@
       {
         "Name": "ResultRows",
         "Type": "System.Collections.Generic.List\u00601[[Medico_Backend.Model.TestResultRowDto, medico_backend, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "DeletedResultIds",
+        "Type": "System.Collections.Generic.List\u00601[[System.Guid, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
         "IsRequired": false
       },
       {
