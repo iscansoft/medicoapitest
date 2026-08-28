@@ -32,6 +32,7 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_ip_casesheet_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_casesheet_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_dischargesummary_header_footer_image BOOLEAN DEFAULT true;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_pharmacy_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS use_labsetting_signatures BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS use_labsetting_culture_signatures BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS report_qr BOOLEAN DEFAULT true;

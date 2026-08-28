@@ -2671,6 +2671,8 @@ namespace medico_backend.Class
                 TestOrderNo = r.TestOrderNo,
                 GroupOrderNo = r.GroupOrderNo,
                 RoomNo = r.RoomNo ?? "",
+                OPID = r.OPID ?? "",
+                IPID = r.IPID ?? "",
                 HospitalID = r.HospitalID ?? "",
                 Email = r.Email ?? "",
                 AlteredBHCode = r.AlteredBHCode ?? "",
@@ -2869,6 +2871,8 @@ SELECT
     COALESCE(gm.orderno, 0)                                             AS GroupOrderNo,
     COALESCE(lrm.roomno,     '')                                        AS RoomNo,
     COALESCE(lrm.hospitalid, '')                                        AS HospitalID,
+    COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, ''), '')   AS OPID,
+    COALESCE(lrm.ip_id::text, '')                                       AS IPID,
     COALESCE(cm.email,       '')                                        AS Email,
     COALESCE(lrm.collecteddatetime, sc.collectedtime)::timestamp        AS CollectedDateTime,
     COALESCE(lrm.onlinecode, '')                                        AS OnlineCode,
@@ -2904,8 +2908,9 @@ SELECT
     COALESCE(sm.name,  '')                                              AS ResultSample,
     COALESCE(NULLIF(TRIM(dm.name), ''), CASE WHEN lrm.dcode IS NULL OR lrm.dcode = 0 THEN 'SELF' ELSE '' END) AS DoctorFullName,
     COALESCE(lrm.dcode::int,  0)                                        AS DCode,
-    COALESCE(lrm.fronthospitalid,        '')                            AS FrontHospitalID,
-    COALESCE(lrm.fronthospitalpatientid, '')                            AS FrontHospitalPatientID,
+    COALESCE(NULLIF(lrm.fronthospitalid, ''), NULLIF(lrm.hospitalid, ''), NULLIF(lrm.fronthospitalpatientid, ''), '')   AS FrontHospitalID,
+    COALESCE(NULLIF(lrm.hospitalid, ''), NULLIF(lrm.fronthospitalid, ''), NULLIF(lrm.fronthospitalpatientid, ''), '')   AS HospitalID,
+    COALESCE(NULLIF(lrm.fronthospitalpatientid, ''), '')                      AS FrontHospitalPatientID,
     COALESCE(lrd.isauthorized1, false)                                  AS IsAuthorized1,
     COALESCE(dm.nametitle,  '')                                         AS DoctorTitle,
     COALESCE(lrm.seconddoctorname, '')                                  AS SecondDoctorName,
@@ -3239,7 +3244,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
 
                 var response = await client.PostAsync(
-                    $"/api/routinereport/iscanlabreport?tenantId={tenant_code}&isLetterhead={(isletterhead ?? false).ToString().ToLower()}",
+                    $"/api/routinereport/medicoroutinereport?tenantId={tenant_code}&isLetterhead={(isletterhead ?? false).ToString().ToLower()}",
                     content);
 
                 if (!response.IsSuccessStatusCode)
@@ -6388,8 +6393,10 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
                                     FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
                                     UNION ALL
-                                    SELECT SUM(COALESCE(ra.advanceamount, 0)) AS amt
-                                    FROM receipt_advances ra WHERE ra.custid = ip.custid AND COALESCE(ra.deleted, false) = false
+                                    SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
+                                    FROM receipt_advances ra
+                                    INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
+                                    WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                 ) t
                             ), 0
                         ) AS paidamount,
@@ -6412,8 +6419,10 @@ WHERE lrd.requestguid::text = @requestguid::text
                                         SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
                                         FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
                                         UNION ALL
-                                        SELECT SUM(COALESCE(ra.advanceamount, 0)) AS amt
-                                        FROM receipt_advances ra WHERE ra.custid = ip.custid AND COALESCE(ra.deleted, false) = false
+                                        SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
+                                        FROM receipt_advances ra
+                                        INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
+                                        WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                     ) t
                                 ), 0
                             )
@@ -6425,7 +6434,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
                       AND ip.admitdate >= @fromdate
                       AND ip.admitdate < @todate + INTERVAL '1 day'
-                      AND COALESCE(ip.deleted, false) = false
+                      AND COALESCE(ip.isdeleted, false) = false
                     ORDER BY ip.admitdate;
                 ";
 
@@ -6664,8 +6673,10 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
                                     FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
                                     UNION ALL
-                                    SELECT SUM(COALESCE(ra.advanceamount, 0)) AS amt
-                                    FROM receipt_advances ra WHERE ra.custid = ip.custid AND COALESCE(ra.deleted, false) = false
+                                    SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
+                                    FROM receipt_advances ra
+                                    INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
+                                    WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                 ) t
                             ), 0
                         ) AS paidamount,
@@ -6688,8 +6699,10 @@ WHERE lrd.requestguid::text = @requestguid::text
                                         SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
                                         FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
                                         UNION ALL
-                                        SELECT SUM(COALESCE(ra.advanceamount, 0)) AS amt
-                                        FROM receipt_advances ra WHERE ra.custid = ip.custid AND COALESCE(ra.deleted, false) = false
+                                        SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
+                                        FROM receipt_advances ra
+                                        INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
+                                        WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                     ) t
                                 ), 0
                             )
@@ -6701,7 +6714,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
                       AND ip.admitdate >= @fromdate
                       AND ip.admitdate < @todate + INTERVAL '1 day'
-                      AND COALESCE(ip.deleted, false) = false
+                      AND COALESCE(ip.isdeleted, false) = false
                     ORDER BY dm.doctorfullname, ip.admitdate;
                 ";
 
@@ -6762,11 +6775,11 @@ WHERE lrd.requestguid::text = @requestguid::text
                 // Get Header & Footer preferences from main DB
                 using (IDbConnection mainDb = new NpgsqlConnection(_conn))
                 {
-                    var labSettings = await mainDb.QueryFirstOrDefaultAsync<dynamic>(
-                        "SELECT show_pharmacy_header_footer_image FROM lab_settings WHERE tenant_code = @tenantCode",
+                    var labSettings = await mainDb.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
+                        "SELECT * FROM lab_settings WHERE tenant_code = @tenantCode AND COALESCE(deleted, false) = false ORDER BY bh_code LIMIT 1",
                         new { tenantCode });
 
-                    response.ShowHeaderFooter = labSettings?.show_pharmacy_header_footer_image ?? true;
+                    response.ShowHeaderFooter = labSettings?.show_pharmacy_header_footer_image ?? labSettings?.show_bill_header_footer_image ?? true;
 
                     if (response.ShowHeaderFooter)
                     {
@@ -6774,8 +6787,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                             "SELECT logo_url FROM mastertenant.tenants WHERE tenant_code = @tenantCode",
                             new { tenantCode });
 
-                        response.HeaderImagePath = tenant?.logo_url;
-                        response.FooterImagePath = tenant?.footer_url;
+                        response.HeaderImagePath = labSettings?.header_path ?? labSettings?.header_image_path ?? tenant?.logo_url;
+                        response.FooterImagePath = labSettings?.footer_path ?? labSettings?.footer_image_path;
                     }
                     
                     var companyInfo = await mainDb.QueryFirstOrDefaultAsync<dynamic>(@"
@@ -6796,7 +6809,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     response.Email = companyInfo?.contact_email ?? string.Empty;
                     response.GSTNo = companyInfo?.gst_number ?? string.Empty;
                     response.logo = null;
-                    response.isletterhead = labSettings?.show_pharmacy_header_footer_image ?? true;
+                    response.isletterhead = response.ShowHeaderFooter;
                     
                     response.billauthorizedby = response.LabName;
                     response.billauthorizesignature = null;

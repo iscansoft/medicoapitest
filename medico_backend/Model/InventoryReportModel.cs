@@ -9,7 +9,7 @@ namespace medico_backend.Model
         public long itemcode { get; set; }
         public string? itemname { get; set; }
         public string? batchno { get; set; }
-        public DateOnly? expirydate { get; set; }
+        public DateTime? expirydate { get; set; }
         public string? warehousename { get; set; }
         public decimal openingstock { get; set; }
         public decimal purchasedqty { get; set; }

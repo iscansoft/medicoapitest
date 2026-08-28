@@ -79,6 +79,7 @@ public class LabSettingModel
         public bool? show_casesheet_header_footer_image { get; set; } = true;
         public bool? show_op_casesheet_header_footer_image { get; set; } = true;
         public bool? show_ip_casesheet_header_footer_image { get; set; } = true;
+        public bool? show_pharmacy_header_footer_image { get; set; } = true;
 
         // Signature Mode Selection (True = Fixed LabSettings Signatures, False = Dynamic Test Result Saved & Authorized Users)
         public bool? use_labsetting_signatures { get; set; } = true;

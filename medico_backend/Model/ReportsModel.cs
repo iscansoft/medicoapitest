@@ -526,6 +526,8 @@ namespace medico_backend.Model
         public int GroupOrderNo { get; set; }
 
         public string RoomNo { get; set; }
+        public string? OPID { get; set; }
+        public string? IPID { get; set; }
         public string HospitalID { get; set; }
 
         public string Email { get; set; }
@@ -1071,6 +1073,8 @@ namespace medico_backend.Model
         public int TestOrderNo { get; set; }
         public int GroupOrderNo { get; set; }
         public string RoomNo { get; set; } = "";
+        public string? OPID { get; set; } = "";
+        public string? IPID { get; set; } = "";
         public string HospitalID { get; set; } = "";
         public string Email { get; set; } = "";
         public string AlteredBHCode { get; set; } = "";
