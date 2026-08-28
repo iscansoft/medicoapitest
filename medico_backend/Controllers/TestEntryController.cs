@@ -132,6 +132,16 @@ namespace Medico_Backend.Controllers
 
             try
             {
+                var deletedImageKeys = new List<string?>();
+                if (dto.DeletedResultIds?.Count > 0)
+                {
+                    foreach (var id in dto.DeletedResultIds)
+                    {
+                        var key = await _cls.GetResultImage(id, TenantCode);
+                        if (!string.IsNullOrWhiteSpace(key))
+                            deletedImageKeys.Add(key);
+                    }
+                }
                 // ── Pass 1 (pre-update): replace images on existing result rows ──
                 // Must happen before Update_Test so the new key is stamped on the DTO
                 // and persisted by Dapper's UpdateAsync inside the class.
@@ -165,6 +175,9 @@ namespace Medico_Backend.Controllers
                 if (updateResult != "Success")
                     return BadRequest(new { message = updateResult });
 
+                // ── ADD THIS: remove S3 objects for deleted rows, after DB commit ──
+                foreach (var key in deletedImageKeys.Where(k => !string.IsNullOrWhiteSpace(k)))
+                    await _s3.DeleteAsync(key!);
                 // ── Pass 2 (post-update): upload images for brand-new result rows ──
                 // After Update_Test the class has called Guid.NewGuid() on new rows
                 // and written it back to trm.testresultid (reference type — visible here).

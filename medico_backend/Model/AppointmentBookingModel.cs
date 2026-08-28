@@ -23,6 +23,8 @@ namespace Medico_Backend.Model
         public string? cancel_reason { get; set; }
         public DateTime? cancelled_at { get; set; }
         public string? notes { get; set; }
+        public string? op_token_no { get; set; }
+        public int? op_queue_no { get; set; }
         public string? tenant_code { get; set; }
         public bool isdeleted { get; set; } = false;
         public int usercode { get; set; } = 0;

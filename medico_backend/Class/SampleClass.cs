@@ -38,7 +38,6 @@ namespace Medico_Backend.Class
                 using IDbConnection db = new NpgsqlConnection(db_conn);
 
                 data.tenant_code = tenant_code;
-                data.scode = await GetNextSCode(tenant_code);
                 data.entereddate = DateTime.UtcNow;
                 data.ibsdate = DateTime.UtcNow;
                 data.deleted = false;
@@ -46,7 +45,6 @@ namespace Medico_Backend.Class
                 string sql = @"
                     INSERT INTO sample_master
                     (
-                        scode,
                         tenant_code,
                         orderno,
                         shortname,
@@ -60,7 +58,6 @@ namespace Medico_Backend.Class
                     )
                     VALUES
                     (
-                        @scode,
                         @tenant_code,
                         @orderno,
                         @shortname,

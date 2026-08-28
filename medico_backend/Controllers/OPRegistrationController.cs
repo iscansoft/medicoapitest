@@ -22,7 +22,30 @@ namespace medico_backend.Controllers
             var tenant = Request.Headers["tenant_code"].ToString();
             data.tenant_code = tenant;
             var res = await cls.CreateOpRegistration(data);
-            return Ok(res);
+
+            // Success looks like: "Success|OpNo:...|OpId:...|Token:...|RegType:..."
+            if (res.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = res.Split('|');
+                string GetVal(string prefix) =>
+                    parts.FirstOrDefault(p => p.StartsWith(prefix + ":"))?.Substring(prefix.Length + 1) ?? "";
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    OpNo = GetVal("OpNo"),
+                    OpId = GetVal("OpId"),
+                    Token = GetVal("Token"),
+                    RegType = GetVal("RegType")
+                });
+            }
+
+            // Any error string returned by CreateOpRegistration
+            return Ok(new
+            {
+                Status = "Error",
+                Message = res
+            });
         }
 
         [HttpPost("update-visit-status")]

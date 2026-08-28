@@ -173,5 +173,6 @@ namespace Medico_Backend.Model
     {
         public TestMasterModel TestMaster { get; set; } = new();
         public List<TestResultRowDto>? ResultRows { get; set; }
+        public List<Guid>? DeletedResultIds { get; set; }
     }
 }

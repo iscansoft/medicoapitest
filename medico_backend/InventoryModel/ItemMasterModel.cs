@@ -967,6 +967,76 @@ public long? customercode { get; set; }
 
      public stock_adjustment_log adjustmentlog { get; set; } = new();
  }
+    public class stock_transfer_master
+{
+    public long transfercode { get; set; }
+    public string? transferno { get; set; }
+    public DateTime transferdate { get; set; }
+    public string? transfertype { get; set; }
+    public long? indentcode { get; set; }
+    public long? fromwarehousecode { get; set; }
+    public long? towarehousecode { get; set; }
+    public string? branchcode { get; set; }
+    public string? reason { get; set; }
+    public string? remarks { get; set; }
+    public string? status { get; set; }
+    public long? createdby { get; set; }
+    public DateTime? createddate { get; set; }
+    public string? tenantcode { get; set; }
+
+    public List<stock_transfer_detail>? details { get; set; }
+}
+
+
+public class stock_transfer_detail
+{
+    public long transferdetailcode { get; set; }
+
+    public long transfercode { get; set; }
+
+    public long itemcode { get; set; }
+
+    public string? batchno { get; set; }
+
+    public DateTime? manufacturingdate { get; set; }
+
+    public DateTime? expirydate { get; set; }
+
+    public long? uomcode { get; set; }
+
+    public decimal availableqty { get; set; }
+
+    public decimal requestedqty { get; set; }
+
+    public decimal approvedqty { get; set; }
+
+    public decimal transferqty { get; set; }
+
+    public decimal unitcost { get; set; }
+
+    public decimal stockvalue { get; set; }
+
+    public string? remarks { get; set; }
+
+    public string? tenantcode { get; set; }
+}
+
+public class stock_transfer_request
+{
+    public stock_transfer_master master { get; set; }
+        = new stock_transfer_master();
+
+    public List<stock_transfer_detail> details { get; set; }
+        = new List<stock_transfer_detail>();
+}
+public class stock_transfer_action_request
+{
+    public long transfercode { get; set; }
+
+    public long usercode { get; set; }
+
+    public string? remarks { get; set; }
+}
     // ─── PHARMACY QUEUE ──────────────────────────────────────────────────────────
     [Table("pharmacy_prescription_queue")]
     public class PharmacyPrescriptionQueueRow

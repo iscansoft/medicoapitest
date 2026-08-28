@@ -6,7 +6,7 @@ namespace Medico_Backend.Model
     public class SampleMasterModel
     {
         [ExplicitKey]
-        public decimal scode { get; set; }
+        public decimal? scode { get; set; }
 
         public string? tenant_code { get; set; }
 
