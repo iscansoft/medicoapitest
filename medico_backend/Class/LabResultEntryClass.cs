@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Http;
 using Npgsql;
 using Org.BouncyCastle.Ocsp;
 using SkiaSharp;
+using System.Globalization;
 using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace medico_backend.Class
@@ -1495,14 +1496,15 @@ WHERE  testresultid = @Id
         }
 
         public async Task<IList<ViewResultSearch>> GetResultList(
-            int dcode, string sd, string ed, string tenantCode)
+    int dcode, string sd, string ed, string tenantCode)
         {
-            if (!DateTime.TryParse(sd, out DateTime startDate) ||
-                !DateTime.TryParse(ed, out DateTime endDate))
+            if (!DateTime.TryParseExact(sd, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime startDate) ||
+                !DateTime.TryParseExact(ed, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime endDate))
                 return new List<ViewResultSearch>();
 
-            DateTimeOffset startOffset = new DateTimeOffset(startDate.Date, TimeSpan.Zero);
-            DateTimeOffset endOffset = new DateTimeOffset(endDate.Date.AddDays(1).AddTicks(-1), TimeSpan.Zero);
+            // Half-open range: [start 00:00, end+1 00:00) — avoids fractional-tick precision issues
+            DateTime startBound = startDate.Date;
+            DateTime endBound = endDate.Date.AddDays(1);
 
             try
             {
@@ -1510,21 +1512,17 @@ WHERE  testresultid = @Id
                 await db.OpenAsync();
 
                 const string sql = @"
-                    SELECT *
-                    FROM   viewresultsearch
-                    WHERE  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)
-                      AND  (@DCode = 0 OR dcode = @DCode)
-                      AND  requestdatetime >= @StartDate
-                      AND  requestdatetime <= @EndDate";
+            SELECT *
+            FROM   public.fn_resultsearch(@TenantCode, @DCode, @StartDate, @EndDate)";
 
-                Console.WriteLine($"[GetResultList] TenantCode='{tenantCode}' DCode={dcode} Start={startOffset} End={endOffset}");
+                Console.WriteLine($"[GetResultList] TenantCode='{tenantCode}' DCode={dcode} Start={startBound:O} End={endBound:O}");
 
                 var result = await db.QueryAsync<ViewResultSearch>(sql, new
                 {
                     TenantCode = tenantCode,
-                    DCode = dcode,
-                    StartDate = startOffset,
-                    EndDate = endOffset
+                    DCode = (decimal)dcode,
+                    StartDate = startBound,   // plain DateTime, Kind=Unspecified — matches "timestamp without time zone"
+                    EndDate = endBound
                 });
 
                 return result.ToList();
