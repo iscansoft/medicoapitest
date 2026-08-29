@@ -60,6 +60,11 @@ namespace medico_backend.Services
                 ".gif" => "image/gif",
                 ".bmp" => "image/bmp",
                 ".svg" => "image/svg+xml",
+                ".webm" => "audio/webm",
+                ".wav" => "audio/wav",
+                ".mp3" => "audio/mpeg",
+                ".m4a" => "audio/mp4",
+                ".ogg" => "audio/ogg",
                 _ => "application/octet-stream"
             };
         }
@@ -97,7 +102,28 @@ namespace medico_backend.Services
             // on demand in DownloadAsync, and mixing hosts here breaks signature verification.
             return key;
         }
+        /// <summary>
+        /// Uploads an already-combined file from a stream (used for large files like
+        /// combined audio chunks) so we never buffer the whole file into a byte[]/IFormFile.
+        /// </summary>
+        public async Task<string> UploadStreamAsync(
+            Stream stream,
+            string key,
+            string? contentType)
+        {
+            await _s3.PutObjectAsync(new PutObjectRequest
+            {
+                BucketName = GetBucket(),
+                Key = key,
+                InputStream = stream,
+                ContentType = string.IsNullOrEmpty(contentType)
+                    ? GuessContentType(key)
+                    : contentType
+            });
 
+            _logger.LogInformation("S3 Upload (stream) -> {Key}", key);
+            return key;
+        }
         /// <summary>
         /// Deletes an image from S3 by its stored key. Safe — ignores missing files.
         /// </summary>
@@ -137,6 +163,24 @@ namespace medico_backend.Services
             await DeleteAsync(oldKey);
             return await UploadAsync(newFile, tenantCode, entityType, entityId, prefix);
         }
+        /// <summary>
+        /// Returns a presigned GET URL only (no bytes fetched server-side).
+        /// Use this for audio playback instead of DownloadAsync.
+        /// </summary>
+        public async Task<string?> GetPresignedUrlAsync(string? key, int expirySeconds = 3600)
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+
+            try
+            {
+                return await BuildPresignedUrl(key, expirySeconds);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "S3 presign failed for {Key}", key);
+                return null;
+            }
+        }
 
         /// <summary>
         /// Downloads a file by generating a presigned GET URL and fetching the bytes.
@@ -149,30 +193,8 @@ namespace medico_backend.Services
 
             try
             {
-                var endpoint = GetMinioEndpoint();
-
-                var minio = new MinioClient()
-                    .WithEndpoint(endpoint)
-                    .WithSSL() // remove this line if your MinIO endpoint is plain HTTP internally
-                    .WithCredentials(_config["S3:AccessKey"], _config["S3:SecretKey"])
-                    .Build();
-
-                var url = await minio.PresignedGetObjectAsync(
-                    new PresignedGetObjectArgs()
-                        .WithBucket(GetBucket())
-                        .WithObject(key)
-                        .WithExpiry(3600));
-
-                // Only rewrite the host here if GetMinioEndpoint() and GetPublicEndpoint() are
-                // genuinely the same physical server reachable under two names/ports AND your
-                // MinIO/proxy setup validates signatures against the public host regardless of
-                // which host signed it (e.g. a reverse proxy that terminates TLS but preserves
-                // the original signed headers). If they are different hosts, DO NOT do this —
-                // presign directly against GetPublicEndpoint() instead.
-                if (!string.Equals(endpoint, GetPublicEndpoint(), StringComparison.OrdinalIgnoreCase))
-                {
-                    url = url.Replace(endpoint, GetPublicEndpoint());
-                }
+                var url = await BuildPresignedUrl(key, 3600);
+                if (url == null) return null;
 
                 var bytes = await ImageUrlToBase64Async(url);
                 return (bytes, GuessContentType(key), Path.GetFileName(key));
@@ -182,6 +204,30 @@ namespace medico_backend.Services
                 _logger.LogWarning(ex, "S3 download failed for {Key}", key);
                 return null;
             }
+        }
+
+        private async Task<string?> BuildPresignedUrl(string key, int expirySeconds)
+        {
+            var endpoint = GetMinioEndpoint();
+
+            var minio = new MinioClient()
+                .WithEndpoint(endpoint)
+                .WithSSL()
+                .WithCredentials(_config["S3:AccessKey"], _config["S3:SecretKey"])
+                .Build();
+
+            var url = await minio.PresignedGetObjectAsync(
+                new PresignedGetObjectArgs()
+                    .WithBucket(GetBucket())
+                    .WithObject(key)
+                    .WithExpiry(expirySeconds));
+
+            if (!string.Equals(endpoint, GetPublicEndpoint(), StringComparison.OrdinalIgnoreCase))
+            {
+                url = url.Replace(endpoint, GetPublicEndpoint());
+            }
+
+            return url;
         }
 
         public async Task<byte[]> ImageUrlToBase64Async(string imageUrl)

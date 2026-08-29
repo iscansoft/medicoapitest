@@ -189,6 +189,9 @@ builder.Services.AddScoped<NurseNotesClass>();
 builder.Services.AddScoped<NurseNotesController>();
 builder.Services.AddScoped<ServiceTypeClass>();
 builder.Services.AddScoped<ServiceTypeController>();
+builder.Services.AddScoped<PatientVoiceNoteClass>();
+builder.Services.AddScoped<PatientVoiceNotesController>();
+builder.Services.AddScoped<Medico_Backend.Services.AudioUploadService>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
