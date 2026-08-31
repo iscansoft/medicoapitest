@@ -65,4 +65,14 @@ namespace medico_backend.Model
         public double? discount { get; set; }
         public double? charityamount { get; set; }
     }
+    public class AddUnbilledIpRegistrationRequest
+    {
+        public Guid ip_id { get; set; }
+        public decimal custid { get; set; }
+        public int? tcode { get; set; }
+        public double rate { get; set; }
+        public double amount { get; set; }
+        public double quantity { get; set; } = 1;
+        public string? particulars { get; set; }
+    }
 }
