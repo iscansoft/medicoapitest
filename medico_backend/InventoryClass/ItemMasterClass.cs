@@ -2933,29 +2933,43 @@ WHERE stockcode=@stockcode;";
                     try
                     {
                         string updateMaster = @"
-                UPDATE sales_master SET
-                    billno=@billno,
-                    billdate=@billdate,
-                    invoiceno=@invoiceno,
-                    invoicedate=@invoicedate,
-                    customercode=@customercode,
-                    grossamount=@grossamount,
-                    discountamount=@discountamount,
-                    taxamount=@taxamount,
-                    netamount=@netamount,
-                    paymentmode=@paymentmode,
-                    paymentstatus=@paymentstatus,
-                    currencycode=@currencycode,
-                    remarks=@remarks,
-                    modifieddate=NOW(),
-                    usercode=@usercode,
-                    tenantcode=@tenantcode,
-                    branchcode=@branchcode,
-                    companycode=@companycode,
-                    ordercode=@ordercode
-                WHERE salescode=@salescode";
+                    UPDATE sales_master SET
+                        billno=@billno,
+                        billdate=@billdate,
+                        invoiceno=@invoiceno,
+                        invoicedate=@invoicedate,
+                        customercode=@customercode,
+                        salestype=@salestype,
+                        warehousefield=@warehousefield,
+                        patientid=@patientid,
+                        patientname=@patientname,
+                        address=@address,
+                        consultant=@consultant,
+                        grossamount=@grossamount,
+                        discountamount=@discountamount,
+                        taxamount=@taxamount,
+                        netamount=@netamount,
+                        paymentmode=@paymentmode,
+                        paymentstatus=@paymentstatus,
+                        currencycode=@currencycode,
+                        remarks=@remarks,
+                        modifieddate=NOW(),
+                        usercode=@usercode,
+                        tenantcode=@tenantcode,
+                        branchcode=@branchcode,
+                        companycode=@companycode,
+                        ordercode=@ordercode
+                    WHERE salescode=@salescode
+                      AND tenantcode=@tenantcode
+                      AND deleted = false";
 
-                        await conn.ExecuteAsync(updateMaster, request.master, trans);
+                        int masterRows = await conn.ExecuteAsync(updateMaster, request.master, trans);
+
+                        if (masterRows == 0)
+                        {
+                            await trans.RollbackAsync();
+                            return "Sales record not found for this tenant";
+                        }
 
                         await conn.ExecuteAsync(
                             "DELETE FROM sales_detail WHERE salescode=@salescode",
@@ -2963,30 +2977,30 @@ WHERE stockcode=@stockcode;";
                             trans);
 
                         string detailQuery = @"
-                INSERT INTO sales_detail
-                (
-                    salesdetailcode,salescode,itemcode,quantity,
-                    freequantity,uomcode,rate,
-                    discountpercentage,discountamount,
-                    taxpercentage,taxamount,
-                    amount,totalamount,batchno,
-                    manufacturingdate,expirydate,
-                    soldqty,
-                    returnedqty,warehousecode,
-                    tenantcode
-                )
-                VALUES
-                (
-                    @salesdetailcode,@salescode,@itemcode,@quantity,
-                    @freequantity,@uomcode,@rate,
-                    @discountpercentage,@discountamount,
-                    @taxpercentage,@taxamount,
-                    @amount,@totalamount,@batchno,
-                    @manufacturingdate,@expirydate,
-                    @soldqty,
-                    @returnedqty,@warehousecode,
-                    @tenantcode
-                )";
+                    INSERT INTO sales_detail
+                    (
+                        salesdetailcode,salescode,itemcode,quantity,
+                        freequantity,uomcode,rate,
+                        discountpercentage,discountamount,
+                        taxpercentage,taxamount,
+                        amount,totalamount,batchno,
+                        manufacturingdate,expirydate,
+                        soldqty,
+                        returnedqty,warehousecode,
+                        tenantcode
+                    )
+                    VALUES
+                    (
+                        @salesdetailcode,@salescode,@itemcode,@quantity,
+                        @freequantity,@uomcode,@rate,
+                        @discountpercentage,@discountamount,
+                        @taxpercentage,@taxamount,
+                        @amount,@totalamount,@batchno,
+                        @manufacturingdate,@expirydate,
+                        @soldqty,
+                        @returnedqty,@warehousecode,
+                        @tenantcode
+                    )";
 
                         foreach (var item in request.details)
                         {
@@ -3047,7 +3061,7 @@ WHERE stockcode=@stockcode;";
                 return "Sales Deleted Successfully";
             }
         }
-       
+
         public async Task<string> UpsertWarehouse(warehouse_master warehouse)
         {
             try
@@ -3062,13 +3076,15 @@ WHERE stockcode=@stockcode;";
                 (
                     orderno, warehousename, shortname, description, location,
                     tenantcode, isactive, isdeleted, createddate,
-                    purchaseallow, salesallow
+                    purchaseallow, salesallow,
+                    druglicenseno, pharmacyregistrationno, gstno, msmeno
                 )
                 VALUES
                 (
                     @orderno, @warehousename, @shortname, @description, @location,
                     @tenantcode, @isactive, @isdeleted, CURRENT_TIMESTAMP,
-                    @purchaseallow, @salesallow
+                    @purchaseallow, @salesallow,
+                    @druglicenseno, @pharmacyregistrationno, @gstno, @msmeno
                 )
                 RETURNING warehousecode;";
 
@@ -3080,16 +3096,20 @@ WHERE stockcode=@stockcode;";
                     string updateQuery = @"
                 UPDATE warehouse_master
                 SET
-                    orderno       = @orderno,
-                    warehousename = @warehousename,
-                    shortname     = @shortname,
-                    description   = @description,
-                    location      = @location,
-                    isactive      = @isactive,
-                    isdeleted     = @isdeleted,
-                    purchaseallow = @purchaseallow,
-                    salesallow    = @salesallow,
-                    modifieddate  = CURRENT_TIMESTAMP
+                    orderno                 = @orderno,
+                    warehousename           = @warehousename,
+                    shortname               = @shortname,
+                    description             = @description,
+                    location                = @location,
+                    isactive                = @isactive,
+                    isdeleted               = @isdeleted,
+                    purchaseallow           = @purchaseallow,
+                    salesallow              = @salesallow,
+                    druglicenseno           = @druglicenseno,
+                    pharmacyregistrationno  = @pharmacyregistrationno,
+                    gstno                   = @gstno,
+                    msmeno                  = @msmeno,
+                    modifieddate            = CURRENT_TIMESTAMP
                 WHERE warehousecode = @warehousecode
                   AND tenantcode::text = @tenantcode;";
 
