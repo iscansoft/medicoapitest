@@ -181,7 +181,9 @@ namespace medico_backend.InventoryModel
 
     public decimal grossamount { get; set; }
 
-    public decimal discountamount { get; set; }
+    public decimal overalldiscount { get; set; }     // overall discount % applied on grossamount
+    public decimal discountamount { get; set; }       // already existed — overall discount value
+    public decimal totalamount { get; set; }
 
     public decimal taxamount { get; set; }
 

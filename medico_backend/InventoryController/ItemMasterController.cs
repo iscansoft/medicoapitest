@@ -1692,107 +1692,73 @@ namespace medico_backend.InventoryController
         {
             try
             {
-                string tenantcode = HttpContext.Items["TenantCode"]?.ToString() ?? string.Empty;
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
 
                 request.stock.tenantcode = tenantcode;
                 request.adjustmentlog.tenantcode = tenantcode;
 
                 var result = await itemclass.InsertStockAdjustment(request);
-
-                return Ok(new
-                {
-                    status = "Success",
-                    message = result
-                });
+                return Ok(new { status = "Success", message = result });
             }
             catch (Exception ex)
             {
-                return BadRequest(new
-                {
-                    status = "Failed",
-                    message = ex.Message
-                });
+                return BadRequest(new { status = "Failed", message = ex.Message });
             }
         }
+
         [HttpPost("updatestockadjustment")]
-        public async Task<IActionResult> UpdateStockAdjustment(
-[FromBody] stock_adjustment_request request)
-    {
-        try
+        public async Task<IActionResult> UpdateStockAdjustment([FromBody] stock_adjustment_request request)
         {
-            string tenantcode =
-                HttpContext.Items["TenantCode"]?.ToString()
-                ?? string.Empty;
-
-            if (string.IsNullOrEmpty(tenantcode))
+            try
             {
-                return BadRequest(new
-                {
-                    status = "Failed",
-                    message = "Tenant code not found."
-                });
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                request.stock.tenantcode = tenantcode;
+                request.adjustmentlog.tenantcode = tenantcode;
+
+                var result = await itemclass.UpdateStockAdjustment(request);
+                return Ok(new { status = "Success", message = result });
             }
-
-            // Do not trust tenantcode from Postman
-            request.stock.tenantcode = tenantcode;
-            request.adjustmentlog.tenantcode = tenantcode;
-
-            var result = await itemclass.UpdateStockAdjustment(request);
-
-            return Ok(new
+            catch (Exception ex)
             {
-                status = "Success",
-                message = result
-            });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new
-            {
-                status = "Failed",
-                message = ex.Message
-            });
-        }
-    }
-    [HttpGet("deletestockadjustment")]
-    public async Task<IActionResult> DeleteStockAdjustment(
-long adjustmentlogcode)
-    {
-        try
-        {
-            string tenantcode =
-                HttpContext.Items["TenantCode"]?.ToString()
-                ?? string.Empty;
-
-            if (string.IsNullOrEmpty(tenantcode))
-            {
-                return BadRequest(new
-                {
-                    status = "Failed",
-                    message = "Tenant code not found."
-                });
+                return BadRequest(new { status = "Failed", message = ex.Message });
             }
-
-            var result = await itemclass.DeleteStockAdjustment(
-                adjustmentlogcode,
-                tenantcode);
-
-            return Ok(new
-            {
-                status = "Success",
-                message = result
-            });
         }
-        catch (Exception ex)
+
+        [HttpGet("deletestockadjustment")]
+        public async Task<IActionResult> DeleteStockAdjustment(long adjustmentlogcode)
         {
-            return BadRequest(new
+            try
             {
-                status = "Failed",
-                message = ex.Message
-            });
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                var result = await itemclass.DeleteStockAdjustment(adjustmentlogcode, tenantcode);
+                return Ok(new { status = "Success", message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = "Failed", message = ex.Message });
+            }
         }
-    }
-     [HttpGet("getstockadjustment")]
+        [HttpGet("getstockadjustment")]
  public async Task<IActionResult> GetStockAdjustment(long adjustmentlogcode)
  {
      try
