@@ -990,99 +990,84 @@ public long? customercode { get; set; }
 
     public List<stock_transfer_detail>? details { get; set; }
 }
+ public class stock_transfer_detail
+ {
+     public long transferdetailcode { get; set; }
 
+     public long transfercode { get; set; }
 
-public class stock_transfer_detail
-{
-    public long transferdetailcode { get; set; }
+     public long itemcode { get; set; }
 
-    public long transfercode { get; set; }
+     public string? batchno { get; set; }
 
-    public long itemcode { get; set; }
+     public DateTime? manufacturingdate { get; set; }
 
-    public string? batchno { get; set; }
+     public DateTime? expirydate { get; set; }
 
-    public DateTime? manufacturingdate { get; set; }
+     public long? uomcode { get; set; }
 
-    public DateTime? expirydate { get; set; }
+     public decimal availableqty { get; set; }
 
-    public long? uomcode { get; set; }
+     public decimal requestedqty { get; set; }
 
-    public decimal availableqty { get; set; }
+     public decimal approvedqty { get; set; }
 
-    public decimal requestedqty { get; set; }
+     public decimal transferqty { get; set; }
 
-    public decimal approvedqty { get; set; }
+     // Partial receiving / rejection
+     public decimal receivedqty { get; set; }
 
-    public decimal transferqty { get; set; }
+     public decimal rejectedqty { get; set; }
 
-    // Partial receiving / rejection
-    public decimal receivedqty { get; set; }
+     public decimal unitcost { get; set; }
 
-    public decimal rejectedqty { get; set; }
+     public decimal stockvalue { get; set; }
 
-    public decimal unitcost { get; set; }
+     public string? remarks { get; set; }
 
-    public decimal stockvalue { get; set; }
+     public string? tenantcode { get; set; }
+ }
+ public class stock_transfer_request
+ {
+     public stock_transfer_master master { get; set; }
+         = new stock_transfer_master();
 
-    public string? remarks { get; set; }
+     public List<stock_transfer_detail> details { get; set; }
+         = new List<stock_transfer_detail>();
+ }
+ public class stock_transfer_action_request
+ {
+     public long transfercode { get; set; }
 
-    public string? tenantcode { get; set; }
+     public long usercode { get; set; }
+
+     public string? remarks { get; set; }
+ }
+ public class stock_transfer_partial_reject_detail
+ {
+     public long transferdetailcode { get; set; }
+
+     public decimal acceptedqty { get; set; }
+
+     public decimal rejectedqty { get; set; }
+
+     public string? remarks { get; set; }
+ }
+
+ public class stock_transfer_partial_reject_request
+ {
+     public long transfercode { get; set; }
+
+     public long usercode { get; set; }
+
+     public string? remarks { get; set; }
+
+     public List<stock_transfer_partial_reject_detail> details { get; set; }
+         = new List<stock_transfer_partial_reject_detail>();
+ }
 }
-public class stock_transfer_request
-{
-    public stock_transfer_master master { get; set; }
-        = new stock_transfer_master();
 
-    public List<stock_transfer_detail> details { get; set; }
-        = new List<stock_transfer_detail>();
-}
-public class stock_transfer_action_request
-{
-    public long transfercode { get; set; }
 
-    public long usercode { get; set; }
-
-    public string? remarks { get; set; }
-}
-public class stock_transfer_partial_reject_detail
-{
-    public long transferdetailcode { get; set; }
-
-    public decimal acceptedqty { get; set; }
-
-    public decimal rejectedqty { get; set; }
-
-    public string? remarks { get; set; }
-}
-
-public class stock_transfer_partial_reject_request
-{
-    public long transfercode { get; set; }
-
-    public long usercode { get; set; }
-
-    public string? remarks { get; set; }
-
-    public List<stock_transfer_partial_reject_detail> details { get; set; }
-        = new List<stock_transfer_partial_reject_detail>();
-}
-public class stock_transfer_request
-{
-    public stock_transfer_master master { get; set; }
-        = new stock_transfer_master();
-
-    public List<stock_transfer_detail> details { get; set; }
-        = new List<stock_transfer_detail>();
-}
-public class stock_transfer_action_request
-{
-    public long transfercode { get; set; }
-
-    public long usercode { get; set; }
-
-    public string? remarks { get; set; }
-}
     // ─── PHARMACY QUEUE ──────────────────────────────────────────────────────────
     [Table("pharmacy_prescription_queue")]
     public class PharmacyPrescriptionQueueRow
