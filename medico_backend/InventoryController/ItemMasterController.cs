@@ -1609,6 +1609,119 @@ namespace medico_backend.InventoryController
                 });
             }
         }
+            [HttpPost("partialrejectstocktransfer")]
+    public async Task<IActionResult> PartialRejectStockTransfer(
+[FromBody] stock_transfer_partial_reject_request request)
+    {
+        try
+        {
+            // ----------------------------------------------------
+            // Get Tenant Code
+            // ----------------------------------------------------
+
+            string tenantcode =
+                HttpContext.Items["TenantCode"]?.ToString()
+                ?? Request.Headers["tenantcode"].FirstOrDefault()
+                ?? string.Empty;
+
+            // ----------------------------------------------------
+            // Validate Tenant Code
+            // ----------------------------------------------------
+
+            if (string.IsNullOrEmpty(tenantcode))
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Tenant code not found."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Validate Request
+            // ----------------------------------------------------
+
+            if (request == null)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Request cannot be null."
+                });
+            }
+
+            if (request.transfercode <= 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Invalid transfer code."
+                });
+            }
+
+            if (request.usercode <= 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Invalid user code."
+                });
+            }
+
+            if (request.details == null ||
+                request.details.Count == 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "No partial rejection details provided."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Call Partial Reject Method
+            // ----------------------------------------------------
+
+            bool result =
+                await itemclass.PartialRejectStockTransfer(
+                    request.transfercode,
+                    request.usercode,
+                    tenantcode,
+                    request);
+
+            // ----------------------------------------------------
+            // Transfer Not Found
+            // ----------------------------------------------------
+
+            if (!result)
+            {
+                return NotFound(new
+                {
+                    status = false,
+                    message = "Stock transfer not found."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Success
+            // ----------------------------------------------------
+
+            return Ok(new
+            {
+                status = true,
+                message =
+                    "Stock transfer partially received successfully."
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                status = false,
+                message = ex.Message
+            });
+        }
+    }
         // ─── PHARMACY QUEUE ─────────────────────────────────────────────────────────
 
         [HttpPost("receive-prescription")]
