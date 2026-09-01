@@ -34,7 +34,7 @@ namespace medico_backend.InventoryModel
         public decimal minstock { get; set; }
 
         public decimal reorderlevel { get; set; }
-        public decimal packsize { get; set; }
+        public decimal packsize { get; set; } = 1;
         public bool isexpiry { get; set; }          // Missing
         public int expiryalertdays { get; set; }    // Missing
         public bool batchrequired { get; set; }
@@ -1065,7 +1065,7 @@ public long? customercode { get; set; }
      public List<stock_transfer_partial_reject_detail> details { get; set; }
          = new List<stock_transfer_partial_reject_detail>();
  }
-}
+
 
 
     // ─── PHARMACY QUEUE ──────────────────────────────────────────────────────────
@@ -1151,6 +1151,6 @@ public long? customercode { get; set; }
         public Guid queue_id { get; set; }
         public string status { get; set; } = string.Empty;   // PENDING / MATCHED / DISPENSED / CANCELLED
     }
-}
 
+}
 

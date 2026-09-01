@@ -2924,92 +2924,81 @@ WHERE stockcode=@stockcode;";
         }
         public async Task<string> UpdateSales(sales_request request)
         {
+            if (request?.master == null || request.master.salescode == 0)
+                return "salescode is required";
+
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
-
                 using (var trans = await conn.BeginTransactionAsync())
                 {
                     try
                     {
                         string updateMaster = @"
                     UPDATE sales_master SET
-                        billno=@billno,
-                        billdate=@billdate,
-                        invoiceno=@invoiceno,
-                        invoicedate=@invoicedate,
-                        customercode=@customercode,
-                        salestype=@salestype,
-                        warehousefield=@warehousefield,
-                        patientid=@patientid,
-                        patientname=@patientname,
-                        address=@address,
-                        consultant=@consultant,
-                        grossamount=@grossamount,
-                        discountamount=@discountamount,
-                        taxamount=@taxamount,
-                        netamount=@netamount,
-                        paymentmode=@paymentmode,
-                        paymentstatus=@paymentstatus,
-                        currencycode=@currencycode,
-                        remarks=@remarks,
-                        modifieddate=NOW(),
-                        usercode=@usercode,
-                        tenantcode=@tenantcode,
-                        branchcode=@branchcode,
-                        companycode=@companycode,
+                        billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
+                        invoicedate=@invoicedate, customercode=@customercode,
+                        salestype=@salestype, warehousefield=@warehousefield,
+                        patientid=@patientid, patientname=@patientname,
+                        address=@address, consultant=@consultant,
+                        grossamount=@grossamount, discountamount=@discountamount,
+                        taxamount=@taxamount, netamount=@netamount,
+                        paymentmode=@paymentmode, paymentstatus=@paymentstatus,
+                        currencycode=@currencycode, remarks=@remarks,
+                        modifieddate=NOW(), usercode=@usercode,
+                        branchcode=@branchcode, companycode=@companycode,
                         ordercode=@ordercode
-                    WHERE salescode=@salescode
-                      AND tenantcode=@tenantcode
+                    WHERE salescode = @salescode
+                      AND tenantcode = @tenantcode
                       AND deleted = false";
 
                         int masterRows = await conn.ExecuteAsync(updateMaster, request.master, trans);
 
+                        // STOP here if master didn't match — don't touch details
                         if (masterRows == 0)
                         {
                             await trans.RollbackAsync();
-                            return "Sales record not found for this tenant";
+                            return $"Sales record not found (salescode={request.master.salescode}, tenantcode={request.master.tenantcode})";
                         }
 
                         await conn.ExecuteAsync(
-                            "DELETE FROM sales_detail WHERE salescode=@salescode",
-                            new { request.master.salescode },
+                            "DELETE FROM sales_detail WHERE salescode=@salescode AND tenantcode=@tenantcode",
+                            new { request.master.salescode, request.master.tenantcode },
                             trans);
 
+                        // Do NOT pass salesdetailcode — let identity generate it
                         string detailQuery = @"
                     INSERT INTO sales_detail
                     (
-                        salesdetailcode,salescode,itemcode,quantity,
-                        freequantity,uomcode,rate,
-                        discountpercentage,discountamount,
-                        taxpercentage,taxamount,
-                        amount,totalamount,batchno,
-                        manufacturingdate,expirydate,
-                        soldqty,
-                        returnedqty,warehousecode,
+                        salescode, itemcode, quantity,
+                        freequantity, uomcode, rate,
+                        discountpercentage, discountamount,
+                        taxpercentage, taxamount,
+                        amount, totalamount, batchno,
+                        manufacturingdate, expirydate,
+                        soldqty, returnedqty, warehousecode,
                         tenantcode
                     )
                     VALUES
                     (
-                        @salesdetailcode,@salescode,@itemcode,@quantity,
-                        @freequantity,@uomcode,@rate,
-                        @discountpercentage,@discountamount,
-                        @taxpercentage,@taxamount,
-                        @amount,@totalamount,@batchno,
-                        @manufacturingdate,@expirydate,
-                        @soldqty,
-                        @returnedqty,@warehousecode,
+                        @salescode, @itemcode, @quantity,
+                        @freequantity, @uomcode, @rate,
+                        @discountpercentage, @discountamount,
+                        @taxpercentage, @taxamount,
+                        @amount, @totalamount, @batchno,
+                        @manufacturingdate, @expirydate,
+                        @soldqty, @returnedqty, @warehousecode,
                         @tenantcode
                     )";
 
                         foreach (var item in request.details)
                         {
                             item.salescode = request.master.salescode;
+                            item.tenantcode = request.master.tenantcode;
                             await conn.ExecuteAsync(detailQuery, item, trans);
                         }
 
                         await trans.CommitAsync();
-
                         return "Sales Updated Successfully";
                     }
                     catch
@@ -3518,7 +3507,7 @@ WHERE salesdetailcode = @salesdetailcode;",
                 await db.ExecuteAsync(@"
 UPDATE public.stock_master
 SET
-    returnqty    = COALESCE(returnqty,0) + @totalqty,
+    damagedqty    = COALESCE(damagedqty,0) + @totalqty,
     closingstock = closingstock + @totalqty,
     stockvalue   = (closingstock + @totalqty) * unitcost,
     modifieddate = CURRENT_TIMESTAMP
