@@ -2971,7 +2971,7 @@ WHERE stockcode=@stockcode;";
                     taxpercentage,taxamount,
                     amount,totalamount,batchno,
                     manufacturingdate,expirydate,
-                    orderedqty,deliveredqty,
+                    soldqty,
                     returnedqty,warehousecode,
                     tenantcode
                 )
@@ -2983,7 +2983,7 @@ WHERE stockcode=@stockcode;";
                     @taxpercentage,@taxamount,
                     @amount,@totalamount,@batchno,
                     @manufacturingdate,@expirydate,
-                    @orderedqty,@deliveredqty,
+                    @soldqty,
                     @returnedqty,@warehousecode,
                     @tenantcode
                 )";
