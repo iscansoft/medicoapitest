@@ -522,5 +522,58 @@ namespace medico_backend.Class
             }
             catch (Exception ex) { return ex.Message; }
         }
+        // ── Add IP registration/admission fee (mirrors AddConsultationCharge for OP) ──
+        public async Task<string> AddIpRegistrationCharge(AddUnbilledIpRegistrationRequest req, string tenant_code)
+        {
+            try
+            {
+                using var db = GetConnection();
+
+                // Guard against double-adding the registration fee for the same admission
+                int already = await db.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1) FROM unbilledcharges
+              WHERE ip_id = @ip_id AND entrytype = 'REGISTRATION'
+              AND tenant_code = @tenant_code
+              AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { req.ip_id, tenant_code });
+
+                if (already > 0)
+                    return "Registration charge already pending for this admission";
+
+                string? itemName = req.particulars;
+                if (string.IsNullOrWhiteSpace(itemName) && req.tcode.HasValue)
+                {
+                    itemName = await db.ExecuteScalarAsync<string?>(
+                        @"SELECT name FROM test_master
+                  WHERE tcode = @tcode
+                  AND   TRIM(tenant_code) = TRIM(@tenant_code)
+                  AND   deleted = false",
+                        new { req.tcode, tenant_code });
+                }
+
+                var row = new UnbilledChargeRow
+                {
+                    unbilledid = Guid.NewGuid().ToString(),
+                    entrytype = "REGISTRATION",
+                    entryid = req.ip_id.ToString(),
+                    chargedate = DateTime.UtcNow,
+                    custid = req.custid,
+                    ip_id = req.ip_id,
+                    tcode = req.tcode,
+                    quantity = req.quantity,
+                    rate = req.rate,
+                    amount = req.amount,
+                    discount = 0,
+                    charityamount = 0,
+                    billedstatus = false,
+                    tenant_code = tenant_code,
+                    particulars = itemName ?? "IP REGISTRATION"
+                };
+
+                await db.InsertAsync(row);
+                return $"Success|UnbilledId:{row.unbilledid}";
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
     }
 }

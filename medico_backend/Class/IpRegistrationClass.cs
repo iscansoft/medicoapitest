@@ -156,6 +156,21 @@ namespace medico_backend.Class
                 // in CreateIpRegistration, right after commit:
                 tx.Commit();
                 await _unbilledCls.RecalculateRoomRent(data.ip_id, tenant_code);
+                // ✅ NEW — add IP registration fee to unbilled charges
+                var (regTcode, regRate, regAmount) = await GetIpRegistrationFee(db, tenant_code);
+                if (regAmount > 0)
+                {
+                    await _unbilledCls.AddIpRegistrationCharge(new AddUnbilledIpRegistrationRequest
+                    {
+                        ip_id = data.ip_id,
+                        custid = data.custid,
+                        tcode = regTcode,
+                        rate = regRate,
+                        amount = regAmount,
+                        quantity = 1
+                    }, tenant_code);
+                }
+
                 return $"Success|IpNo:{data.ip_no}|IpId:{data.ip_id}";
             }
             catch (Exception ex)
@@ -419,6 +434,27 @@ namespace medico_backend.Class
                 tx.Rollback();
                 return ex.Message;
             }
+        }
+        // ─────────────────────────────────────────
+        // RESOLVE IP REGISTRATION FEE (from test_master, same pattern as OP consultation fee)
+        // ─────────────────────────────────────────
+        private async Task<(int? tcode, double rate, double amount)> GetIpRegistrationFee(IDbConnection db, string tenant_code)
+        {
+            var test = await db.QueryFirstOrDefaultAsync(
+                @"SELECT tcode, amount FROM test_master
+          WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+          AND   deleted = false
+          AND   name ILIKE 'Registration%'
+          ORDER BY tcode
+          LIMIT 1",
+                new { tenant_code });
+
+            if (test == null)
+                return (null, 0, 0);
+
+            int tcode = (int)test.tcode;
+            double amount = test.amount != null ? (double)test.amount : 0;
+            return (tcode, amount, amount);
         }
     }
 }

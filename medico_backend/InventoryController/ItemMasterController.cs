@@ -1609,6 +1609,7 @@ namespace medico_backend.InventoryController
                 });
             }
         }
+           
         // ─── PHARMACY QUEUE ─────────────────────────────────────────────────────────
 
         [HttpPost("receive-prescription")]
@@ -1686,111 +1687,78 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
-          [HttpPost("insertstockadjustment")]
-  public async Task<IActionResult> InsertStockAdjustment([FromBody] stock_adjustment_request request)
-  {
-      try
-      {
-          string tenantcode = HttpContext.Items["TenantCode"]?.ToString() ?? string.Empty;
-
-          request.stock.tenantcode = tenantcode;
-          request.adjustmentlog.tenantcode = tenantcode;
-
-          var result = await itemclass.InsertStockAdjustment(request);
-
-          return Ok(new
-          {
-              status = "Success",
-              message = result
-          });
-      }
-      catch (Exception ex)
-      {
-          return BadRequest(new
-          {
-              status = "Failed",
-              message = ex.Message
-          });
-      }
-  }
-      public async Task<IActionResult> UpdateStockAdjustment(
-[FromBody] stock_adjustment_request request)
-    {
-        try
+        [HttpPost("insertstockadjustment")]
+        public async Task<IActionResult> InsertStockAdjustment([FromBody] stock_adjustment_request request)
         {
-            string tenantcode =
-                HttpContext.Items["TenantCode"]?.ToString()
-                ?? string.Empty;
-
-            if (string.IsNullOrEmpty(tenantcode))
+            try
             {
-                return BadRequest(new
-                {
-                    status = "Failed",
-                    message = "Tenant code not found."
-                });
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                request.stock.tenantcode = tenantcode;
+                request.adjustmentlog.tenantcode = tenantcode;
+
+                var result = await itemclass.InsertStockAdjustment(request);
+                return Ok(new { status = "Success", message = result });
             }
-
-            // Do not trust tenantcode from Postman
-            request.stock.tenantcode = tenantcode;
-            request.adjustmentlog.tenantcode = tenantcode;
-
-            var result = await itemclass.UpdateStockAdjustment(request);
-
-            return Ok(new
+            catch (Exception ex)
             {
-                status = "Success",
-                message = result
-            });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new
-            {
-                status = "Failed",
-                message = ex.Message
-            });
-        }
-    }
-    [HttpDelete("deletestockadjustment")]
-    public async Task<IActionResult> DeleteStockAdjustment(
-long adjustmentlogcode)
-    {
-        try
-        {
-            string tenantcode =
-                HttpContext.Items["TenantCode"]?.ToString()
-                ?? string.Empty;
-
-            if (string.IsNullOrEmpty(tenantcode))
-            {
-                return BadRequest(new
-                {
-                    status = "Failed",
-                    message = "Tenant code not found."
-                });
+                return BadRequest(new { status = "Failed", message = ex.Message });
             }
-
-            var result = await itemclass.DeleteStockAdjustment(
-                adjustmentlogcode,
-                tenantcode);
-
-            return Ok(new
-            {
-                status = "Success",
-                message = result
-            });
         }
-        catch (Exception ex)
+
+        [HttpPost("updatestockadjustment")]
+        public async Task<IActionResult> UpdateStockAdjustment([FromBody] stock_adjustment_request request)
         {
-            return BadRequest(new
+            try
             {
-                status = "Failed",
-                message = ex.Message
-            });
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                request.stock.tenantcode = tenantcode;
+                request.adjustmentlog.tenantcode = tenantcode;
+
+                var result = await itemclass.UpdateStockAdjustment(request);
+                return Ok(new { status = "Success", message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = "Failed", message = ex.Message });
+            }
         }
-    }
-     [HttpGet("getstockadjustment")]
+
+        [HttpGet("deletestockadjustment")]
+        public async Task<IActionResult> DeleteStockAdjustment(long adjustmentlogcode)
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                var result = await itemclass.DeleteStockAdjustment(adjustmentlogcode, tenantcode);
+                return Ok(new { status = "Success", message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = "Failed", message = ex.Message });
+            }
+        }
+        [HttpGet("getstockadjustment")]
  public async Task<IActionResult> GetStockAdjustment(long adjustmentlogcode)
  {
      try
@@ -2304,6 +2272,119 @@ long adjustmentlogcode)
            });
        }
    }
+       [HttpPost("partialrejectstocktransfer")]
+    public async Task<IActionResult> PartialRejectStockTransfer(
+[FromBody] stock_transfer_partial_reject_request request)
+    {
+        try
+        {
+            // ----------------------------------------------------
+            // Get Tenant Code
+            // ----------------------------------------------------
+
+            string tenantcode =
+                HttpContext.Items["TenantCode"]?.ToString()
+                ?? Request.Headers["tenantcode"].FirstOrDefault()
+                ?? string.Empty;
+
+            // ----------------------------------------------------
+            // Validate Tenant Code
+            // ----------------------------------------------------
+
+            if (string.IsNullOrEmpty(tenantcode))
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Tenant code not found."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Validate Request
+            // ----------------------------------------------------
+
+            if (request == null)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Request cannot be null."
+                });
+            }
+
+            if (request.transfercode <= 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Invalid transfer code."
+                });
+            }
+
+            if (request.usercode <= 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "Invalid user code."
+                });
+            }
+
+            if (request.details == null ||
+                request.details.Count == 0)
+            {
+                return BadRequest(new
+                {
+                    status = false,
+                    message = "No partial rejection details provided."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Call Partial Reject Method
+            // ----------------------------------------------------
+
+            bool result =
+                await itemclass.PartialRejectStockTransfer(
+                    request.transfercode,
+                    request.usercode,
+                    tenantcode,
+                    request);
+
+            // ----------------------------------------------------
+            // Transfer Not Found
+            // ----------------------------------------------------
+
+            if (!result)
+            {
+                return NotFound(new
+                {
+                    status = false,
+                    message = "Stock transfer not found."
+                });
+            }
+
+            // ----------------------------------------------------
+            // Success
+            // ----------------------------------------------------
+
+            return Ok(new
+            {
+                status = true,
+                message =
+                    "Stock transfer partially received successfully."
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new
+            {
+                status = false,
+                message = ex.Message
+            });
+        }
+    }
     }
 }
     

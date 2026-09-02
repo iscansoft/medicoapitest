@@ -34,7 +34,7 @@ namespace medico_backend.InventoryModel
         public decimal minstock { get; set; }
 
         public decimal reorderlevel { get; set; }
-        public decimal packsize { get; set; }
+        public decimal packsize { get; set; } = 1;
         public bool isexpiry { get; set; }          // Missing
         public int expiryalertdays { get; set; }    // Missing
         public bool batchrequired { get; set; }
@@ -181,7 +181,9 @@ namespace medico_backend.InventoryModel
 
     public decimal grossamount { get; set; }
 
-    public decimal discountamount { get; set; }
+    public decimal overalldiscount { get; set; }     // overall discount % applied on grossamount
+    public decimal discountamount { get; set; }       // already existed — overall discount value
+    public decimal totalamount { get; set; }
 
     public decimal taxamount { get; set; }
 
@@ -707,12 +709,10 @@ public class purchase_detail
      public bool purchaseallow { get; set; } = false;
 
      public bool salesallow { get; set; } = false;
-
-    public string? druglicenseno { get; set; }
-    public string? pharmacyregistrationno { get; set; }
-    public string? gstno { get; set; }
-    public string? msmeno { get; set; }
-
+     public string? druglicenseno { get; set; }
+     public string? pharmacyregistrationno { get; set; }
+     public string? gstno { get; set; }
+     public string? msmeno { get; set; }
     }
     public class manufacturer_master
     {
@@ -992,57 +992,84 @@ public long? customercode { get; set; }
 
     public List<stock_transfer_detail>? details { get; set; }
 }
+ public class stock_transfer_detail
+ {
+     public long transferdetailcode { get; set; }
+
+     public long transfercode { get; set; }
+
+     public long itemcode { get; set; }
+
+     public string? batchno { get; set; }
+
+     public DateTime? manufacturingdate { get; set; }
+
+     public DateTime? expirydate { get; set; }
+
+     public long? uomcode { get; set; }
+
+     public decimal availableqty { get; set; }
+
+     public decimal requestedqty { get; set; }
+
+     public decimal approvedqty { get; set; }
+
+     public decimal transferqty { get; set; }
+
+     // Partial receiving / rejection
+     public decimal receivedqty { get; set; }
+
+     public decimal rejectedqty { get; set; }
+
+     public decimal unitcost { get; set; }
+
+     public decimal stockvalue { get; set; }
+
+     public string? remarks { get; set; }
+
+     public string? tenantcode { get; set; }
+ }
+ public class stock_transfer_request
+ {
+     public stock_transfer_master master { get; set; }
+         = new stock_transfer_master();
+
+     public List<stock_transfer_detail> details { get; set; }
+         = new List<stock_transfer_detail>();
+ }
+ public class stock_transfer_action_request
+ {
+     public long transfercode { get; set; }
+
+     public long usercode { get; set; }
+
+     public string? remarks { get; set; }
+ }
+ public class stock_transfer_partial_reject_detail
+ {
+     public long transferdetailcode { get; set; }
+
+     public decimal acceptedqty { get; set; }
+
+     public decimal rejectedqty { get; set; }
+
+     public string? remarks { get; set; }
+ }
+
+ public class stock_transfer_partial_reject_request
+ {
+     public long transfercode { get; set; }
+
+     public long usercode { get; set; }
+
+     public string? remarks { get; set; }
+
+     public List<stock_transfer_partial_reject_detail> details { get; set; }
+         = new List<stock_transfer_partial_reject_detail>();
+ }
 
 
-public class stock_transfer_detail
-{
-    public long transferdetailcode { get; set; }
 
-    public long transfercode { get; set; }
-
-    public long itemcode { get; set; }
-
-    public string? batchno { get; set; }
-
-    public DateTime? manufacturingdate { get; set; }
-
-    public DateTime? expirydate { get; set; }
-
-    public long? uomcode { get; set; }
-
-    public decimal availableqty { get; set; }
-
-    public decimal requestedqty { get; set; }
-
-    public decimal approvedqty { get; set; }
-
-    public decimal transferqty { get; set; }
-
-    public decimal unitcost { get; set; }
-
-    public decimal stockvalue { get; set; }
-
-    public string? remarks { get; set; }
-
-    public string? tenantcode { get; set; }
-}
-
-public class stock_transfer_request
-{
-    public stock_transfer_master master { get; set; }
-        = new stock_transfer_master();
-
-    public List<stock_transfer_detail> details { get; set; }
-        = new List<stock_transfer_detail>();
-}
-public class stock_transfer_action_request
-{
-    public long transfercode { get; set; }
-
-    public long usercode { get; set; }
-
-    public string? remarks { get; set; }
-}
     // ─── PHARMACY QUEUE ──────────────────────────────────────────────────────────
     [Table("pharmacy_prescription_queue")]
     public class PharmacyPrescriptionQueueRow
@@ -1126,6 +1153,6 @@ public class stock_transfer_action_request
         public Guid queue_id { get; set; }
         public string status { get; set; } = string.Empty;   // PENDING / MATCHED / DISPENSED / CANCELLED
     }
-}
 
+}
 

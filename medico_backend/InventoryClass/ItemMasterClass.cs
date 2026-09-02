@@ -294,7 +294,9 @@ namespace medico_backend.InventoryClass
          invoicedate,
          vendorcode,
          grossamount,
+         overalldiscount,
          discountamount,
+         totalamount,
          taxamount,
          netamount,
          paymentmode,
@@ -318,7 +320,9 @@ namespace medico_backend.InventoryClass
          @invoicedate,
          @vendorcode,
          @grossamount,
+         @overalldiscount,
          @discountamount,
+         @totalamount,
          @taxamount,
          @netamount,
          @paymentmode,
@@ -529,7 +533,9 @@ namespace medico_backend.InventoryClass
                     invoicedate            = @invoicedate,
                     vendorcode             = @vendorcode,
                     grossamount            = @grossamount,
+                    overalldiscount        = @overalldiscount,
                     discountamount         = @discountamount,
+                    totalamount            = @totalamount,
                     taxamount              = @taxamount,
                     netamount              = @netamount,
                     transportationcharges  = @transportationcharges,
@@ -669,7 +675,9 @@ namespace medico_backend.InventoryClass
     m.invoicedate::timestamp,   -- ← cast nullable date
     m.vendorcode,
     m.grossamount,
+    m.overalldiscount,      
     m.discountamount,
+    m.totalamount,
     m.taxamount,
     m.netamount,
     m.paymentmode,
@@ -2924,78 +2932,81 @@ WHERE stockcode=@stockcode;";
         }
         public async Task<string> UpdateSales(sales_request request)
         {
+            if (request?.master == null || request.master.salescode == 0)
+                return "salescode is required";
+
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
-
                 using (var trans = await conn.BeginTransactionAsync())
                 {
                     try
                     {
                         string updateMaster = @"
-                UPDATE sales_master SET
-                    billno=@billno,
-                    billdate=@billdate,
-                    invoiceno=@invoiceno,
-                    invoicedate=@invoicedate,
-                    customercode=@customercode,
-                    grossamount=@grossamount,
-                    discountamount=@discountamount,
-                    taxamount=@taxamount,
-                    netamount=@netamount,
-                    paymentmode=@paymentmode,
-                    paymentstatus=@paymentstatus,
-                    currencycode=@currencycode,
-                    remarks=@remarks,
-                    modifieddate=NOW(),
-                    usercode=@usercode,
-                    tenantcode=@tenantcode,
-                    branchcode=@branchcode,
-                    companycode=@companycode,
-                    ordercode=@ordercode
-                WHERE salescode=@salescode";
+                    UPDATE sales_master SET
+                        billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
+                        invoicedate=@invoicedate, customercode=@customercode,
+                        salestype=@salestype, warehousefield=@warehousefield,
+                        patientid=@patientid, patientname=@patientname,
+                        address=@address, consultant=@consultant,
+                        grossamount=@grossamount, discountamount=@discountamount,
+                        taxamount=@taxamount, netamount=@netamount,
+                        paymentmode=@paymentmode, paymentstatus=@paymentstatus,
+                        currencycode=@currencycode, remarks=@remarks,
+                        modifieddate=NOW(), usercode=@usercode,
+                        branchcode=@branchcode, companycode=@companycode,
+                        ordercode=@ordercode
+                    WHERE salescode = @salescode
+                      AND tenantcode = @tenantcode
+                      AND deleted = false";
 
-                        await conn.ExecuteAsync(updateMaster, request.master, trans);
+                        int masterRows = await conn.ExecuteAsync(updateMaster, request.master, trans);
+
+                        // STOP here if master didn't match — don't touch details
+                        if (masterRows == 0)
+                        {
+                            await trans.RollbackAsync();
+                            return $"Sales record not found (salescode={request.master.salescode}, tenantcode={request.master.tenantcode})";
+                        }
 
                         await conn.ExecuteAsync(
-                            "DELETE FROM sales_detail WHERE salescode=@salescode",
-                            new { request.master.salescode },
+                            "DELETE FROM sales_detail WHERE salescode=@salescode AND tenantcode=@tenantcode",
+                            new { request.master.salescode, request.master.tenantcode },
                             trans);
 
+                        // Do NOT pass salesdetailcode — let identity generate it
                         string detailQuery = @"
-                INSERT INTO sales_detail
-                (
-                    salesdetailcode,salescode,itemcode,quantity,
-                    freequantity,uomcode,rate,
-                    discountpercentage,discountamount,
-                    taxpercentage,taxamount,
-                    amount,totalamount,batchno,
-                    manufacturingdate,expirydate,
-                    orderedqty,deliveredqty,
-                    returnedqty,warehousecode,
-                    tenantcode
-                )
-                VALUES
-                (
-                    @salesdetailcode,@salescode,@itemcode,@quantity,
-                    @freequantity,@uomcode,@rate,
-                    @discountpercentage,@discountamount,
-                    @taxpercentage,@taxamount,
-                    @amount,@totalamount,@batchno,
-                    @manufacturingdate,@expirydate,
-                    @orderedqty,@deliveredqty,
-                    @returnedqty,@warehousecode,
-                    @tenantcode
-                )";
+                    INSERT INTO sales_detail
+                    (
+                        salescode, itemcode, quantity,
+                        freequantity, uomcode, rate,
+                        discountpercentage, discountamount,
+                        taxpercentage, taxamount,
+                        amount, totalamount, batchno,
+                        manufacturingdate, expirydate,
+                        soldqty, returnedqty, warehousecode,
+                        tenantcode
+                    )
+                    VALUES
+                    (
+                        @salescode, @itemcode, @quantity,
+                        @freequantity, @uomcode, @rate,
+                        @discountpercentage, @discountamount,
+                        @taxpercentage, @taxamount,
+                        @amount, @totalamount, @batchno,
+                        @manufacturingdate, @expirydate,
+                        @soldqty, @returnedqty, @warehousecode,
+                        @tenantcode
+                    )";
 
                         foreach (var item in request.details)
                         {
                             item.salescode = request.master.salescode;
+                            item.tenantcode = request.master.tenantcode;
                             await conn.ExecuteAsync(detailQuery, item, trans);
                         }
 
                         await trans.CommitAsync();
-
                         return "Sales Updated Successfully";
                     }
                     catch
@@ -3047,7 +3058,7 @@ WHERE stockcode=@stockcode;";
                 return "Sales Deleted Successfully";
             }
         }
-       
+
         public async Task<string> UpsertWarehouse(warehouse_master warehouse)
         {
             try
@@ -3062,13 +3073,15 @@ WHERE stockcode=@stockcode;";
                 (
                     orderno, warehousename, shortname, description, location,
                     tenantcode, isactive, isdeleted, createddate,
-                    purchaseallow, salesallow
+                    purchaseallow, salesallow,
+                    druglicenseno, pharmacyregistrationno, gstno, msmeno
                 )
                 VALUES
                 (
                     @orderno, @warehousename, @shortname, @description, @location,
                     @tenantcode, @isactive, @isdeleted, CURRENT_TIMESTAMP,
-                    @purchaseallow, @salesallow
+                    @purchaseallow, @salesallow,
+                    @druglicenseno, @pharmacyregistrationno, @gstno, @msmeno
                 )
                 RETURNING warehousecode;";
 
@@ -3080,16 +3093,20 @@ WHERE stockcode=@stockcode;";
                     string updateQuery = @"
                 UPDATE warehouse_master
                 SET
-                    orderno       = @orderno,
-                    warehousename = @warehousename,
-                    shortname     = @shortname,
-                    description   = @description,
-                    location      = @location,
-                    isactive      = @isactive,
-                    isdeleted     = @isdeleted,
-                    purchaseallow = @purchaseallow,
-                    salesallow    = @salesallow,
-                    modifieddate  = CURRENT_TIMESTAMP
+                    orderno                 = @orderno,
+                    warehousename           = @warehousename,
+                    shortname               = @shortname,
+                    description             = @description,
+                    location                = @location,
+                    isactive                = @isactive,
+                    isdeleted               = @isdeleted,
+                    purchaseallow           = @purchaseallow,
+                    salesallow              = @salesallow,
+                    druglicenseno           = @druglicenseno,
+                    pharmacyregistrationno  = @pharmacyregistrationno,
+                    gstno                   = @gstno,
+                    msmeno                  = @msmeno,
+                    modifieddate            = CURRENT_TIMESTAMP
                 WHERE warehousecode = @warehousecode
                   AND tenantcode::text = @tenantcode;";
 
@@ -3498,7 +3515,7 @@ WHERE salesdetailcode = @salesdetailcode;",
                 await db.ExecuteAsync(@"
 UPDATE public.stock_master
 SET
-    returnqty    = COALESCE(returnqty,0) + @totalqty,
+    damagedqty    = COALESCE(damagedqty,0) + @totalqty,
     closingstock = closingstock + @totalqty,
     stockvalue   = (closingstock + @totalqty) * unitcost,
     modifieddate = CURRENT_TIMESTAMP
@@ -5494,6 +5511,513 @@ string tenantcode)
                 },
                 transaction);
 
+
+            await transaction.CommitAsync();
+
+            return true;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+            public async Task<bool> PartialRejectStockTransfer(
+long transfercode,
+long usercode,
+string tenantcode,
+stock_transfer_partial_reject_request request)
+    {
+        using var conn = new NpgsqlConnection(con);
+
+        await conn.OpenAsync();
+
+        using var transaction = await conn.BeginTransactionAsync();
+
+        try
+        {
+            // ====================================================
+            // 1. GET TRANSFER MASTER
+            // ====================================================
+
+            var master =
+                await conn.QueryFirstOrDefaultAsync<stock_transfer_master>(
+                    @"
+            SELECT *
+            FROM stock_transfer_master
+            WHERE transfercode = @transfercode
+              AND tenantcode = @tenantcode
+            FOR UPDATE
+            ",
+                    new
+                    {
+                        transfercode,
+                        tenantcode
+                    },
+                    transaction);
+
+            if (master == null)
+            {
+                return false;
+            }
+
+            // ====================================================
+            // 2. CHECK TRANSFER STATUS
+            // ====================================================
+
+            if (master.status != "IN_TRANSIT")
+            {
+                throw new Exception(
+                    $"Transfer cannot be partially received because current status is {master.status}");
+            }
+
+            // ====================================================
+            // 3. CHECK WAREHOUSES
+            // ====================================================
+
+            if (master.fromwarehousecode == null)
+            {
+                throw new Exception("Source warehouse is missing.");
+            }
+
+            if (master.towarehousecode == null)
+            {
+                throw new Exception("Destination warehouse is missing.");
+            }
+
+            // ====================================================
+            // 4. CHECK REQUEST DETAILS
+            // ====================================================
+
+            if (request.details == null ||
+                request.details.Count == 0)
+            {
+                throw new Exception(
+                    "No partial rejection details provided.");
+            }
+
+            // ====================================================
+            // 5. GET TRANSFER DETAILS
+            // ====================================================
+
+            var transferDetails =
+                (await conn.QueryAsync<stock_transfer_detail>(
+                    @"
+            SELECT *
+            FROM stock_transfer_detail
+            WHERE transfercode = @transfercode
+              AND tenantcode = @tenantcode
+            FOR UPDATE
+            ",
+                    new
+                    {
+                        transfercode,
+                        tenantcode
+                    },
+                    transaction)).ToList();
+
+            if (transferDetails.Count == 0)
+            {
+                throw new Exception(
+                    "No transfer details found.");
+            }
+
+            // ====================================================
+            // 6. PROCESS EACH DETAIL
+            // ====================================================
+
+            foreach (var action in request.details)
+            {
+                var detail =
+                    transferDetails.FirstOrDefault(x =>
+                        x.transferdetailcode ==
+                        action.transferdetailcode);
+
+                if (detail == null)
+                {
+                    throw new Exception(
+                        $"Transfer detail {action.transferdetailcode} not found.");
+                }
+
+                // ------------------------------------------------
+                // Validate quantities
+                // ------------------------------------------------
+
+                if (action.acceptedqty < 0)
+                {
+                    throw new Exception(
+                        $"Accepted quantity cannot be negative for item {detail.itemcode}.");
+                }
+
+                if (action.rejectedqty < 0)
+                {
+                    throw new Exception(
+                        $"Rejected quantity cannot be negative for item {detail.itemcode}.");
+                }
+
+                decimal processedQty =
+                    action.acceptedqty +
+                    action.rejectedqty;
+
+                // ------------------------------------------------
+                // Example:
+                // Transfer Qty = 10
+                // Accepted     = 7
+                // Rejected     = 3
+                // Total        = 10
+                // ------------------------------------------------
+
+                if (processedQty != detail.transferqty)
+                {
+                    throw new Exception(
+                        $"Invalid quantity for item {detail.itemcode}. " +
+                        $"Transfer quantity = {detail.transferqty}, " +
+                        $"Accepted + Rejected = {processedQty}.");
+                }
+
+                // =================================================
+                // 7. ADD ACCEPTED QUANTITY TO DESTINATION
+                // =================================================
+
+                if (action.acceptedqty > 0)
+                {
+                    var destinationStock =
+                        await conn.QueryFirstOrDefaultAsync<stock_master>(
+                            @"
+                    SELECT *
+                    FROM stock_master
+                    WHERE warehousecode = @warehousecode
+                      AND itemcode = @itemcode
+                      AND batchno = @batchno
+                      AND tenantcode = @tenantcode
+                      AND deleted = false
+                      AND isactive = true
+                    FOR UPDATE
+                    ",
+                            new
+                            {
+                                warehousecode =
+                                    master.towarehousecode,
+
+                                itemcode =
+                                    detail.itemcode,
+
+                                batchno =
+                                    detail.batchno,
+
+                                tenantcode
+                            },
+                            transaction);
+
+                    // ------------------------------------------------
+                    // Destination stock exists
+                    // ------------------------------------------------
+
+                    if (destinationStock != null)
+                    {
+                        decimal newClosingStock =
+                            destinationStock.closingstock +
+                            action.acceptedqty;
+
+                        decimal unitcost =
+                            destinationStock.unitcost > 0
+                                ? destinationStock.unitcost
+                                : detail.unitcost;
+
+                        decimal newStockValue =
+                            newClosingStock * unitcost;
+
+                        await conn.ExecuteAsync(
+                            @"
+                    UPDATE stock_master
+                    SET
+                        closingstock = @closingstock,
+                        stockvalue = @stockvalue,
+                        modifieddate = CURRENT_TIMESTAMP,
+                        usercode = @usercode
+                    WHERE stockcode = @stockcode
+                      AND tenantcode = @tenantcode
+                    ",
+                            new
+                            {
+                                stockcode =
+                                    destinationStock.stockcode,
+
+                                closingstock =
+                                    newClosingStock,
+
+                                stockvalue =
+                                    newStockValue,
+
+                                usercode,
+                                tenantcode
+                            },
+                            transaction);
+                    }
+
+                    // ------------------------------------------------
+                    // Destination stock does not exist
+                    // ------------------------------------------------
+
+                    else
+                    {
+                        long stockcode =
+                            await conn.ExecuteScalarAsync<long>(
+                                @"
+                        SELECT
+                            COALESCE(MAX(stockcode), 0) + 1
+                        FROM stock_master
+                        WHERE tenantcode = @tenantcode
+                        ",
+                                new
+                                {
+                                    tenantcode
+                                },
+                                transaction);
+
+                        decimal stockValue =
+                            action.acceptedqty *
+                            detail.unitcost;
+
+                        await conn.ExecuteAsync(
+                            @"
+                    INSERT INTO stock_master
+                    (
+                        stockcode,
+                        itemcode,
+                        warehousecode,
+                        branchcode,
+                        locationcode,
+                        openingstock,
+                        purchasedqty,
+                        soldqty,
+                        damagedqty,
+                        returnqty,
+                        closingstock,
+                        unitcost,
+                        stockvalue,
+                        batchno,
+                        manufacturingdate,
+                        expirydate,
+                        isactive,
+                        deleted,
+                        createddate,
+                        modifieddate,
+                        usercode,
+                        tenantcode,
+                        companycode
+                    )
+                    VALUES
+                    (
+                        @stockcode,
+                        @itemcode,
+                        @warehousecode,
+                        @branchcode,
+                        NULL,
+                        0,
+                        0,
+                        0,
+                        0,
+                        0,
+                        @closingstock,
+                        @unitcost,
+                        @stockvalue,
+                        @batchno,
+                        @manufacturingdate,
+                        @expirydate,
+                        true,
+                        false,
+                        CURRENT_TIMESTAMP,
+                        NULL,
+                        @usercode,
+                        @tenantcode,
+                        NULL
+                    )
+                    ",
+                            new
+                            {
+                                stockcode,
+
+                                itemcode =
+                                    detail.itemcode,
+
+                                warehousecode =
+                                    master.towarehousecode,
+
+                                branchcode =
+                                    master.branchcode,
+
+                                closingstock =
+                                    action.acceptedqty,
+
+                                unitcost =
+                                    detail.unitcost,
+
+                                stockvalue =
+                                    stockValue,
+
+                                batchno =
+                                    detail.batchno,
+
+                                manufacturingdate =
+                                    detail.manufacturingdate,
+
+                                expirydate =
+                                    detail.expirydate,
+
+                                usercode,
+                                tenantcode
+                            },
+                            transaction);
+                    }
+                }
+
+                // =================================================
+                // 8. RETURN REJECTED QUANTITY TO SOURCE
+                // =================================================
+
+                if (action.rejectedqty > 0)
+                {
+                    var sourceStock =
+                        await conn.QueryFirstOrDefaultAsync<stock_master>(
+                            @"
+                    SELECT *
+                    FROM stock_master
+                    WHERE warehousecode = @warehousecode
+                      AND itemcode = @itemcode
+                      AND batchno = @batchno
+                      AND tenantcode = @tenantcode
+                      AND deleted = false
+                      AND isactive = true
+                    FOR UPDATE
+                    ",
+                            new
+                            {
+                                warehousecode =
+                                    master.fromwarehousecode,
+
+                                itemcode =
+                                    detail.itemcode,
+
+                                batchno =
+                                    detail.batchno,
+
+                                tenantcode
+                            },
+                            transaction);
+
+                    if (sourceStock == null)
+                    {
+                        throw new Exception(
+                            $"Source stock not found. " +
+                            $"Warehouse: {master.fromwarehousecode}, " +
+                            $"Item: {detail.itemcode}, " +
+                            $"Batch: {detail.batchno}");
+                    }
+
+                    // ------------------------------------------------
+                    // Add rejected quantity back to source
+                    // ------------------------------------------------
+
+                    decimal newSourceClosingStock =
+                        sourceStock.closingstock +
+                        action.rejectedqty;
+
+                    decimal newSourceStockValue =
+                        newSourceClosingStock *
+                        sourceStock.unitcost;
+
+                    await conn.ExecuteAsync(
+                        @"
+                UPDATE stock_master
+                SET
+                    closingstock = @closingstock,
+                    stockvalue = @stockvalue,
+                    modifieddate = CURRENT_TIMESTAMP,
+                    usercode = @usercode
+                WHERE stockcode = @stockcode
+                  AND tenantcode = @tenantcode
+                ",
+                        new
+                        {
+                            stockcode =
+                                sourceStock.stockcode,
+
+                            closingstock =
+                                newSourceClosingStock,
+
+                            stockvalue =
+                                newSourceStockValue,
+
+                            usercode,
+                            tenantcode
+                        },
+                        transaction);
+                }
+
+                // =================================================
+                // 9. UPDATE TRANSFER DETAIL
+                // =================================================
+                //
+                // NOTE:
+                // Your current stock_transfer_detail class does
+                // not contain receivedqty/rejectedqty.
+                //
+                // These columns must exist in PostgreSQL.
+                // =================================================
+
+                await conn.ExecuteAsync(
+                    @"
+            UPDATE stock_transfer_detail
+            SET
+                approvedqty = @approvedqty,
+                remarks = @remarks
+            WHERE transferdetailcode = @transferdetailcode
+              AND transfercode = @transfercode
+              AND tenantcode = @tenantcode
+            ",
+                    new
+                    {
+                        approvedqty =
+                            action.acceptedqty,
+
+                        remarks =
+                            action.remarks,
+
+                        transferdetailcode =
+                            action.transferdetailcode,
+
+                        transfercode,
+                        tenantcode
+                    },
+                    transaction);
+            }
+
+            // ====================================================
+            // 10. UPDATE MASTER STATUS
+            // ====================================================
+
+            await conn.ExecuteAsync(
+                @"
+        UPDATE stock_transfer_master
+        SET
+            status = 'PARTIALLY_RECEIVED',
+            receivedby = @usercode,
+            receiveddate = CURRENT_TIMESTAMP
+        WHERE transfercode = @transfercode
+          AND tenantcode = @tenantcode
+        ",
+                new
+                {
+                    transfercode,
+                    usercode,
+                    tenantcode
+                },
+                transaction);
+
+            // ====================================================
+            // 11. COMMIT
+            // ====================================================
 
             await transaction.CommitAsync();
 
