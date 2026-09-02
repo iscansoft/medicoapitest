@@ -599,6 +599,7 @@ public class purchase_detail
      public string? patientid { get; set; }      // Patient ID
 
      public string? patientname { get; set; }    // Patient Name
+     public string? mobileno { get; set; }
 
      public string? address { get; set; }        // Patient Address
 
