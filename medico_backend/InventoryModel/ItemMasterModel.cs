@@ -707,6 +707,12 @@ public class purchase_detail
      public bool purchaseallow { get; set; } = false;
 
      public bool salesallow { get; set; } = false;
+
+    public string? druglicenseno { get; set; }
+    public string? pharmacyregistrationno { get; set; }
+    public string? gstno { get; set; }
+    public string? msmeno { get; set; }
+
     }
     public class manufacturer_master
     {

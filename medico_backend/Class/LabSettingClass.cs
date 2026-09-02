@@ -48,6 +48,10 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS op_age_wise_split BOOLEAN DEFAULT false;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_all_customers BOOLEAN DEFAULT false;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS critical_value_indication BOOLEAN DEFAULT false;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS preparedby_name TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS preparedby_description TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS preparedby_signature TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS inspectedby_name TEXT;
                 ";
                 await db.ExecuteAsync(sql);
             }

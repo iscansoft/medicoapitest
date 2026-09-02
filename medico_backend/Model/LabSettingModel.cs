@@ -54,6 +54,12 @@ public class LabSettingModel
         public string? auth3_designation { get; set; }
         public string? auth3_signature_path { get; set; }
 
+        // Sales Register / Report Signees Config (Prepared By & Inspected By)
+        public string? preparedby_name { get; set; }
+        public string? preparedby_description { get; set; }
+        public string? preparedby_signature { get; set; }
+        public string? inspectedby_name { get; set; }
+
         // Culture Report Authorization Signees Config
         public bool? culture_auth1_show { get; set; } = true;
         public string? culture_auth1_name { get; set; }

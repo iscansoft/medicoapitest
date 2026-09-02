@@ -7351,6 +7351,26 @@
         "IsRequired": false
       },
       {
+        "Name": "preparedby_name",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "preparedby_description",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "preparedby_signature",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "inspectedby_name",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
         "Name": "culture_auth1_show",
         "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
         "IsRequired": false
@@ -8374,6 +8394,26 @@
       },
       {
         "Name": "auth3_signature_path",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "preparedby_name",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "preparedby_description",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "preparedby_signature",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "inspectedby_name",
         "Type": "System.String",
         "IsRequired": false
       },
@@ -10457,6 +10497,158 @@
     "ReturnTypes": []
   },
   {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "Get",
+    "RelativePath": "api/patient-voice-notes/{voiceNoteId}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "voiceNoteId",
+        "Type": "System.Int64",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "GetAudioUrl",
+    "RelativePath": "api/patient-voice-notes/{voiceNoteId}/audio-url",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "voiceNoteId",
+        "Type": "System.Int64",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "GetByCust",
+    "RelativePath": "api/patient-voice-notes/by-cust",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "custid",
+        "Type": "System.Int32",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "GetByDoctor",
+    "RelativePath": "api/patient-voice-notes/by-doctor",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "dcode",
+        "Type": "System.Int32",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "Delete",
+    "RelativePath": "api/patient-voice-notes/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "voiceNoteId",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "Upload",
+    "RelativePath": "api/patient-voice-notes/upload",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "UploadId",
+        "Type": "System.Nullable\u00601[[System.Guid, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "ChunkNumber",
+        "Type": "System.Int32",
+        "IsRequired": false
+      },
+      {
+        "Name": "TotalChunks",
+        "Type": "System.Int32",
+        "IsRequired": false
+      },
+      {
+        "Name": "Dcode",
+        "Type": "System.Nullable\u00601[[System.Int32, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "CustId",
+        "Type": "System.Nullable\u00601[[System.Int32, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "TextMessage",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "FileName",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "ContentType",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "File",
+        "Type": "Microsoft.AspNetCore.Http.IFormFile",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "Medico_Backend.Controllers.PatientVoiceNotesController",
+    "Method": "GetStatus",
+    "RelativePath": "api/patient-voice-notes/upload/{uploadId}/status",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "uploadId",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
     "ContainingType": "medico_backend.Controllers.PatientEMRController",
     "Method": "GetByProblem",
     "RelativePath": "api/PatientEMR/by-problem",
@@ -11239,6 +11431,32 @@
   },
   {
     "ContainingType": "medico_backend.Controllers.ReportController",
+    "Method": "GetGstBill",
+    "RelativePath": "api/Report/getgstbill",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "fromdate",
+        "Type": "System.DateTime",
+        "IsRequired": false
+      },
+      {
+        "Name": "todate",
+        "Type": "System.DateTime",
+        "IsRequired": false
+      },
+      {
+        "Name": "billtype",
+        "Type": "System.String",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.ReportController",
     "Method": "GetIpReport",
     "RelativePath": "api/Report/getip",
     "HttpMethod": "GET",
@@ -11473,6 +11691,32 @@
       {
         "Name": "periodtype",
         "Type": "System.String",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.ReportController",
+    "Method": "GetSalesRegister",
+    "RelativePath": "api/Report/getsalesregister",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "fromdate",
+        "Type": "System.DateTime",
+        "IsRequired": false
+      },
+      {
+        "Name": "todate",
+        "Type": "System.DateTime",
+        "IsRequired": false
+      },
+      {
+        "Name": "warehousecode",
+        "Type": "System.Nullable\u00601[[System.Int64, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
         "IsRequired": false
       }
     ],

@@ -10,6 +10,7 @@ using System.Collections.Concurrent;
 using System.Data;
 using System.Text;
 using System.Text.Json;
+using medico_backend.InventoryModel;
 
 namespace medico_backend.Class
 {
@@ -6957,5 +6958,544 @@ WHERE lrd.requestguid::text = @requestguid::text
             return data.ToArray();
         }
 
+        public async Task<string?> GetGstBillPDF(DateTime fromdate, DateTime todate, string tenant_code, string? billtype = "all")
+        {
+            try
+            {
+                string inventoryConn = _config.GetConnectionString("inventory_conn");
+                List<GstDetailRow> inwardRows = new List<GstDetailRow>();
+                List<GstDetailRow> outwardRows = new List<GstDetailRow>();
+
+                string btype = (billtype ?? "all").ToLower().Trim();
+
+                // ───────────────────────────────────────────────────────────────
+                // INWARD (Purchases)
+                //   Source 1: purchase_master + purchase_detail   (finalized bills)
+                //             netted against purchase_return_master
+                //   Source 2: purchase_entry_master + purchase_entry_detail (GRNs)
+                //             EXCLUDING any GRN already converted into a
+                //             purchase_master row (purchase_master.grncode) —
+                //             otherwise the same purchase is counted twice.
+                //   GST% via: line item % -> ledger_type_master -> ledger_master
+                //             (via item.taxcode) -> item_master.gstpercentage
+                // ───────────────────────────────────────────────────────────────
+                if (btype == "inward" || btype == "all" || btype == "both")
+                {
+                    using (IDbConnection dbInv = new NpgsqlConnection(inventoryConn))
+                    {
+                        string sqlPurchase = @"
+                    WITH purchase_returns AS (
+                        SELECT purchasedetailcode,
+                               SUM(COALESCE(amount, returnqty * rate, 0)) AS returnedamount
+                        FROM public.purchase_return_master
+                        WHERE COALESCE(deleted, false) = false
+                          AND tenantcode = @tenant_code
+                        GROUP BY purchasedetailcode
+                    )
+                    SELECT
+                        COALESCE(NULLIF(pm.billno, ''), NULLIF(pm.invoiceno, ''), 'BILL') AS BillNo,
+                        COALESCE(pm.billdate, pm.createddate) AS BillDate,
+                        COALESCE(vm.vendorname, 'Supplier') AS VendorName,
+                        COALESCE(vm.gstnumber, '') AS GstNo,
+                        COALESCE(
+                            NULLIF(pd.taxpercentage, 0),
+                            NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0),
+                            NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0),
+                            NULLIF(im.gstpercentage, 0),
+                            0
+                        ) AS GstPercentage,
+                        GREATEST(
+                            COALESCE(pd.amount, (pd.rate * pd.quantity) - COALESCE(pd.discountamount, 0), 0)
+                            - COALESCE(pr.returnedamount, 0),
+                            0
+                        ) AS TaxableValue,
+                        (GREATEST(
+                            COALESCE(pd.amount, (pd.rate * pd.quantity) - COALESCE(pd.discountamount, 0), 0)
+                            - COALESCE(pr.returnedamount, 0), 0
+                        ) * (COALESCE(
+                            NULLIF(pd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS CgstAmount,
+                        (GREATEST(
+                            COALESCE(pd.amount, (pd.rate * pd.quantity) - COALESCE(pd.discountamount, 0), 0)
+                            - COALESCE(pr.returnedamount, 0), 0
+                        ) * (COALESCE(
+                            NULLIF(pd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS SgstAmount,
+                        GREATEST(
+                            COALESCE(pd.amount, (pd.rate * pd.quantity) - COALESCE(pd.discountamount, 0), 0)
+                            - COALESCE(pr.returnedamount, 0), 0
+                        ) * (COALESCE(
+                            NULLIF(pd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0) AS TotalTax,
+                        GREATEST(
+                            COALESCE(pd.amount, (pd.rate * pd.quantity) - COALESCE(pd.discountamount, 0), 0)
+                            - COALESCE(pr.returnedamount, 0), 0
+                        ) * (1.0 + (COALESCE(
+                            NULLIF(pd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) AS NettTotal
+                    FROM public.purchase_master pm
+                    INNER JOIN public.purchase_detail pd
+                            ON pd.purchasecode = pm.purchasecode AND pd.tenantcode = pm.tenantcode
+                    LEFT JOIN purchase_returns pr
+                           ON pr.purchasedetailcode = pd.purchasedetailcode
+                    LEFT JOIN public.item_master im
+                           ON im.itemcode = pd.itemcode AND im.tenantcode = pd.tenantcode
+                          AND COALESCE(im.deleted, false) = false
+                    LEFT JOIN public.ledger_group_master lgm
+                           ON lgm.ledgergroupcode = im.ledgergroupcode AND lgm.tenantcode = im.tenantcode
+                          AND COALESCE(lgm.deleted, false) = false
+                    LEFT JOIN public.ledger_type_master ltm
+                           ON ltm.ledgertypecode = lgm.ledgertypecode AND ltm.tenantcode = lgm.tenantcode
+                          AND COALESCE(ltm.deleted, false) = false
+                    LEFT JOIN public.ledger_master lm
+                           ON lm.ledgercode = im.taxcode AND lm.tenantcode = im.tenantcode
+                          AND COALESCE(lm.deleted, false) = false
+                    LEFT JOIN public.vendor_master vm
+                           ON vm.vendorcode = pm.vendorcode AND vm.tenantcode = pm.tenantcode
+                    WHERE COALESCE(pm.deleted, false) = false
+                      AND pm.tenantcode = @tenant_code
+                      AND pm.billdate >= @fromdate
+                      AND pm.billdate < @todate + INTERVAL '1 day'
+                    ORDER BY pm.billdate DESC, pm.billno ASC";
+
+                        var purchaseRows = (await dbInv.QueryAsync<GstDetailRow>(
+                            sqlPurchase, new { fromdate, todate, tenant_code })).ToList();
+
+                        // Source 2: GRNs not yet converted into a purchase_master bill,
+                        // and that actually carry a supplier bill/invoice number
+                        // (an un-invoiced GRN is a goods receipt, not a taxable supply).
+                        string sqlPurchaseEntry = @"
+                    SELECT
+                        COALESCE(NULLIF(pem.billno, ''), NULLIF(pem.invoiceno, ''), NULLIF(pem.grnno, ''), 'BILL') AS BillNo,
+                        COALESCE(pem.billdate, pem.grndate, pem.createddate) AS BillDate,
+                        COALESCE(vm.vendorname, 'Supplier') AS VendorName,
+                        COALESCE(vm.gstnumber, '') AS GstNo,
+                        COALESCE(
+                            NULLIF(ped.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) AS GstPercentage,
+                        COALESCE(ped.amount, (ped.rate * ped.quantity) - COALESCE(ped.discountamount, 0), 0) AS TaxableValue,
+                        (COALESCE(ped.amount, (ped.rate * ped.quantity) - COALESCE(ped.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(ped.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS CgstAmount,
+                        (COALESCE(ped.amount, (ped.rate * ped.quantity) - COALESCE(ped.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(ped.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS SgstAmount,
+                        COALESCE(ped.amount, (ped.rate * ped.quantity) - COALESCE(ped.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(ped.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0) AS TotalTax,
+                        COALESCE(ped.amount, (ped.rate * ped.quantity) - COALESCE(ped.discountamount, 0), 0) *
+                        (1.0 + (COALESCE(
+                            NULLIF(ped.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) AS NettTotal
+                    FROM public.purchase_entry_master pem
+                    INNER JOIN public.purchase_entry_detail ped
+                            ON ped.purchaseentrycode = pem.purchaseentrycode AND ped.tenantcode = pem.tenantcode
+                    LEFT JOIN public.purchase_master pm2
+                           ON pm2.grncode = pem.purchaseentrycode AND pm2.tenantcode = pem.tenantcode
+                          AND COALESCE(pm2.deleted, false) = false
+                    LEFT JOIN public.item_master im
+                           ON im.itemcode = ped.itemcode AND im.tenantcode = ped.tenantcode
+                          AND COALESCE(im.deleted, false) = false
+                    LEFT JOIN public.ledger_group_master lgm
+                           ON lgm.ledgergroupcode = im.ledgergroupcode AND lgm.tenantcode = im.tenantcode
+                          AND COALESCE(lgm.deleted, false) = false
+                    LEFT JOIN public.ledger_type_master ltm
+                           ON ltm.ledgertypecode = lgm.ledgertypecode AND ltm.tenantcode = lgm.tenantcode
+                          AND COALESCE(ltm.deleted, false) = false
+                    LEFT JOIN public.ledger_master lm
+                           ON lm.ledgercode = im.taxcode AND lm.tenantcode = im.tenantcode
+                          AND COALESCE(lm.deleted, false) = false
+                    LEFT JOIN public.vendor_master vm
+                           ON vm.vendorcode = pem.vendorcode AND vm.tenantcode = pem.tenantcode
+                    WHERE COALESCE(pem.deleted, false) = false
+                      AND pem.tenantcode = @tenant_code
+                      AND pm2.purchasecode IS NULL
+                      AND (NULLIF(pem.billno, '') IS NOT NULL OR NULLIF(pem.invoiceno, '') IS NOT NULL)
+                      AND COALESCE(pem.billdate, pem.grndate) >= @fromdate
+                      AND COALESCE(pem.billdate, pem.grndate) < @todate + INTERVAL '1 day'
+                    ORDER BY BillDate DESC";
+
+                        var purchaseEntryRows = (await dbInv.QueryAsync<GstDetailRow>(
+                            sqlPurchaseEntry, new { fromdate, todate, tenant_code })).ToList();
+
+                        inwardRows = purchaseRows.Concat(purchaseEntryRows).ToList();
+                    }
+                }
+
+                // ───────────────────────────────────────────────────────────────
+                // OUTWARD (Sales): sales_master + sales_detail
+                //   GST% via: line item % -> ledger_type_master -> ledger_master
+                //             (via item.taxcode) -> item_master.gstpercentage
+                //   NOTE: customer_master isn't in the models you've shared, so
+                //   the customer GST-number lookup is left out here. Share that
+                //   model and I'll wire it back in against the real columns.
+                // ───────────────────────────────────────────────────────────────
+                if (btype == "outward" || btype == "all" || btype == "both")
+                {
+                    using (IDbConnection dbInv = new NpgsqlConnection(inventoryConn))
+                    {
+                        string sqlSalesDetails = @"
+                    SELECT
+                        COALESCE(NULLIF(sm.billno, ''), NULLIF(sm.invoiceno, ''), 'BILL') AS BillNo,
+                        COALESCE(sm.billdate, sm.createddate) AS BillDate,
+                        COALESCE(NULLIF(sm.patientname, ''), 'Customer') AS VendorName,
+                        '' AS GstNo,
+                        COALESCE(
+                            NULLIF(sd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) AS GstPercentage,
+                        COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) AS TaxableValue,
+                        (COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(sd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS CgstAmount,
+                        (COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(sd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) / 2.0 AS SgstAmount,
+                        COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) *
+                        (COALESCE(
+                            NULLIF(sd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0) AS TotalTax,
+                        COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) *
+                        (1.0 + (COALESCE(
+                            NULLIF(sd.taxpercentage, 0), NULLIF(ltm.cgstpercentage + ltm.sgstpercentage, 0),
+                            NULLIF(ltm.igstpercentage, 0), NULLIF(lm.gstpercentage, 0),
+                            NULLIF(lm.taxpercentage, 0), NULLIF(im.gstpercentage, 0), 0
+                        ) / 100.0)) AS NettTotal
+                    FROM public.sales_master sm
+                    INNER JOIN public.sales_detail sd
+                            ON sd.salescode = sm.salescode AND sd.tenantcode = sm.tenantcode
+                    LEFT JOIN public.item_master im
+                           ON im.itemcode = sd.itemcode AND im.tenantcode = sd.tenantcode
+                          AND COALESCE(im.deleted, false) = false
+                    LEFT JOIN public.ledger_group_master lgm
+                           ON lgm.ledgergroupcode = im.ledgergroupcode AND lgm.tenantcode = im.tenantcode
+                          AND COALESCE(lgm.deleted, false) = false
+                    LEFT JOIN public.ledger_type_master ltm
+                           ON ltm.ledgertypecode = lgm.ledgertypecode AND ltm.tenantcode = lgm.tenantcode
+                          AND COALESCE(ltm.deleted, false) = false
+                    LEFT JOIN public.ledger_master lm
+                           ON lm.ledgercode = im.taxcode AND lm.tenantcode = im.tenantcode
+                          AND COALESCE(lm.deleted, false) = false
+                    WHERE COALESCE(sm.deleted, false) = false
+                      AND sm.tenantcode = @tenant_code
+                      AND sm.billdate >= @fromdate
+                      AND sm.billdate < @todate + INTERVAL '1 day'
+                    ORDER BY sm.billdate DESC";
+
+                        try
+                        {
+                            outwardRows = (await dbInv.QueryAsync<GstDetailRow>(
+                                sqlSalesDetails, new { fromdate, todate, tenant_code })).ToList();
+                        }
+                        catch (Exception exSales)
+                        {
+                            Console.WriteLine($"Sales GST query note: {exSales.Message}");
+                        }
+                    }
+                }
+
+                // Compute Summaries
+                var inwardSummaryRows = inwardRows
+                    .GroupBy(d => d.GstPercentage)
+                    .Select(g => new GstSummaryRow
+                    {
+                        GstPercentage = g.Key,
+                        TaxableValue = g.Sum(x => x.TaxableValue),
+                        CgstAmount = g.Sum(x => x.CgstAmount),
+                        SgstAmount = g.Sum(x => x.SgstAmount),
+                        TotalTax = g.Sum(x => x.TotalTax),
+                        NettTotal = g.Sum(x => x.NettTotal)
+                    })
+                    .OrderBy(s => s.GstPercentage)
+                    .ToList();
+
+                var outwardSummaryRows = outwardRows
+                    .GroupBy(d => d.GstPercentage)
+                    .Select(g => new GstSummaryRow
+                    {
+                        GstPercentage = g.Key,
+                        TaxableValue = g.Sum(x => x.TaxableValue),
+                        CgstAmount = g.Sum(x => x.CgstAmount),
+                        SgstAmount = g.Sum(x => x.SgstAmount),
+                        TotalTax = g.Sum(x => x.TotalTax),
+                        NettTotal = g.Sum(x => x.NettTotal)
+                    })
+                    .OrderBy(s => s.GstPercentage)
+                    .ToList();
+
+                List<GstDetailRow> combinedRows = btype switch
+                {
+                    "inward" => inwardRows,
+                    "outward" => outwardRows,
+                    _ => inwardRows.Concat(outwardRows).ToList()
+                };
+
+                int snoSeq = 1;
+                foreach (var item in combinedRows)
+                {
+                    item.SNo = snoSeq++;
+                }
+
+                var summaryRows = combinedRows
+                    .GroupBy(d => d.GstPercentage)
+                    .Select(g => new GstSummaryRow
+                    {
+                        GstPercentage = g.Key,
+                        TaxableValue = g.Sum(x => x.TaxableValue),
+                        CgstAmount = g.Sum(x => x.CgstAmount),
+                        SgstAmount = g.Sum(x => x.SgstAmount),
+                        TotalTax = g.Sum(x => x.TotalTax),
+                        NettTotal = g.Sum(x => x.NettTotal)
+                    })
+                    .OrderBy(s => s.GstPercentage)
+                    .ToList();
+
+                dynamic? companyInfo = null;
+                byte[]? logoImage = null;
+
+                using (IDbConnection db = new NpgsqlConnection(_conn))
+                {
+                    string sqlCompany = @"
+                SELECT legal_name, address_line1, contact_number, contact_email, logo_url
+                FROM mastertenant.tenants
+                WHERE tenant_code = @tenant_code";
+
+                    companyInfo = await db.QueryFirstOrDefaultAsync<dynamic>(sqlCompany, new { tenant_code });
+                    if (companyInfo != null && !string.IsNullOrEmpty((string?)companyInfo.logo_url))
+                    {
+                        try
+                        {
+                            var logoRes = await _s3Service.DownloadAsync((string)companyInfo.logo_url);
+                            if (logoRes.HasValue) logoImage = logoRes.Value.Data;
+                        }
+                        catch { }
+                    }
+                }
+
+                string title = btype switch
+                {
+                    "inward" => "GST Inward Returns Report",
+                    "outward" => "GST Outward Returns Report",
+                    _ => "GST Return Summary Report"
+                };
+
+                var payload = new GstReportRequestPayload
+                {
+                    summary = summaryRows,
+                    inward_summary = inwardSummaryRows,
+                    outward_summary = outwardSummaryRows,
+                    details = combinedRows,
+                    LogoImage = logoImage,
+                    CompanyName = (string?)(companyInfo?.legal_name),
+                    CompanyAddress = (string?)(companyInfo?.address_line1),
+                    CompanyContactNo = (string?)(companyInfo?.contact_number),
+                    CompanyEmail = (string?)(companyInfo?.contact_email),
+                    fromdate = fromdate,
+                    todate = todate,
+                    billtype = btype,
+                    reporttype = title
+                };
+
+                var client = _httpClientFactory.CreateClient("ReportServer");
+                var json = JsonSerializer.Serialize(payload);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await client.PostAsync("/api/GstReport/getgstbill", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Report server error {response.StatusCode}: {error}");
+                }
+
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ReportClass.GetGstBillPDF: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async Task<string?> GetSalesRegisterPDF(DateTime fromdate, DateTime todate, string tenant_code, long? warehousecode = null)
+        {
+            try
+            {
+                string inventoryConn = _config.GetConnectionString("inventory_conn");
+                List<SalesRegisterDetailRow> details = new List<SalesRegisterDetailRow>();
+                warehouse_master warehouse = new warehouse_master();
+
+                using (IDbConnection dbInv = new NpgsqlConnection(inventoryConn))
+                {
+                    try
+                    {
+                        if (warehousecode.HasValue && warehousecode.Value > 0)
+                        {
+                            try
+                            {
+                                var sqlWh = "SELECT * FROM public.warehouse_master WHERE warehousecode = @warehousecode Limit 1";
+                                warehouse = await dbInv.QueryFirstOrDefaultAsync<warehouse_master>(sqlWh, new { warehousecode });
+                            }
+                            catch { }
+                        }
+
+                        string sqlSales = @"
+                            SELECT 
+                                COALESCE(sm.billdate, sm.createddate) AS Date,
+                                COALESCE(NULLIF(sm.billno, ''), NULLIF(sm.invoiceno, ''), 'INV-001') AS BillNo,
+                                COALESCE(im.itemname, 'Item') AS ItemName,
+                                COALESCE(sd.batchno, '-') AS BatchNo,
+                                CASE 
+                                    WHEN sd.expirydate IS NOT NULL THEN TO_CHAR(sd.expirydate, 'MM/YYYY')
+                                    ELSE '-'
+                                END AS Expiry,
+                                COALESCE(sd.quantity, 0) AS Qty,
+                                COALESCE(im.mrp, sd.rate, 0) AS Mrp,
+                                COALESCE(sd.rate, 0) AS SaleRate,
+                                COALESCE(sd.discountamount, 0) AS Discount,
+                                COALESCE(sd.taxamount, 0) AS Tax,
+                                COALESCE(sd.totalamount, sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0) + COALESCE(sd.taxamount, 0), 0) AS NetAmount
+                            FROM public.sales_master sm
+                            INNER JOIN public.sales_detail sd 
+                                    ON sd.salescode = sm.salescode AND sd.tenantcode = sm.tenantcode
+                            LEFT JOIN public.item_master im 
+                                   ON im.itemcode::text = sd.itemcode::text AND im.tenantcode = sd.tenantcode
+                            WHERE COALESCE(sm.deleted, false) = false
+                              AND sm.tenantcode = @tenant_code
+                              AND sm.billdate >= @fromdate
+                              AND sm.billdate < @todate + INTERVAL '1 day'
+                              AND (@warehousecode IS NULL OR @warehousecode = 0 OR sm.warehousefield::text = @warehousecode::text OR sd.warehousecode = @warehousecode)
+                            ORDER BY sm.billdate ASC, sm.billno ASC";
+
+                        details = (await dbInv.QueryAsync<SalesRegisterDetailRow>(sqlSales, new { fromdate, todate, tenant_code, warehousecode })).ToList();
+                    }
+                    catch (Exception exSales)
+                    {
+                        Console.WriteLine($"GetSalesRegisterPDF query note: {exSales.Message}");
+                    }
+                }
+
+                int sno = 1;
+                foreach (var item in details)
+                {
+                    item.SNo = sno++;
+                }
+
+                dynamic? companyInfo = null;
+                byte[]? logoImage = null;
+                using (IDbConnection db = new NpgsqlConnection(_conn))
+                {
+                    string sqlCompany = @"
+                        SELECT legal_name, address_line1, contact_number, contact_email, logo_url
+                        FROM mastertenant.tenants
+                        WHERE tenant_code = @tenant_code";
+
+                    companyInfo = await db.QueryFirstOrDefaultAsync<dynamic>(sqlCompany, new { tenant_code });
+                    if (companyInfo != null && !string.IsNullOrEmpty((string?)companyInfo.logo_url))
+                    {
+                        try
+                        {
+                            var logoRes = await _s3Service.DownloadAsync((string)companyInfo.logo_url);
+                            if (logoRes.HasValue) logoImage = logoRes.Value.Data;
+                        }
+                        catch { }
+                    }
+                }
+
+                LabSettingModel.lab_settings? labSetting = null;
+                using (IDbConnection db = new NpgsqlConnection(_conn))
+                {
+                    try
+                    {
+                        string sqlSetting = "SELECT * FROM lab_settings WHERE tenant_code = @tenant_code AND deleted = false LIMIT 1";
+                        labSetting = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(sqlSetting, new { tenant_code });
+                    }
+                    catch { }
+                }
+
+                var header = new SalesRegisterHeader
+                {
+                    CompanyName = companyInfo?.legal_name,
+                    BranchName = warehouse.warehousename ?? labSetting?.company,
+                    CompanyAddress = companyInfo?.address_line1,
+                    CompanyContactNo = companyInfo?.contact_number,
+                    CompanyEmail = companyInfo?.contact_email,
+                    LogoImage = logoImage,
+
+                    PharmacyName = companyInfo?.legal_name,
+                    LicenseNo = warehouse.pharmacyregistrationno,
+                    PharmacyRCNo = warehouse.pharmacyregistrationno,
+                    GSTNo = warehouse.gstno,
+                    MSMENo = warehouse.msmeno,
+                    Address = companyInfo?.address_line1,
+                    Branch = warehouse.warehousename,
+                    WarehouseCode = warehouse.warehousecode,
+                    PeriodFrom = fromdate,
+                    PeriodTo = todate,
+                    GeneratedDate = DateTime.Now,
+                    RegisterStatus = "Verified",
+                    PreparedByName = labSetting?.preparedby_name,
+                    PreparedByDescription = labSetting?.preparedby_description,
+                    PreparedBySignature = labSetting?.preparedby_signature,
+                    InspectedByName = labSetting?.inspectedby_name
+                };
+
+                var reportModel = new SalesRegisterReportModel
+                {
+                    Header = header,
+                    Details = details
+                };
+
+                var client = _httpClientFactory.CreateClient("ReportServer");
+                var json = JsonSerializer.Serialize(reportModel);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await client.PostAsync("/api/SalesRegister/getsalesregister", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Report server error {response.StatusCode}: {error}");
+                }
+
+                var pdfBase64 = await response.Content.ReadAsStringAsync();
+                return pdfBase64.Trim('"');
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"GetSalesRegisterPDF Exception: {ex.Message}");
+                throw;
+            }
+        }
     }
 }
