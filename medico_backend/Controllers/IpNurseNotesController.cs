@@ -304,5 +304,55 @@ namespace medico_backend.Controllers
 
             return Ok(await cls.GetAllNurseNotes(ip_id, tenant));
         }
+        // GET api/IpBedsideChart/temperature/{ip_id}/detail?temp_id=...
+        [HttpGet("temperature/{ip_id}/detail")]
+        public async Task<IActionResult> GetTemperatureById(Guid ip_id, [FromQuery] Guid temp_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetTemperatureById(ip_id, temp_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+        // GET api/IpBedsideChart/input-output/{ip_id}/detail?io_id=...
+        [HttpGet("input-output/{ip_id}/detail")]
+        public async Task<IActionResult> GetInputOutputById(Guid ip_id, [FromQuery] Guid io_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetInputOutputById(ip_id, io_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+        // GET api/IpBedsideChart/service/{ip_id}/detail?service_id=...
+        [HttpGet("service/{ip_id}/detail")]
+        public async Task<IActionResult> GetServiceById(Guid ip_id, [FromQuery] Guid service_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetServiceById(ip_id, service_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+        // GET api/IpBedsideChart/medicine/{ip_id}/detail?med_id=...
+        [HttpGet("medicine/{ip_id}/detail")]
+        public async Task<IActionResult> GetMedicineById(Guid ip_id, [FromQuery] Guid med_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetMedicineById(ip_id, med_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+        // GET api/IpBedsideChart/other/{ip_id}/detail?other_id=...
+        [HttpGet("other/{ip_id}/detail")]
+        public async Task<IActionResult> GetOtherById(Guid ip_id, [FromQuery] Guid other_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetOtherById(ip_id, other_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
     }
 }

@@ -57,7 +57,24 @@ namespace medico_backend.Class
                  remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@temp_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @temperature, @unit,
-                 @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)", data);
+                 @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+    new
+    {
+        data.temp_id,
+        data.ip_id,
+        data.custid,
+        entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+        entry_time = data.entry_time.ToTimeSpan(),
+        data.shift,
+        data.temperature,
+        data.unit,
+        data.remarks,
+        data.usercode,
+        data.tenant_code,
+        data.isdeleted,
+        data.created_at,
+        data.updated_at
+    });
 
             return $"Success|Id:{data.temp_id}";
         }
@@ -134,7 +151,26 @@ namespace medico_backend.Class
                  quantity, unit, remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@io_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @io_type, @particulars,
-                 @quantity, @unit, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)", data);
+                 @quantity, @unit, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+     new
+     {
+         data.io_id,
+         data.ip_id,
+         data.custid,
+         entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+         entry_time = data.entry_time.ToTimeSpan(),
+         data.shift,
+         data.io_type,
+         data.particulars,
+         data.quantity,
+         data.unit,
+         data.remarks,
+         data.usercode,
+         data.tenant_code,
+         data.isdeleted,
+         data.created_at,
+         data.updated_at
+     });
 
             return $"Success|Id:{data.io_id}";
         }
@@ -209,7 +245,24 @@ namespace medico_backend.Class
                  remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@service_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @service_name, @action,
-                 @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)", data);
+                 @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+    new
+    {
+        data.service_id,
+        data.ip_id,
+        data.custid,
+        entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+        entry_time = data.entry_time.ToTimeSpan(),
+        data.shift,
+        data.service_name,
+        data.action,
+        data.remarks,
+        data.usercode,
+        data.tenant_code,
+        data.isdeleted,
+        data.created_at,
+        data.updated_at
+    });
 
             return $"Success|Id:{data.service_id}";
         }
@@ -277,7 +330,27 @@ namespace medico_backend.Class
                  route, status, remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@med_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @medicine_name, @dose, @unit,
-                 @route, @status, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)", data);
+                 @route, @status, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+     new
+     {
+         data.med_id,
+         data.ip_id,
+         data.custid,
+         entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+         entry_time = data.entry_time.ToTimeSpan(),
+         data.shift,
+         data.medicine_name,
+         data.dose,
+         data.unit,
+         data.route,
+         data.status,
+         data.remarks,
+         data.usercode,
+         data.tenant_code,
+         data.isdeleted,
+         data.created_at,
+         data.updated_at
+     });
 
             return $"Success|Id:{data.med_id}";
         }
@@ -351,7 +424,22 @@ namespace medico_backend.Class
                  usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@other_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @note,
-                 @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)", data);
+                 @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+    new
+    {
+        data.other_id,
+        data.ip_id,
+        data.custid,
+        entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+        entry_time = data.entry_time.ToTimeSpan(),
+        data.shift,
+        data.note,
+        data.usercode,
+        data.tenant_code,
+        data.isdeleted,
+        data.created_at,
+        data.updated_at
+    });
 
             return $"Success|Id:{data.other_id}";
         }
@@ -406,6 +494,51 @@ namespace medico_backend.Class
                 medicine = await GetMedicine(ip_id, tenant_code),
                 other = await GetOther(ip_id, tenant_code)
             };
+        }
+        // GET single Temperature record by ip_id + temp_id
+        public async Task<NurseTemperatureModel?> GetTemperatureById(Guid ip_id, Guid temp_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseTemperatureModel>(
+                @"SELECT * FROM ip_nurse_note_temperature
+                  WHERE ip_id = @ip_id AND temp_id = @temp_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, temp_id, tenant_code });
+        }
+        // GET single Input/Output record by ip_id + io_id
+        public async Task<NurseInputOutputModel?> GetInputOutputById(Guid ip_id, Guid io_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseInputOutputModel>(
+                @"SELECT * FROM ip_nurse_note_input_output
+                  WHERE ip_id = @ip_id AND io_id = @io_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, io_id, tenant_code });
+        }
+        // GET single Service record by ip_id + service_id
+        public async Task<NurseServiceModel?> GetServiceById(Guid ip_id, Guid service_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseServiceModel>(
+                @"SELECT * FROM ip_nurse_note_service
+                  WHERE ip_id = @ip_id AND service_id = @service_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, service_id, tenant_code });
+        }
+        // GET single Medicine record by ip_id + med_id
+        public async Task<NurseMedicineModel?> GetMedicineById(Guid ip_id, Guid med_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseMedicineModel>(
+                @"SELECT * FROM ip_nurse_note_medicine
+                  WHERE ip_id = @ip_id AND med_id = @med_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, med_id, tenant_code });
+        }
+        // GET single Other record by ip_id + other_id
+        public async Task<NurseOtherModel?> GetOtherById(Guid ip_id, Guid other_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseOtherModel>(
+                @"SELECT * FROM ip_nurse_note_other
+                  WHERE ip_id = @ip_id AND other_id = @other_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, other_id, tenant_code });
         }
     }
 }

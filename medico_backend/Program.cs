@@ -15,7 +15,7 @@ using Minio;
 using System.Text;
 
 
-
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 var builder = WebApplication.CreateBuilder(args);
 
 SqlMapper.AddTypeHandler(typeof(TimeOnly), new TimeOnlyTypeHandler());
