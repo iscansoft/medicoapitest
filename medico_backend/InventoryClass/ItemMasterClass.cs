@@ -675,7 +675,9 @@ namespace medico_backend.InventoryClass
     m.invoicedate::timestamp,   -- ← cast nullable date
     m.vendorcode,
     m.grossamount,
+    m.overalldiscount,      
     m.discountamount,
+    m.totalamount,
     m.taxamount,
     m.netamount,
     m.paymentmode,
