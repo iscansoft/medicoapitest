@@ -473,24 +473,82 @@ namespace medico_backend.InventoryController
         }
 
         [HttpPost("updateindent")]
-        public async Task<IActionResult> UpdateIndent([FromBody] indent_request request)
-        {
-            try
-            {
-                var tenantcode = GetTenantCode();
-                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+ public async Task<IActionResult> UpdateIndent(
+     [FromBody] indent_request request)
+ {
+     try
+     {
+         // ---------------------------------------------
+         // Validate request
+         // ---------------------------------------------
+         if (request == null || request.master == null)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Indent request is required."
+             });
+         }
 
-                request.master.tenantcode = tenantcode;
+         if (request.master.indentcode <= 0)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Valid indent code is required."
+             });
+         }
 
-                var result = await itemclass.UpdateIndent(request);
-                return Ok(new { Status = "Success", Message = "Indent updated successfully", IndentCode = result });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Status = "Failed", Message = ex.Message });
-            }
-        }
+         if (request.details == null || request.details.Count == 0)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "At least one item is required."
+             });
+         }
 
+         // ---------------------------------------------
+         // Get Tenant Code
+         // ---------------------------------------------
+         string tenantcode =
+             HttpContext.Items["TenantCode"]?.ToString()
+             ?? Request.Headers["tenantcode"].FirstOrDefault()
+             ?? string.Empty;
+
+         if (string.IsNullOrWhiteSpace(tenantcode))
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Tenant code not found."
+             });
+         }
+
+         // ---------------------------------------------
+         // Update Indent
+         // ---------------------------------------------
+         var result = await itemclass.UpdateIndent(
+             request,
+             tenantcode
+         );
+
+         return Ok(new
+         {
+             Status = "Success",
+             Message = "Indent updated successfully",
+             IndentCode = result
+         });
+     }
+     catch (Exception ex)
+     {
+         return BadRequest(new
+         {
+             Status = "Failed",
+             Message = ex.Message
+         });
+     }
+ }
         [HttpGet("deleteindent")]
         public async Task<IActionResult> DeleteIndent(long indentcode)
         {
