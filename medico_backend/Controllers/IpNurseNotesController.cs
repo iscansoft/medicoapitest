@@ -354,5 +354,128 @@ namespace medico_backend.Controllers
             var res = await cls.GetOtherById(ip_id, other_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+        // ═══════════════════════════════════════════════════════
+        // 7. VISITING DOCTOR LIST
+        // ═══════════════════════════════════════════════════════
+
+        // POST api/IpBedsideChart/visiting-doctor/add
+        // { "ip_id": "...", "custid": 1001, "shift": "MORNING",
+        //   "doctor_name": "Dr. Karthik Raja", "specialization": "Cardiology",
+        //   "visit_time": "10:30:00", "diagnosis_notes": "Stable, mild tachycardia",
+        //   "advice": "Continue current medication, review tomorrow", "remarks": "" }
+        [HttpPost("visiting-doctor/add")]
+        public async Task<IActionResult> AddVisitingDoctor([FromBody] AddVisitingDoctorRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.AddVisitingDoctor(req, GetUserCode(), tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        // POST api/IpBedsideChart/visiting-doctor/update
+        [HttpPost("visiting-doctor/update")]
+        public async Task<IActionResult> UpdateVisitingDoctor([FromBody] UpdateVisitingDoctorRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.UpdateVisitingDoctor(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // GET api/IpBedsideChart/visiting-doctor/{ip_id}
+        [HttpGet("visiting-doctor/{ip_id}")]
+        public async Task<IActionResult> GetVisitingDoctor(Guid ip_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetVisitingDoctor(ip_id, tenant));
+        }
+
+        // GET api/IpBedsideChart/visiting-doctor/{ip_id}/detail?visit_id=...
+        [HttpGet("visiting-doctor/{ip_id}/detail")]
+        public async Task<IActionResult> GetVisitingDoctorById(Guid ip_id, [FromQuery] Guid visit_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetVisitingDoctorById(ip_id, visit_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+
+        // GET api/IpBedsideChart/visiting-doctor/delete?visit_id=...
+        [HttpGet("visiting-doctor/delete")]
+        public async Task<IActionResult> DeleteVisitingDoctor([FromQuery] Guid visit_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.DeleteVisitingDoctor(visit_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 8. SCHEDULE
+        // ═══════════════════════════════════════════════════════
+
+        // POST api/IpBedsideChart/schedule/add
+        // { "ip_id": "...", "custid": 1001, "shift": "MORNING",
+        //   "scheduled_date": "2026-09-04", "scheduled_time": "08:00:00",
+        //   "item_type": "MEDICINE", "item_name": "Insulin 10 units",
+        //   "instructions": "Give before breakfast", "status": "PENDING" }
+        [HttpPost("schedule/add")]
+        public async Task<IActionResult> AddSchedule([FromBody] AddScheduleRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.AddSchedule(req, GetUserCode(), tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        // POST api/IpBedsideChart/schedule/update
+        [HttpPost("schedule/update")]
+        public async Task<IActionResult> UpdateSchedule([FromBody] UpdateScheduleRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.UpdateSchedule(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // GET api/IpBedsideChart/schedule/{ip_id}
+        [HttpGet("schedule/{ip_id}")]
+        public async Task<IActionResult> GetSchedule(Guid ip_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetSchedule(ip_id, tenant));
+        }
+
+        // GET api/IpBedsideChart/schedule/{ip_id}/detail?schedule_id=...
+        [HttpGet("schedule/{ip_id}/detail")]
+        public async Task<IActionResult> GetScheduleById(Guid ip_id, [FromQuery] Guid schedule_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetScheduleById(ip_id, schedule_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+
+        // GET api/IpBedsideChart/schedule/delete?schedule_id=...
+        [HttpGet("schedule/delete")]
+        public async Task<IActionResult> DeleteSchedule([FromQuery] Guid schedule_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.DeleteSchedule(schedule_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
     }
 }

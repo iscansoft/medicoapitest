@@ -244,6 +244,110 @@ namespace medico_backend.Model
             public List<NurseServiceModel> service { get; set; } = new();
             public List<NurseMedicineModel> medicine { get; set; } = new();
             public List<NurseOtherModel> other { get; set; } = new();
+            public List<NurseVisitingDoctorModel> visiting_doctor { get; set; } = new();   // NEW
+            public List<NurseScheduleModel> schedule { get; set; } = new();               // NEW
+        }
+        // ─────────────────────────────────────────
+        // 7. VISITING DOCTOR LIST
+        // ─────────────────────────────────────────
+        [Table("ip_nurse_note_visiting_doctor")]
+        public class NurseVisitingDoctorModel
+        {
+            [ExplicitKey] public Guid visit_id { get; set; } = Guid.NewGuid();
+            public Guid ip_id { get; set; }
+            public decimal custid { get; set; }
+            public DateOnly entry_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+            public TimeOnly entry_time { get; set; } = TimeOnly.FromDateTime(DateTime.UtcNow);
+            public string shift { get; set; } = "MORNING";
+            public string doctor_name { get; set; } = string.Empty;
+            public string? specialization { get; set; }
+            public TimeOnly? visit_time { get; set; }
+            public string? diagnosis_notes { get; set; }
+            public string? advice { get; set; }
+            public string? remarks { get; set; }
+            public int? usercode { get; set; }
+            public string? tenant_code { get; set; }
+            public bool isdeleted { get; set; } = false;
+            public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+            public DateTime updated_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+        }
+
+        public class AddVisitingDoctorRequest
+        {
+            public Guid ip_id { get; set; }
+            public decimal custid { get; set; }
+            public string shift { get; set; } = "MORNING";
+            public string doctor_name { get; set; } = string.Empty;
+            public string? specialization { get; set; }
+            public TimeOnly? visit_time { get; set; }
+            public string? diagnosis_notes { get; set; }
+            public string? advice { get; set; }
+            public string? remarks { get; set; }
+        }
+
+        public class UpdateVisitingDoctorRequest
+        {
+            public Guid visit_id { get; set; }
+            public string shift { get; set; } = "MORNING";
+            public string doctor_name { get; set; } = string.Empty;
+            public string? specialization { get; set; }
+            public TimeOnly? visit_time { get; set; }
+            public string? diagnosis_notes { get; set; }
+            public string? advice { get; set; }
+            public string? remarks { get; set; }
+        }
+
+        // ─────────────────────────────────────────
+        // 8. SCHEDULE
+        // ─────────────────────────────────────────
+        [Table("ip_nurse_note_schedule")]
+        public class NurseScheduleModel
+        {
+            [ExplicitKey] public Guid schedule_id { get; set; } = Guid.NewGuid();
+            public Guid ip_id { get; set; }
+            public decimal custid { get; set; }
+            public DateOnly entry_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+            public TimeOnly entry_time { get; set; } = TimeOnly.FromDateTime(DateTime.UtcNow);
+            public string shift { get; set; } = "MORNING";
+            public DateOnly scheduled_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+            public TimeOnly scheduled_time { get; set; }
+            public string item_type { get; set; } = "MEDICINE";   // MEDICINE / DIET / PROCEDURE / OTHER
+            public string item_name { get; set; } = string.Empty;
+            public string? instructions { get; set; }
+            public string status { get; set; } = "PENDING";       // PENDING / COMPLETED / MISSED
+            public string? remarks { get; set; }
+            public int? usercode { get; set; }
+            public string? tenant_code { get; set; }
+            public bool isdeleted { get; set; } = false;
+            public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+            public DateTime updated_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+        }
+
+        public class AddScheduleRequest
+        {
+            public Guid ip_id { get; set; }
+            public decimal custid { get; set; }
+            public string shift { get; set; } = "MORNING";
+            public DateOnly scheduled_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+            public TimeOnly scheduled_time { get; set; }
+            public string item_type { get; set; } = "MEDICINE";
+            public string item_name { get; set; } = string.Empty;
+            public string? instructions { get; set; }
+            public string status { get; set; } = "PENDING";
+            public string? remarks { get; set; }
+        }
+
+        public class UpdateScheduleRequest
+        {
+            public Guid schedule_id { get; set; }
+            public string shift { get; set; } = "MORNING";
+            public DateOnly scheduled_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
+            public TimeOnly scheduled_time { get; set; }
+            public string item_type { get; set; } = "MEDICINE";
+            public string item_name { get; set; } = string.Empty;
+            public string? instructions { get; set; }
+            public string status { get; set; } = "PENDING";
+            public string? remarks { get; set; }
         }
     }
 }
