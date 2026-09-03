@@ -1147,130 +1147,145 @@ namespace medico_backend.InventoryClass
             }
         }
 
-         public async Task<long> UpdateIndent(indent_request request)
- {
-     using (IDbConnection db = new NpgsqlConnection(con))
-     {
-         db.Open();
+          public async Task<long> UpdateIndent(
+indent_request request,
+string tenantcode)
+  {
+      using (IDbConnection db = new NpgsqlConnection(con))
+      {
+          db.Open();
 
-         using (var transaction = db.BeginTransaction())
-         {
-             try
-             {
-                 // =====================================================
-                 // 1. Update Indent Master
-                 // =====================================================
+          using (var transaction = db.BeginTransaction())
+          {
+              try
+              {
+                  // =====================================================
+                  // 1. Update Master
+                  // =====================================================
 
-                 string updateMaster = @"
-             UPDATE public.indent_master
-             SET
-                 indentno = @indentno,
-                 indentdate = @indentdate,
-                 requestedby = @requestedby,
-                 departmentcode = @departmentcode,
-                 branchcode = @branchcode,
-                 remarks = @remarks,
-                 approvalstatus = @approvalstatus
-             WHERE indentcode = @indentcode
-               AND tenantcode = @tenantcode;
-         ";
+                  string updateMaster = @"
+              UPDATE public.indent_master
+              SET
+                  indentno = @indentno,
+                  indentdate = @indentdate,
+                  requestedby = @requestedby,
+                  departmentcode = @departmentcode,
+                  branchcode = @branchcode,
+                  remarks = @remarks,
+                  approvalstatus = @approvalstatus
+              WHERE indentcode = @indentcode
+                AND tenantcode = @tenantcode;
+          ";
 
-                 await db.ExecuteAsync(
-                     updateMaster,
-                     new
-                     {
-                         indentno = request.master.indentno,
-                         indentdate = request.master.indentdate,
-                         requestedby = request.master.requestedby,
-                         departmentcode = request.master.departmentcode,
-                         branchcode = request.master.branchcode,
-                         remarks = request.master.remarks,
-                         approvalstatus = request.master.approvalstatus,
-                         indentcode = request.master.indentcode,
-                         tenantcode = request.master.tenantcode
-                     },
-                     transaction
-                 );
+                  int masterRows = await db.ExecuteAsync(
+                      updateMaster,
+                      new
+                      {
+                          indentno = request.master.indentno,
+                          indentdate = request.master.indentdate,
+                          requestedby = request.master.requestedby,
+                          departmentcode = request.master.departmentcode,
+                          branchcode = request.master.branchcode,
+                          remarks = request.master.remarks,
+                          approvalstatus = request.master.approvalstatus,
+                          indentcode = request.master.indentcode,
+                          tenantcode = tenantcode
+                      },
+                      transaction
+                  );
 
-                 // =====================================================
-                 // 2. Delete Existing Details
-                 // =====================================================
+                  // =====================================================
+                  // IMPORTANT: Check whether master was actually updated
+                  // =====================================================
 
-                 string deleteDetail = @"
-             DELETE FROM public.indent_detail
-             WHERE indentcode = @indentcode;
-         ";
+                  if (masterRows == 0)
+                  {
+                      throw new Exception(
+                          $"Indent master not found. " +
+                          $"IndentCode: {request.master.indentcode}, " +
+                          $"TenantCode: {tenantcode}"
+                      );
+                  }
 
-                 await db.ExecuteAsync(
-                     deleteDetail,
-                     new
-                     {
-                         indentcode = request.master.indentcode
-                     },
-                     transaction
-                 );
+                  // =====================================================
+                  // 2. Delete Existing Details
+                  // =====================================================
 
-                 // =====================================================
-                 // 3. Insert Updated Details
-                 // =====================================================
+                  string deleteDetail = @"
+              DELETE FROM public.indent_detail
+              WHERE indentcode = @indentcode;
+          ";
 
-                 string insertDetail = @"
-             INSERT INTO public.indent_detail
-             (
-                 indentcode,
-                 itemcode,
-                 requestedqty,
-                 approvedqty,
-                 remarks
-             )
-             VALUES
-             (
-                 @indentcode,
-                 @itemcode,
-                 @requestedqty,
-                 @approvedqty,
-                 @remarks
-             );
-         ";
+                  await db.ExecuteAsync(
+                      deleteDetail,
+                      new
+                      {
+                          indentcode = request.master.indentcode
+                      },
+                      transaction
+                  );
 
-                 foreach (var item in request.details)
-                 {
-                     item.indentcode = request.master.indentcode;
+                  // =====================================================
+                  // 3. Insert Details
+                  // =====================================================
 
-                     await db.ExecuteAsync(
-                         insertDetail,
-                         new
-                         {
-                             indentcode = item.indentcode,
-                             itemcode = item.itemcode,
-                             requestedqty = item.requestedqty,
-                             approvedqty = item.approvedqty,
-                             remarks = item.remarks
-                         },
-                         transaction
-                     );
-                 }
+                  string insertDetail = @"
+              INSERT INTO public.indent_detail
+              (
+                  indentcode,
+                  itemcode,
+                  requestedqty,
+                  approvedqty,
+                  remarks
+              )
+              VALUES
+              (
+                  @indentcode,
+                  @itemcode,
+                  @requestedqty,
+                  @approvedqty,
+                  @remarks
+              );
+          ";
 
-                 // =====================================================
-                 // 4. Commit
-                 // =====================================================
+                  foreach (var item in request.details)
+                  {
+                      item.indentcode = request.master.indentcode;
 
-                 transaction.Commit();
+                      await db.ExecuteAsync(
+                          insertDetail,
+                          new
+                          {
+                              indentcode = item.indentcode,
+                              itemcode = item.itemcode,
+                              requestedqty = item.requestedqty,
+                              approvedqty = item.approvedqty,
+                              remarks = item.remarks
+                          },
+                          transaction
+                      );
+                  }
 
-                 return request.master.indentcode;
-             }
-             catch (Exception ex)
-             {
-                 transaction.Rollback();
+                  // =====================================================
+                  // 4. Commit
+                  // =====================================================
 
-                 throw new Exception(
-                     "Indent update failed: " + ex.Message,
-                     ex
-                 );
-             }
-         }
-     }
- }
+                  transaction.Commit();
+
+                  return request.master.indentcode;
+              }
+              catch (Exception ex)
+              {
+                  transaction.Rollback();
+
+                  throw new Exception(
+                      "Indent update failed: " + ex.Message,
+                      ex
+                  );
+              }
+          }
+      }
+  }
 
         // ── Helper: draw issued quantity down from the specific purchase batch,
         //     and mirror the reduction onto stock_master (same pattern as InsertPurchaseReturn) ──
