@@ -6158,6 +6158,109 @@ stock_transfer_partial_reject_request request)
 
             return rows > 0 ? "Success" : "Queue item not found";
         }
+        // ─── GET ALL — STOCK ADJUSTMENT ───────────────────────────────────────────────
+        public async Task<IEnumerable<stock_adjustment_log>> GetAllStockAdjustments(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    adjustmentlogcode,
+                    stockcode,
+                    itemcode,
+                    warehousecode,
+                    branchcode,
+                    locationcode,
+                    batchno,
+                    beforeqty,
+                    adjustedqty,
+                    afterqty,
+                    unitcost,
+                    stockvalue,
+                    adjustmenttype,
+                    adjustmentreason,
+                    remarks,
+                    adjustmentdate,
+                    adjustedby,
+                    isactive,
+                    deleted,
+                    createddate,
+                    modifieddate,
+                    tenantcode,
+                    companycode
+                FROM public.stock_adjustment_log
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY adjustmentlogcode DESC;";
+
+            return await db.QueryAsync<stock_adjustment_log>(query, new { tenantcode });
+        }
+
+        // ─── GET ALL — SALES RETURN ────────────────────────────────────────────────────
+        public async Task<IEnumerable<sales_return_master>> GetAllSalesReturns(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    salesreturncode,
+                    salesdetailcode,
+                    salescode,
+                    itemcode,
+                    customercode,
+                    batchno,
+                    returnqty,
+                    packsize,
+                    totalqty,
+                    rate,
+                    amount,
+                    warehousecode,
+                    remarks,
+                    isactive,
+                    deleted,
+                    createddate,
+                    usercode,
+                    tenantcode
+                FROM public.sales_return_master
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY salesreturncode DESC;";
+
+            return await db.QueryAsync<sales_return_master>(query, new { tenantcode });
+        }
+
+        // ─── GET ALL — PURCHASE RETURN ─────────────────────────────────────────────────
+        public async Task<IEnumerable<purchase_return_master>> GetAllPurchaseReturns(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    purchasereturncode,
+                    purchasedetailcode,
+                    purchasecode,
+                    itemcode,
+                    vendorcode,
+                    batchno,
+                    returnqty,
+                    packsize,
+                    totalqty,
+                    rate,
+                    amount,
+                    warehousecode,
+                    remarks,
+                    isactive,
+                    deleted,
+                    createddate,
+                    usercode,
+                    tenantcode
+                FROM public.purchase_return_master
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY purchasereturncode DESC;";
+
+            return await db.QueryAsync<purchase_return_master>(query, new { tenantcode });
+        }
     }
 }
 

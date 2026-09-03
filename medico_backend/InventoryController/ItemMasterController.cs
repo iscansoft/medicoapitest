@@ -2385,6 +2385,59 @@ namespace medico_backend.InventoryController
             });
         }
     }
+        // ─── GET ALL — STOCK ADJUSTMENT ───────────────────────────────────────────────
+        [HttpGet("getallstockadjustment")]
+        public async Task<IActionResult> GetAllStockAdjustments()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllStockAdjustments(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── GET ALL — SALES RETURN ────────────────────────────────────────────────────
+        [HttpGet("getallsalesreturn")]
+        public async Task<IActionResult> GetAllSalesReturns()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllSalesReturns(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── GET ALL — PURCHASE RETURN ─────────────────────────────────────────────────
+        [HttpGet("getallpurchasereturn")]
+        public async Task<IActionResult> GetAllPurchaseReturns()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllPurchaseReturns(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     
