@@ -2496,6 +2496,36 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        // ─── UPSERT — STOCK ADJUSTMENT (single endpoint: insert or update) ────────────
+        [HttpPost("upsertstockadjustment")]
+        public async Task<IActionResult> UpsertStockAdjustment([FromBody] stock_adjustment_request request)
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                request.stock.tenantcode = tenantcode;
+                request.adjustmentlog.tenantcode = tenantcode;
+
+                var result = await itemclass.UpsertStockAdjustment(request);
+
+                bool ok = result.StartsWith("Stock Adjustment Saved") || result.StartsWith("Stock Adjustment Updated");
+
+                return ok
+                    ? Ok(new { status = "Success", message = result })
+                    : BadRequest(new { status = "Failed", message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = "Failed", message = ex.Message });
+            }
+        }
     }
 }
     

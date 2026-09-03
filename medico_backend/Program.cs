@@ -194,6 +194,8 @@ builder.Services.AddScoped<PatientVoiceNotesController>();
 builder.Services.AddScoped<Medico_Backend.Services.AudioUploadService>();
 builder.Services.AddScoped<IpBedsideChartClass>();
 builder.Services.AddScoped<IpBedsideChartController>();
+builder.Services.AddScoped<MasterListController>();
+builder.Services.AddScoped<MasterListClass>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
