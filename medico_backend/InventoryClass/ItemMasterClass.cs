@@ -1225,52 +1225,58 @@ string tenantcode)
                       transaction
                   );
 
-                  // =====================================================
-                  // 3. Insert Details
-                  // =====================================================
+                        // =====================================================
+                        // 3. Insert Details
+                        // =====================================================
 
-                  string insertDetail = @"
-              INSERT INTO public.indent_detail
-              (
-                  indentcode,
-                  itemcode,
-                  requestedqty,
-                  approvedqty,
-                  remarks
-              )
-              VALUES
-              (
-                  @indentcode,
-                  @itemcode,
-                  @requestedqty,
-                  @approvedqty,
-                  @remarks
-              );
-          ";
+                        string insertDetail = @"
+    INSERT INTO public.indent_detail
+    (
+        indentcode,
+        itemcode,
+        purchasedetailcode,
+        requestedqty,
+        approvedqty,
+        issuedqty,
+        remarks
+    )
+    VALUES
+    (
+        @indentcode,
+        @itemcode,
+        @purchasedetailcode,
+        @requestedqty,
+        @approvedqty,
+        @issuedqty,
+        @remarks
+    );
+";
 
-                  foreach (var item in request.details)
-                  {
-                      item.indentcode = request.master.indentcode;
+                        foreach (var item in request.details)
+                        {
+                            item.indentcode = request.master.indentcode;
 
-                      await db.ExecuteAsync(
-                          insertDetail,
-                          new
-                          {
-                              indentcode = item.indentcode,
-                              itemcode = item.itemcode,
-                              requestedqty = item.requestedqty,
-                              approvedqty = item.approvedqty,
-                              remarks = item.remarks
-                          },
-                          transaction
-                      );
-                  }
+                            await db.ExecuteAsync(
+                                insertDetail,
+                                new
+                                {
+                                    indentcode = item.indentcode,
+                                    itemcode = item.itemcode,
+                                    purchasedetailcode = item.purchasedetailcode,
+                                    requestedqty = item.requestedqty,
+                                    approvedqty = item.approvedqty,
+                                    issuedqty = item.issuedqty,
+                                    remarks = item.remarks
+                                },
+                                transaction
+                            );
+                        }
 
-                  // =====================================================
-                  // 4. Commit
-                  // =====================================================
+                        // =====================================================
+                        // 4. Commit
+                        // =====================================================
 
-                  transaction.Commit();
+                        transaction.Commit();
 
                   return request.master.indentcode;
               }
@@ -3160,14 +3166,14 @@ WHERE stockcode=@stockcode;";
                 (
                     orderno, warehousename, shortname, description, location,
                     tenantcode, isactive, isdeleted, createddate,
-                    purchaseallow, salesallow,isdoctor_room
+                    purchaseallow, salesallow, isdoctor_room,
                     druglicenseno, pharmacyregistrationno, gstno, msmeno
                 )
                 VALUES
                 (
                     @orderno, @warehousename, @shortname, @description, @location,
                     @tenantcode, @isactive, @isdeleted, CURRENT_TIMESTAMP,
-                    @purchaseallow, @salesallow,@isdoctor_room
+                    @purchaseallow, @salesallow, @isdoctor_room,
                     @druglicenseno, @pharmacyregistrationno, @gstno, @msmeno
                 )
                 RETURNING warehousecode;";
@@ -3189,7 +3195,7 @@ WHERE stockcode=@stockcode;";
                     isdeleted               = @isdeleted,
                     purchaseallow           = @purchaseallow,
                     salesallow              = @salesallow,
-                    isdoctor_room           =@isdoctor_room,
+                    isdoctor_room           = @isdoctor_room,
                     druglicenseno           = @druglicenseno,
                     pharmacyregistrationno  = @pharmacyregistrationno,
                     gstno                   = @gstno,
