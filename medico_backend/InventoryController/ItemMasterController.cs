@@ -2526,6 +2526,59 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { status = "Failed", message = ex.Message });
             }
         }
+        // ─── FILTER PURCHASES ─────────────────────────────────────────────────────────
+        [HttpGet("filterpurchases")]
+        public async Task<IActionResult> FilterPurchases(
+            string? vendorname,
+            string? billno,
+            string? invoiceno,
+            string? paymentstatus,
+            DateTime? fromdate,
+            DateTime? todate)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.FilterPurchases(
+                    vendorname, billno, invoiceno, paymentstatus, fromdate, todate, tenantcode);
+
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── BULK UPDATE PURCHASE STATUS ──────────────────────────────────────────────
+        [HttpPost("updatemultiplepurchasestatus")]
+        public async Task<IActionResult> UpdateMultiplePurchaseStatus([FromBody] purchase_bulk_status_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.purchasecodes == null || !request.purchasecodes.Any())
+                    return BadRequest(new { Status = "Failed", Message = "purchasecodes is required" });
+
+                if (string.IsNullOrWhiteSpace(request.paymentstatus))
+                    return BadRequest(new { Status = "Failed", Message = "paymentstatus is required" });
+
+                var updatedCount = await itemclass.UpdateMultiplePurchaseStatus(
+                    request.purchasecodes, request.paymentstatus, tenantcode);
+
+                return updatedCount > 0
+                    ? Ok(new { Status = "Success", Message = $"{updatedCount} purchase(s) updated", UpdatedCount = updatedCount })
+                    : BadRequest(new { Status = "Failed", Message = "No matching purchases found to update" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     

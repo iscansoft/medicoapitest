@@ -6654,6 +6654,84 @@ AND deleted = false;";
                 return $"Error : {ex.Message}";
             }
         }
+        // ─── PURCHASE FILTER ──────────────────────────────────────────────────────────
+        public async Task<IEnumerable<purchase_filter_result>> FilterPurchases(
+            string? vendorname,
+            string? billno,
+            string? invoiceno,
+            string? paymentstatus,
+            DateTime? fromdate,
+            DateTime? todate,
+            string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+        SELECT
+            m.purchasecode,
+            m.billno,
+            m.billdate,
+            m.invoiceno,
+            m.invoicedate,
+            m.vendorcode,
+            v.vendorname,
+            m.grossamount,
+            m.totalamount,
+            m.taxamount,
+            m.netamount,
+            m.paymentmode,
+            m.paymentstatus,
+            m.createddate
+        FROM public.purchase_master m
+        LEFT JOIN public.vendor_master v ON v.vendorcode = m.vendorcode
+        WHERE m.deleted = false
+          AND m.tenantcode = @tenantcode
+          AND (@vendorname IS NULL OR v.vendorname ILIKE '%' || @vendorname || '%')
+          AND (@billno IS NULL OR m.billno ILIKE '%' || @billno || '%')
+          AND (@invoiceno IS NULL OR m.invoiceno ILIKE '%' || @invoiceno || '%')
+          AND (@paymentstatus IS NULL OR m.paymentstatus = @paymentstatus)
+          AND (@fromdate IS NULL OR m.createddate::date >= @fromdate)
+          AND (@todate IS NULL OR m.createddate::date <= @todate)
+        ORDER BY m.purchasecode DESC;";
+
+            return await db.QueryAsync<purchase_filter_result>(query, new
+            {
+                tenantcode,
+                vendorname,
+                billno,
+                invoiceno,
+                paymentstatus,
+                fromdate,
+                todate
+            });
+        }
+
+        // ─── PURCHASE BULK STATUS UPDATE ──────────────────────────────────────────────
+        public async Task<int> UpdateMultiplePurchaseStatus(
+            List<long> purchasecodes,
+            string paymentstatus,
+            string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+
+            string query = @"
+        UPDATE public.purchase_master
+        SET paymentstatus = @paymentstatus,
+            modifieddate  = CURRENT_TIMESTAMP
+        WHERE purchasecode = ANY(@purchasecodes)
+          AND tenantcode = @tenantcode
+          AND deleted = false;";
+
+            int rows = await db.ExecuteAsync(query, new
+            {
+                paymentstatus,
+                purchasecodes = purchasecodes.ToArray(),
+                tenantcode
+            });
+
+            return rows;
+        }
     }
 }
 
