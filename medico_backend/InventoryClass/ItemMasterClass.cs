@@ -6654,15 +6654,14 @@ AND deleted = false;";
                 return $"Error : {ex.Message}";
             }
         }
-        // ─── PURCHASE FILTER ──────────────────────────────────────────────────────────
         public async Task<IEnumerable<purchase_filter_result>> FilterPurchases(
-            string? vendorname,
-            string? billno,
-            string? invoiceno,
-            string? paymentstatus,
-            DateTime? fromdate,
-            DateTime? todate,
-            string tenantcode)
+    string? vendorname,
+    string? billno,
+    string? invoiceno,
+    string? paymentstatus,
+    DateTime? fromdate,
+    DateTime? todate,
+    string tenantcode)
         {
             using IDbConnection db = new NpgsqlConnection(con);
 
@@ -6670,9 +6669,9 @@ AND deleted = false;";
         SELECT
             m.purchasecode,
             m.billno,
-            m.billdate,
+            m.billdate::timestamp AS billdate,
             m.invoiceno,
-            m.invoicedate,
+            m.invoicedate::timestamp AS invoicedate,
             m.vendorcode,
             v.vendorname,
             m.grossamount,
@@ -6681,7 +6680,7 @@ AND deleted = false;";
             m.netamount,
             m.paymentmode,
             m.paymentstatus,
-            m.createddate
+            m.createddate::timestamp AS createddate
         FROM public.purchase_master m
         LEFT JOIN public.vendor_master v ON v.vendorcode = m.vendorcode
         WHERE m.deleted = false
