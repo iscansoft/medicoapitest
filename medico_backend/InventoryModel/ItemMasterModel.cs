@@ -610,6 +610,7 @@ public class purchase_detail
      public decimal discountamount { get; set; }
 
      public decimal taxamount { get; set; }
+     public decimal roundoff { get; set; }
 
      public decimal netamount { get; set; }
 
