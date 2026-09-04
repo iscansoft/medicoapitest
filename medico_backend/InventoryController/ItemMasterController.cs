@@ -2579,6 +2579,146 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        // ─── DOCTOR ROOM CONSUMPTION ────────────────────────────────────────────────────
+
+        [HttpGet("getdoctorrooms")]
+        public async Task<IActionResult> GetDoctorRooms()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetDoctorRooms(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getdoctorroomstock")]
+        public async Task<IActionResult> GetDoctorRoomStock(long roomwarehousecode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetDoctorRoomStock(roomwarehousecode, tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpPost("insertconsumption")]
+        public async Task<IActionResult> InsertConsumption([FromBody] consumption_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "Invalid request data" });
+
+                var result = await itemclass.InsertConsumption(request, tenantcode);
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Consumption saved successfully",
+                    ConsumptionCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getallconsumption")]
+        public async Task<IActionResult> GetAllConsumptions()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllConsumptions(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getconsumptionbycode")]
+        public async Task<IActionResult> GetConsumptionByCode(long consumptioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetConsumptionByCode(consumptioncode, tenantcode);
+                return result == null
+                    ? NotFound(new { Status = "Failed", Message = "Consumption record not found" })
+                    : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("deleteconsumption")]
+        public async Task<IActionResult> DeleteConsumption(long consumptioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.DeleteConsumption(consumptioncode, tenantcode);
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Consumption deleted and stock restored" })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+        [HttpPost("updateconsumption")]
+        public async Task<IActionResult> UpdateConsumption([FromBody] consumption_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.master.consumptioncode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid consumptioncode is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one item is required." });
+
+                var result = await itemclass.UpdateConsumption(request, tenantcode);
+
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Consumption updated successfully" })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     
