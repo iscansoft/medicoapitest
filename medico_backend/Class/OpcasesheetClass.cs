@@ -13,13 +13,13 @@ namespace medico_backend.Class
     {
         private readonly string _db_conn;
         private readonly UnbilledChargesClass _unbilledCls;
-        private readonly ItemMasterClass _itemMasterCls;   
+        private readonly ItemMasterClass _itemMasterCls;
 
         public NewOPCaseSheetClass(IConfiguration configuration, UnbilledChargesClass unbilledCls, ItemMasterClass itemMasterCls)
         {
             _db_conn = configuration.GetConnectionString("conn")!;
             _unbilledCls = unbilledCls;
-            _itemMasterCls = itemMasterCls;   
+            _itemMasterCls = itemMasterCls;
         }
 
         // ─────────────────────────────────────────────────────────
@@ -44,9 +44,9 @@ namespace medico_backend.Class
                    FROM op_prescription_master
                    WHERE tenant_code = @tenant_code
                    AND   SPLIT_PART(pr_code, '/', 2) = @year   -- isdeleted filter removed:
-                   AND   SPLIT_PART(pr_code, '/', 3) = @month"; 
+                   AND   SPLIT_PART(pr_code, '/', 3) = @month";
 
-    int next = await db.ExecuteScalarAsync<int>(sql, new { tenant_code, year, month }, tx);
+            int next = await db.ExecuteScalarAsync<int>(sql, new { tenant_code, year, month }, tx);
             return $"PR/{year}/{month}/{next:D4}";
         }
 
@@ -137,14 +137,14 @@ namespace medico_backend.Class
        chief_complaint, symptoms, examination,
        advise, notes, followup_date, followup_notes,
        is_consulted, refer_to_ip, sheet_status,
-       referred_to_visiting_doctor, visiting_doctor_name, 
+       referred_to_visiting_doctor,  
        tenant_code, isdeleted, created_at, updated_at)
       VALUES
       (@sheet_id, CAST(@op_id AS uuid), CAST(@ip_id AS uuid), @custid, @dcode, NOW()::date,
        @chief_complaint, @symptoms, @examination,
        @advise, @notes, @followup_date, @followup_notes,
        false, @refer_to_ip, @sheet_status,
-       @referred_to_visiting_doctor, @visiting_doctor_name,
+       @referred_to_visiting_doctor,
        @tenant_code, false, NOW(), NOW())",
     new
     {
@@ -163,7 +163,6 @@ namespace medico_backend.Class
         req.refer_to_ip,          // <-- new
         req.sheet_status,
         req.referred_to_visiting_doctor,   // NEW
-        req.visiting_doctor_name,
         tenant_code
     }, tx);
                 }
@@ -190,9 +189,8 @@ namespace medico_backend.Class
              sheet_status    = @sheet_status,
              refer_to_ip     = @refer_to_ip,
              referred_to_visiting_doctor = @referred_to_visiting_doctor,  -- NEW
-             visiting_doctor_name        = @visiting_doctor_name, 
              updated_at      = NOW()
-      WHERE  sheet_id    = @sheet_id
+             WHERE  sheet_id    = @sheet_id
       AND    tenant_code = @tenant_code",
     new
     {
@@ -207,9 +205,35 @@ namespace medico_backend.Class
         req.sheet_status,
         req.refer_to_ip,          // <-- new
         req.referred_to_visiting_doctor,   // NEW
-        req.visiting_doctor_name,
         tenant_code
     }, tx);
+                }
+                // ── 3b. Visiting doctors list (delete + re-insert) ────────
+                await db.ExecuteAsync(
+                    "DELETE FROM op_case_sheet_visiting_doctors WHERE sheet_id = @sheet_id",
+                    new { sheet_id = sheetId }, tx);
+
+                foreach (var vd in req.visiting_doctor_list)
+                {
+                    await db.ExecuteAsync(
+                        @"INSERT INTO op_case_sheet_visiting_doctors
+          (visiting_doc_id, sheet_id, op_id, ip_id, custid, sno,
+           doctor_name, dcode, notes, tenant_code, created_at)
+          VALUES
+          (gen_random_uuid(), @sheet_id, CAST(@op_id AS uuid), CAST(@ip_id AS uuid), @custid, @sno,
+           @doctor_name, @dcode, @notes, @tenant_code, NOW())",
+                        new
+                        {
+                            sheet_id = sheetId,
+                            op_id = finalOpId,
+                            ip_id = finalIpId,
+                            req.custid,
+                            vd.sno,
+                            vd.doctor_name,
+                            vd.dcode,
+                            vd.notes,
+                            tenant_code
+                        }, tx);
                 }
 
                 // ── 3. Symptoms list (delete + re-insert) ─────────
@@ -422,7 +446,7 @@ namespace medico_backend.Class
                         tenant_code
                     }, tx);
 
-               
+
             }
 
             return prCode;
@@ -702,10 +726,14 @@ namespace medico_backend.Class
                 is_consulted = sheet.is_consulted,
                 refer_to_ip = sheet.refer_to_ip,      // <-- new
                 referred_to_visiting_doctor = sheet.referred_to_visiting_doctor,  // NEW
-                visiting_doctor_name = sheet.visiting_doctor_name,
+
                 sheet_status = sheet.sheet_status
             };
-
+            vm.visiting_doctor_list = (await db.QueryAsync<OpCaseSheetVisitingDoctorModel>(
+    @"SELECT * FROM op_case_sheet_visiting_doctors
+      WHERE  sheet_id = @sheet_id
+      ORDER  BY sno",
+    new { sheet_id = sheet.sheet_id })).ToList();
             // Symptoms
             vm.symptom_list = (await db.QueryAsync<OpCaseSheetSymptomModel>(
                 @"SELECT * FROM op_case_sheet_symptoms
@@ -1071,10 +1099,17 @@ namespace medico_backend.Class
                     is_consulted = s.is_consulted,
                     sheet_status = s.sheet_status,
                     refer_to_ip = s.refer_to_ip,
-                    referred_to_visiting_doctor = s.referred_to_visiting_doctor,  // NEW
-                    visiting_doctor_name = s.visiting_doctor_name,
+                    referred_to_visiting_doctor = s.referred_to_visiting_doctor
                 };
-
+                vm.visiting_doctor_list = (await db.QueryAsync<OpCaseSheetVisitingDoctorModel>(
+    @"SELECT vd.* FROM op_case_sheet_visiting_doctors vd
+      JOIN   op_case_sheet cs ON cs.sheet_id = vd.sheet_id
+      WHERE  cs.tenant_code = @tenant_code
+      AND    cs.isdeleted   = false
+      AND    ((@op_id IS NOT NULL AND cs.op_id = CAST(@op_id AS uuid))
+              OR (@ip_id IS NOT NULL AND cs.ip_id = CAST(@ip_id AS uuid)))
+      ORDER  BY vd.sno",
+    new { op_id = hasOp ? opId : null, ip_id = hasIp ? ipId : null, tenant_code })).ToList();
                 // Symptoms — matched by visit (op_id/ip_id), not just this one sheet_id,
                 // so symptoms saved under a sibling duplicate sheet still show up.
                 vm.symptom_list = (await db.QueryAsync<OpCaseSheetSymptomModel>(

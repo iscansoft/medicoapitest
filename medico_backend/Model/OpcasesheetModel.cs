@@ -32,7 +32,8 @@ namespace medico_backend.Model
         // Status
         public bool refer_to_ip { get; set; } = false;
         public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
-        public string? visiting_doctor_name { get; set; }
+        //public string? visiting_doctor_name { get; set; }
+        public List<VisitingDoctorItem> visiting_doctor_list { get; set; } = new();
         public bool is_consulted { get; set; } = false;
         public string sheet_status { get; set; } = "DRAFT";  // DRAFT / FINAL
 
@@ -273,7 +274,7 @@ namespace medico_backend.Model
         // Sheet status
         public bool refer_to_ip { get; set; } = false;
         public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
-        public string? visiting_doctor_name { get; set; }
+        public List<VisitingDoctorItem> visiting_doctor_list { get; set; } = new();
         public string sheet_status { get; set; } = "DRAFT";  // DRAFT / FINAL
 
 
@@ -428,7 +429,7 @@ namespace medico_backend.Model
         public string? sheet_status { get; set; }
         public bool refer_to_ip { get; set; } = false;
         public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
-        public string? visiting_doctor_name { get; set; }
+        public List<OpCaseSheetVisitingDoctorModel> visiting_doctor_list { get; set; } = new();
 
 
         // Structured lists
@@ -494,5 +495,30 @@ namespace medico_backend.Model
         public DateTime? last_visit_date { get; set; }
         public string? tenant_code { get; set; }
     }
+    [Table("op_case_sheet_visiting_doctors")]
+    public class OpCaseSheetVisitingDoctorModel
+    {
+        [ExplicitKey]
+        public Guid visiting_doc_id { get; set; } = Guid.NewGuid();
+        public Guid sheet_id { get; set; }
+        public Guid? op_id { get; set; }
+        public Guid? ip_id { get; set; }
+        public decimal custid { get; set; }
+        public int sno { get; set; }
 
+        public string doctor_name { get; set; } = string.Empty;
+        public int? dcode { get; set; }
+        public string? notes { get; set; }
+
+        public string? tenant_code { get; set; }
+        public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+    }
+
+    public class VisitingDoctorItem
+    {
+        public int sno { get; set; }
+        public string doctor_name { get; set; } = string.Empty;
+        public int? dcode { get; set; }
+        public string? notes { get; set; }
+    }
 }
