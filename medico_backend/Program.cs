@@ -15,7 +15,7 @@ using Minio;
 using System.Text;
 
 
-
+AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 var builder = WebApplication.CreateBuilder(args);
 
 SqlMapper.AddTypeHandler(typeof(TimeOnly), new TimeOnlyTypeHandler());
@@ -192,6 +192,10 @@ builder.Services.AddScoped<ServiceTypeController>();
 builder.Services.AddScoped<PatientVoiceNoteClass>();
 builder.Services.AddScoped<PatientVoiceNotesController>();
 builder.Services.AddScoped<Medico_Backend.Services.AudioUploadService>();
+builder.Services.AddScoped<IpBedsideChartClass>();
+builder.Services.AddScoped<IpBedsideChartController>();
+builder.Services.AddScoped<MasterListController>();
+builder.Services.AddScoped<MasterListClass>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {

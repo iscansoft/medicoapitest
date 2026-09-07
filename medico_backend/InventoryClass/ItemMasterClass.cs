@@ -1147,63 +1147,151 @@ namespace medico_backend.InventoryClass
             }
         }
 
-        public async Task<long> UpdateIndent(indent_request request)
-        {
-            using (IDbConnection db = new NpgsqlConnection(con))
-            {
-                db.Open();
+          public async Task<long> UpdateIndent(
+indent_request request,
+string tenantcode)
+  {
+      using (IDbConnection db = new NpgsqlConnection(con))
+      {
+          db.Open();
 
-                using (var transaction = db.BeginTransaction())
-                {
-                    try
-                    {
-                        await db.ExecuteAsync(@"
-                    UPDATE public.indent_master
-                    SET
-                        indentno       = @indentno,
-                        indentdate     = @indentdate,
-                        requestedby    = @requestedby,
-                        departmentcode = @departmentcode,
-                        branchcode     = @branchcode,
-                        remarks        = @remarks,
-                        approvalstatus = @approvalstatus,
-                        tenantcode     = @tenantcode
-                    WHERE indentcode = @indentcode
-                      AND tenantcode = @tenantcode;",
-                            request.master, transaction);
+          using (var transaction = db.BeginTransaction())
+          {
+              try
+              {
+                  // =====================================================
+                  // 1. Update Master
+                  // =====================================================
 
-                        await db.ExecuteAsync(
-                            "DELETE FROM public.indent_detail WHERE indentcode = @indentcode;",
-                            new { indentcode = request.master.indentcode }, transaction);
+                  string updateMaster = @"
+              UPDATE public.indent_master
+              SET
+                  indentno = @indentno,
+                  indentdate = @indentdate,
+                  requestedby = @requestedby,
+                  departmentcode = @departmentcode,
+                  branchcode = @branchcode,
+                  remarks = @remarks,
+                  approvalstatus = @approvalstatus
+              WHERE indentcode = @indentcode
+                AND tenantcode = @tenantcode;
+          ";
+
+                  int masterRows = await db.ExecuteAsync(
+                      updateMaster,
+                      new
+                      {
+                          indentno = request.master.indentno,
+                          indentdate = request.master.indentdate,
+                          requestedby = request.master.requestedby,
+                          departmentcode = request.master.departmentcode,
+                          branchcode = request.master.branchcode,
+                          remarks = request.master.remarks,
+                          approvalstatus = request.master.approvalstatus,
+                          indentcode = request.master.indentcode,
+                          tenantcode = tenantcode
+                      },
+                      transaction
+                  );
+
+                  // =====================================================
+                  // IMPORTANT: Check whether master was actually updated
+                  // =====================================================
+
+                  if (masterRows == 0)
+                  {
+                      throw new Exception(
+                          $"Indent master not found. " +
+                          $"IndentCode: {request.master.indentcode}, " +
+                          $"TenantCode: {tenantcode}"
+                      );
+                  }
+
+                  // =====================================================
+                  // 2. Delete Existing Details
+                  // =====================================================
+
+                  string deleteDetail = @"
+              DELETE FROM public.indent_detail
+              WHERE indentcode = @indentcode;
+          ";
+
+                  await db.ExecuteAsync(
+                      deleteDetail,
+                      new
+                      {
+                          indentcode = request.master.indentcode
+                      },
+                      transaction
+                  );
+
+                        // =====================================================
+                        // 3. Insert Details
+                        // =====================================================
 
                         string insertDetail = @"
-                    INSERT INTO public.indent_detail
-                    (indentcode, itemcode, purchasedetailcode, requestedqty, approvedqty, issuedqty, remarks)
-                    VALUES
-                    (@indentcode, @itemcode, @purchasedetailcode, @requestedqty, @approvedqty, @issuedqty, @remarks);";
+    INSERT INTO public.indent_detail
+    (
+        indentcode,
+        itemcode,
+        purchasedetailcode,
+        requestedqty,
+        approvedqty,
+        issuedqty,
+        remarks
+    )
+    VALUES
+    (
+        @indentcode,
+        @itemcode,
+        @purchasedetailcode,
+        @requestedqty,
+        @approvedqty,
+        @issuedqty,
+        @remarks
+    );
+";
 
                         foreach (var item in request.details)
                         {
                             item.indentcode = request.master.indentcode;
-                            await db.ExecuteAsync(insertDetail, item, transaction);
+
+                            await db.ExecuteAsync(
+                                insertDetail,
+                                new
+                                {
+                                    indentcode = item.indentcode,
+                                    itemcode = item.itemcode,
+                                    purchasedetailcode = item.purchasedetailcode,
+                                    requestedqty = item.requestedqty,
+                                    approvedqty = item.approvedqty,
+                                    issuedqty = item.issuedqty,
+                                    remarks = item.remarks
+                                },
+                                transaction
+                            );
                         }
 
-                        if (string.Equals(request.master.approvalstatus, "Approved", StringComparison.OrdinalIgnoreCase))
-                        {
-                            await IssueIndentStock(db, transaction, request.details, request.master.tenantcode);
-                        }
+                        // =====================================================
+                        // 4. Commit
+                        // =====================================================
 
                         transaction.Commit();
-                        return request.master.indentcode;
-                    }
-                    catch (Exception ex)
-                    {
-                        transaction.Rollback();
-                        throw new Exception("Indent update failed: " + ex.Message);
-                    }
-                }
-            }
-        }
+
+                  return request.master.indentcode;
+              }
+              catch (Exception ex)
+              {
+                  transaction.Rollback();
+
+                  throw new Exception(
+                      "Indent update failed: " + ex.Message,
+                      ex
+                  );
+              }
+          }
+      }
+  }
 
         // ── Helper: draw issued quantity down from the specific purchase batch,
         //     and mirror the reduction onto stock_master (same pattern as InsertPurchaseReturn) ──
@@ -2748,11 +2836,13 @@ INSERT INTO sales_master
     warehousefield,
     patientid,
     patientname,
+    mobileno,
     address,
     consultant,
     grossamount,
     discountamount,
     taxamount,
+    roundoff,
     netamount,
     paymentmode,
     paymentstatus,
@@ -2779,11 +2869,13 @@ VALUES
     @warehousefield,
     @patientid,
     @patientname,
+    @mobileno, 
     @address,
     @consultant,
     @grossamount,
     @discountamount,
     @taxamount,
+    @roundoff,
     @netamount,
     @paymentmode,
     @paymentstatus,
@@ -2948,9 +3040,10 @@ WHERE stockcode=@stockcode;";
                         invoicedate=@invoicedate, customercode=@customercode,
                         salestype=@salestype, warehousefield=@warehousefield,
                         patientid=@patientid, patientname=@patientname,
+                        mobileno=@mobileno,
                         address=@address, consultant=@consultant,
                         grossamount=@grossamount, discountamount=@discountamount,
-                        taxamount=@taxamount, netamount=@netamount,
+                        taxamount=@taxamount,roundoff=@roundoff, netamount=@netamount,
                         paymentmode=@paymentmode, paymentstatus=@paymentstatus,
                         currencycode=@currencycode, remarks=@remarks,
                         modifieddate=NOW(), usercode=@usercode,
@@ -3073,14 +3166,14 @@ WHERE stockcode=@stockcode;";
                 (
                     orderno, warehousename, shortname, description, location,
                     tenantcode, isactive, isdeleted, createddate,
-                    purchaseallow, salesallow,
+                    purchaseallow, salesallow, isdoctor_room,
                     druglicenseno, pharmacyregistrationno, gstno, msmeno
                 )
                 VALUES
                 (
                     @orderno, @warehousename, @shortname, @description, @location,
                     @tenantcode, @isactive, @isdeleted, CURRENT_TIMESTAMP,
-                    @purchaseallow, @salesallow,
+                    @purchaseallow, @salesallow, @isdoctor_room,
                     @druglicenseno, @pharmacyregistrationno, @gstno, @msmeno
                 )
                 RETURNING warehousecode;";
@@ -3102,6 +3195,7 @@ WHERE stockcode=@stockcode;";
                     isdeleted               = @isdeleted,
                     purchaseallow           = @purchaseallow,
                     salesallow              = @salesallow,
+                    isdoctor_room           = @isdoctor_room,
                     druglicenseno           = @druglicenseno,
                     pharmacyregistrationno  = @pharmacyregistrationno,
                     gstno                   = @gstno,
@@ -4143,8 +4237,8 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
     );
 }
         public async Task<long> InsertStockTransfer(
-         stock_transfer_request request,
-         string tenantcode)
+stock_transfer_request request,
+string tenantcode)
         {
             using var conn = new NpgsqlConnection(con);
             await conn.OpenAsync();
@@ -4153,11 +4247,33 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
             try
             {
                 // ----------------------------------------------------
+                // Serialize concurrent inserts for the same tenant so
+                // the indentcode MAX()+1 calculation below doesn't race.
+                // ----------------------------------------------------
+
+                await conn.ExecuteAsync(
+                    "SELECT pg_advisory_xact_lock(hashtext(@lockkey));",
+                    new { lockkey = "STOCKTRANSFER_" + tenantcode },
+                    transaction);
+
+                // ----------------------------------------------------
+                // Compute indentcode BEFORE the insert — the column is
+                // NOT NULL, so it must be supplied in the INSERT itself,
+                // not patched in afterwards.
+                // ----------------------------------------------------
+
+                long indentcode = await conn.ExecuteScalarAsync<long>(
+                    @"
+            SELECT COALESCE(MAX(indentcode), 0) + 1
+            FROM stock_transfer_master
+            WHERE tenantcode = @tenantcode
+            ",
+                    new { tenantcode },
+                    transaction);
+
+                // ----------------------------------------------------
                 // Insert Master — let the IDENTITY column generate
-                // transfercode. Do NOT compute it manually; it's a
-                // global PK, not scoped per tenant, and manual
-                // MAX()+1 logic collides across tenants / concurrent
-                // requests with the identity sequence.
+                // transfercode, but supply indentcode up front.
                 // ----------------------------------------------------
 
                 long transfercode = await conn.ExecuteScalarAsync<long>(
@@ -4174,7 +4290,8 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
                 status,
                 createdby,
                 createddate,
-                tenantcode
+                tenantcode,
+                indentcode
             )
             VALUES
             (
@@ -4188,7 +4305,8 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
                 'PENDING',
                 @createdby,
                 CURRENT_TIMESTAMP,
-                @tenantcode
+                @tenantcode,
+                @indentcode
             )
             RETURNING transfercode;",
                     new
@@ -4201,49 +4319,25 @@ public async Task<stock_adjustment_log?> GetStockAdjustment(
                         reason = request.master.reason,
                         remarks = request.master.remarks,
                         createdby = request.master.createdby,
-                        tenantcode
+                        tenantcode,
+                        indentcode
                     },
                     transaction);
 
                 // ----------------------------------------------------
                 // Now that we have the real transfercode, build the
                 // human-readable transferno and store it.
-                // (indentcode left as-is — it isn't the PK, so the
-                // per-tenant MAX()+1 approach is fine for it.)
                 // ----------------------------------------------------
-
-                long indentcode = await conn.ExecuteScalarAsync<long>(
-                    @"
-            SELECT COALESCE(MAX(indentcode), 0) + 1
-            FROM stock_transfer_master
-            WHERE tenantcode = @tenantcode
-            ",
-                    new { tenantcode },
-                    transaction);
 
                 string transferno = $"TRF-{transfercode:D6}";
 
                 await conn.ExecuteAsync(
                     @"
             UPDATE stock_transfer_master
-            SET transferno = @transferno,
-                indentcode  = @indentcode
+            SET transferno = @transferno
             WHERE transfercode = @transfercode
               AND tenantcode = @tenantcode;",
-                    new { transferno, indentcode, transfercode, tenantcode },
-                    transaction);
-
-                // ----------------------------------------------------
-                // Generate Detail Code
-                // ----------------------------------------------------
-
-                long detailcode = await conn.ExecuteScalarAsync<long>(
-                    @"
-            SELECT COALESCE(MAX(transferdetailcode), 0)
-            FROM stock_transfer_detail
-            WHERE tenantcode = @tenantcode
-            ",
-                    new { tenantcode },
+                    new { transferno, transfercode, tenantcode },
                     transaction);
 
                 // ----------------------------------------------------
@@ -6154,6 +6248,979 @@ stock_transfer_partial_reject_request request)
                 new { status = status.ToUpper(), queue_id, tenant_code });
 
             return rows > 0 ? "Success" : "Queue item not found";
+        }
+        // ─── GET ALL — STOCK ADJUSTMENT ───────────────────────────────────────────────
+        public async Task<IEnumerable<stock_adjustment_log>> GetAllStockAdjustments(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    adjustmentlogcode,
+                    stockcode,
+                    itemcode,
+                    warehousecode,
+                    branchcode,
+                    locationcode,
+                    batchno,
+                    beforeqty,
+                    adjustedqty,
+                    afterqty,
+                    unitcost,
+                    stockvalue,
+                    adjustmenttype,
+                    adjustmentreason,
+                    remarks,
+                    adjustmentdate,
+                    adjustedby,
+                    isactive,
+                    deleted,
+                    createddate,
+                    modifieddate,
+                    tenantcode,
+                    companycode
+                FROM public.stock_adjustment_log
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY adjustmentlogcode DESC;";
+
+            return await db.QueryAsync<stock_adjustment_log>(query, new { tenantcode });
+        }
+
+        // ─── GET ALL — SALES RETURN ────────────────────────────────────────────────────
+        public async Task<IEnumerable<sales_return_master>> GetAllSalesReturns(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    salesreturncode,
+                    salesdetailcode,
+                    salescode,
+                    itemcode,
+                    customercode,
+                    batchno,
+                    returnqty,
+                    packsize,
+                    totalqty,
+                    rate,
+                    amount,
+                    warehousecode,
+                    remarks,
+                    isactive,
+                    deleted,
+                    createddate,
+                    usercode,
+                    tenantcode
+                FROM public.sales_return_master
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY salesreturncode DESC;";
+
+            return await db.QueryAsync<sales_return_master>(query, new { tenantcode });
+        }
+
+        // ─── GET ALL — PURCHASE RETURN ─────────────────────────────────────────────────
+        public async Task<IEnumerable<purchase_return_master>> GetAllPurchaseReturns(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+                SELECT
+                    purchasereturncode,
+                    purchasedetailcode,
+                    purchasecode,
+                    itemcode,
+                    vendorcode,
+                    batchno,
+                    returnqty,
+                    packsize,
+                    totalqty,
+                    rate,
+                    amount,
+                    warehousecode,
+                    remarks,
+                    isactive,
+                    deleted,
+                    createddate,
+                    usercode,
+                    tenantcode
+                FROM public.purchase_return_master
+                WHERE deleted = false
+                  AND tenantcode = @tenantcode
+                ORDER BY purchasereturncode DESC;";
+
+            return await db.QueryAsync<purchase_return_master>(query, new { tenantcode });
+        }
+        // ─── UPSERT — STOCK ADJUSTMENT ─────────────────────────────────────────────────
+        // If adjustmentlog.adjustmentlogcode is 0/null -> Insert (same as InsertStockAdjustment)
+        // If adjustmentlog.adjustmentlogcode has a value -> Update (same as UpdateStockAdjustment)
+        public async Task<string> UpsertStockAdjustment(stock_adjustment_request request)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+
+            using var tran = conn.BeginTransaction();
+
+            try
+            {
+                bool isInsert = request.adjustmentlog.adjustmentlogcode == 0;
+
+                //=================================================
+                // 1. Check Stock Exists - Tenant Wise
+                //=================================================
+
+                string checkStockQuery = @"
+SELECT stockcode, closingstock, unitcost
+FROM stock_master
+WHERE stockcode = @stockcode
+AND tenantcode = @tenantcode
+AND deleted = false;";
+
+                var stock = await conn.QueryFirstOrDefaultAsync<stock_master>(
+                    checkStockQuery,
+                    new
+                    {
+                        stockcode = request.stock.stockcode,
+                        tenantcode = request.stock.tenantcode
+                    },
+                    tran);
+
+                if (stock == null)
+                {
+                    await tran.RollbackAsync();
+                    return "Stock record not found.";
+                }
+
+                if (isInsert)
+                {
+                    //=================================================
+                    // INSERT PATH
+                    //=================================================
+
+                    decimal afterQty = request.adjustmentlog.afterqty;
+                    decimal stockValue = afterQty * stock.unitcost;
+
+                    string updateStockQuery = @"
+UPDATE stock_master
+SET
+    closingstock = @closingstock,
+    stockvalue = @stockvalue,
+    modifieddate = CURRENT_TIMESTAMP
+WHERE stockcode = @stockcode;";
+
+                    await conn.ExecuteAsync(
+                        updateStockQuery,
+                        new
+                        {
+                            closingstock = afterQty,
+                            stockvalue = stockValue,
+                            stockcode = request.stock.stockcode
+                        },
+                        tran);
+
+                    string insertLogQuery = @"
+INSERT INTO stock_adjustment_log
+(
+    stockcode,
+    itemcode,
+    warehousecode,
+    branchcode,
+    locationcode,
+    batchno,
+    beforeqty,
+    adjustedqty,
+    afterqty,
+    unitcost,
+    stockvalue,
+    adjustmenttype,
+    adjustmentreason,
+    remarks,
+    adjustmentdate,
+    adjustedby,
+    isactive,
+    deleted,
+    createddate,
+    tenantcode,
+    companycode
+)
+VALUES
+(
+    @stockcode,
+    @itemcode,
+    @warehousecode,
+    @branchcode,
+    @locationcode,
+    @batchno,
+    @beforeqty,
+    @adjustedqty,
+    @afterqty,
+    @unitcost,
+    @stockvalue,
+    @adjustmenttype,
+    @adjustmentreason,
+    @remarks,
+    CURRENT_TIMESTAMP,
+    @adjustedby,
+    @isactive,
+    @deleted,
+    CURRENT_TIMESTAMP,
+    @tenantcode,
+    @companycode
+);";
+
+                    await conn.ExecuteAsync(
+                        insertLogQuery,
+                        new
+                        {
+                            stockcode = request.stock.stockcode,
+                            itemcode = request.adjustmentlog.itemcode,
+                            warehousecode = request.adjustmentlog.warehousecode,
+                            branchcode = request.adjustmentlog.branchcode,
+                            locationcode = request.adjustmentlog.locationcode,
+                            batchno = request.adjustmentlog.batchno,
+
+                            beforeqty = request.adjustmentlog.beforeqty,
+                            adjustedqty = request.adjustmentlog.adjustedqty,
+                            afterqty = afterQty,
+
+                            unitcost = stock.unitcost,
+                            stockvalue = stockValue,
+
+                            adjustmenttype = request.adjustmentlog.adjustmenttype,
+                            adjustmentreason = request.adjustmentlog.adjustmentreason,
+                            remarks = request.adjustmentlog.remarks,
+
+                            adjustedby = request.adjustmentlog.adjustedby,
+
+                            isactive = true,
+                            deleted = false,
+
+                            tenantcode = request.stock.tenantcode,
+                            companycode = request.stock.companycode
+                        },
+                        tran);
+
+                    await tran.CommitAsync();
+                    return "Stock Adjustment Saved Successfully.";
+                }
+                else
+                {
+                    //=================================================
+                    // UPDATE PATH
+                    //=================================================
+
+                    string checkLogQuery = @"
+SELECT
+    adjustmentlogcode,
+    stockcode,
+    beforeqty,
+    adjustedqty,
+    afterqty
+FROM stock_adjustment_log
+WHERE adjustmentlogcode = @adjustmentlogcode
+AND tenantcode = @tenantcode
+AND deleted = false;";
+
+                    var adjustmentLog = await conn.QueryFirstOrDefaultAsync<stock_adjustment_log>(
+                        checkLogQuery,
+                        new
+                        {
+                            adjustmentlogcode = request.adjustmentlog.adjustmentlogcode,
+                            tenantcode = request.stock.tenantcode
+                        },
+                        tran);
+
+                    if (adjustmentLog == null)
+                    {
+                        await tran.RollbackAsync();
+                        return "Stock adjustment record not found.";
+                    }
+
+                    decimal beforeQty = adjustmentLog.beforeqty;
+                    decimal newAfterQty;
+
+                    if (request.adjustmentlog.adjustmenttype == "Increase")
+                    {
+                        newAfterQty = beforeQty + request.adjustmentlog.adjustedqty;
+                    }
+                    else if (request.adjustmentlog.adjustmenttype == "Decrease")
+                    {
+                        newAfterQty = beforeQty - request.adjustmentlog.adjustedqty;
+                    }
+                    else
+                    {
+                        await tran.RollbackAsync();
+                        return "Invalid adjustment type. Use Increase or Decrease.";
+                    }
+
+                    if (newAfterQty < 0)
+                    {
+                        await tran.RollbackAsync();
+                        return "Stock quantity cannot be negative.";
+                    }
+
+                    decimal stockValue = newAfterQty * stock.unitcost;
+
+                    string updateStockQuery = @"
+UPDATE stock_master
+SET
+    adjustedqty = @adjustedqty,
+    adjusteddate = CURRENT_TIMESTAMP,
+    adjustedby = @adjustedby,
+    adjustmentreason = @adjustmentreason,
+    adjustmenttype = @adjustmenttype,
+    closingstock = @closingstock,
+    stockvalue = @stockvalue,
+    modifieddate = CURRENT_TIMESTAMP
+WHERE stockcode = @stockcode
+AND tenantcode = @tenantcode
+AND deleted = false;";
+
+                    await conn.ExecuteAsync(
+                        updateStockQuery,
+                        new
+                        {
+                            adjustedqty = request.adjustmentlog.adjustedqty,
+                            adjustedby = request.adjustmentlog.adjustedby,
+                            adjustmentreason = request.adjustmentlog.adjustmentreason,
+                            adjustmenttype = request.adjustmentlog.adjustmenttype,
+                            closingstock = newAfterQty,
+                            stockvalue = stockValue,
+                            stockcode = request.stock.stockcode,
+                            tenantcode = request.stock.tenantcode
+                        },
+                        tran);
+
+                    string updateLogQuery = @"
+UPDATE stock_adjustment_log
+SET
+    itemcode = @itemcode,
+    warehousecode = @warehousecode,
+    branchcode = @branchcode,
+    locationcode = @locationcode,
+    batchno = @batchno,
+    beforeqty = @beforeqty,
+    adjustedqty = @adjustedqty,
+    afterqty = @afterqty,
+    unitcost = @unitcost,
+    stockvalue = @stockvalue,
+    adjustmenttype = @adjustmenttype,
+    adjustmentreason = @adjustmentreason,
+    remarks = @remarks,
+    adjustedby = @adjustedby,
+    modifieddate = CURRENT_TIMESTAMP,
+    companycode = @companycode
+WHERE adjustmentlogcode = @adjustmentlogcode
+AND tenantcode = @tenantcode
+AND deleted = false;";
+
+                    int rows = await conn.ExecuteAsync(
+                        updateLogQuery,
+                        new
+                        {
+                            adjustmentlogcode = request.adjustmentlog.adjustmentlogcode,
+
+                            itemcode = request.adjustmentlog.itemcode,
+                            warehousecode = request.adjustmentlog.warehousecode,
+                            branchcode = request.adjustmentlog.branchcode,
+                            locationcode = request.adjustmentlog.locationcode,
+                            batchno = request.adjustmentlog.batchno,
+
+                            beforeqty = beforeQty,
+                            adjustedqty = request.adjustmentlog.adjustedqty,
+                            afterqty = newAfterQty,
+
+                            unitcost = stock.unitcost,
+                            stockvalue = stockValue,
+
+                            adjustmenttype = request.adjustmentlog.adjustmenttype,
+                            adjustmentreason = request.adjustmentlog.adjustmentreason,
+                            remarks = request.adjustmentlog.remarks,
+
+                            adjustedby = request.adjustmentlog.adjustedby,
+
+                            companycode = request.stock.companycode,
+                            tenantcode = request.stock.tenantcode
+                        },
+                        tran);
+
+                    if (rows == 0)
+                    {
+                        await tran.RollbackAsync();
+                        return "Stock adjustment record not found.";
+                    }
+
+                    await tran.CommitAsync();
+                    return "Stock Adjustment Updated Successfully.";
+                }
+            }
+            catch (Exception ex)
+            {
+                await tran.RollbackAsync();
+                return $"Error : {ex.Message}";
+            }
+        }
+        public async Task<IEnumerable<purchase_filter_result>> FilterPurchases(
+    string? vendorname,
+    string? billno,
+    string? invoiceno,
+    string? paymentstatus,
+    DateTime? fromdate,
+    DateTime? todate,
+    string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            string query = @"
+        SELECT
+            m.purchasecode,
+            m.billno,
+            m.billdate::timestamp AS billdate,
+            m.invoiceno,
+            m.invoicedate::timestamp AS invoicedate,
+            m.vendorcode,
+            v.vendorname,
+            m.grossamount,
+            m.totalamount,
+            m.taxamount,
+            m.netamount,
+            m.paymentmode,
+            m.paymentstatus,
+            m.createddate::timestamp AS createddate
+        FROM public.purchase_master m
+        LEFT JOIN public.vendor_master v ON v.vendorcode = m.vendorcode
+        WHERE m.deleted = false
+          AND m.tenantcode = @tenantcode
+          AND (@vendorname IS NULL OR v.vendorname ILIKE '%' || @vendorname || '%')
+          AND (@billno IS NULL OR m.billno ILIKE '%' || @billno || '%')
+          AND (@invoiceno IS NULL OR m.invoiceno ILIKE '%' || @invoiceno || '%')
+          AND (@paymentstatus IS NULL OR m.paymentstatus = @paymentstatus)
+          AND (@fromdate IS NULL OR m.createddate::date >= @fromdate)
+          AND (@todate IS NULL OR m.createddate::date <= @todate)
+        ORDER BY m.purchasecode DESC;";
+
+            return await db.QueryAsync<purchase_filter_result>(query, new
+            {
+                tenantcode,
+                vendorname,
+                billno,
+                invoiceno,
+                paymentstatus,
+                fromdate,
+                todate
+            });
+        }
+
+        // ─── PURCHASE BULK STATUS UPDATE ──────────────────────────────────────────────
+        public async Task<int> UpdateMultiplePurchaseStatus(
+            List<long> purchasecodes,
+            string paymentstatus,
+            string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+
+            string query = @"
+        UPDATE public.purchase_master
+        SET paymentstatus = @paymentstatus,
+            modifieddate  = CURRENT_TIMESTAMP
+        WHERE purchasecode = ANY(@purchasecodes)
+          AND tenantcode = @tenantcode
+          AND deleted = false;";
+
+            int rows = await db.ExecuteAsync(query, new
+            {
+                paymentstatus,
+                purchasecodes = purchasecodes.ToArray(),
+                tenantcode
+            });
+
+            return rows;
+        }
+        // ─── DOCTOR ROOM CONSUMPTION ────────────────────────────────────────────────────
+
+        // List warehouses flagged as doctor rooms — for the "Doctor Room" dropdown
+        public async Task<IEnumerable<warehouse_master>> GetDoctorRooms(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            return await db.QueryAsync<warehouse_master>(@"
+        SELECT * FROM public.warehouse_master
+        WHERE isdoctor_room = true
+          AND isdeleted = false
+          AND tenantcode = @tenantcode
+        ORDER BY warehousename;",
+                new { tenantcode });
+        }
+
+        // Current stock sitting in a specific doctor room — populates the item/batch grid
+        public async Task<IEnumerable<stock_master>> GetDoctorRoomStock(long roomwarehousecode, string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            return await db.QueryAsync<stock_master>(@"
+        SELECT
+            s.*,
+            i.itemname
+        FROM public.stock_master s
+        LEFT JOIN public.item_master i ON i.itemcode = s.itemcode
+        WHERE s.warehousecode = @roomwarehousecode
+          AND s.tenantcode = @tenantcode
+          AND s.deleted = false
+          AND s.closingstock > 0
+        ORDER BY s.stockcode DESC;",
+                new { roomwarehousecode, tenantcode });
+        }
+
+        // Year-reset consumption number, same pattern as your GRN/Sales bill generators
+        private async Task<string> GetNextConsumptionNo(IDbConnection db, IDbTransaction transaction, string tenantcode)
+        {
+            int year = DateTime.Now.Year;
+            string yearPrefix = "DC" + year;
+
+            await db.ExecuteAsync(
+                "SELECT pg_advisory_xact_lock(hashtext(@lockkey));",
+                new { lockkey = "CONSUMPTION_" + tenantcode + "_" + year },
+                transaction);
+
+            string query = @"
+        SELECT MAX(
+            CAST(SUBSTRING(consumptionno FROM LENGTH(@yearPrefix) + 1) AS bigint)
+        )
+        FROM public.consumption_master
+        WHERE tenantcode = @tenantcode
+          AND consumptionno LIKE @yearPrefix || '%'
+          AND SUBSTRING(consumptionno FROM LENGTH(@yearPrefix) + 1) ~ '^[0-9]+$';";
+
+            long? maxSeq = await db.ExecuteScalarAsync<long?>(
+                query, new { tenantcode, yearPrefix }, transaction);
+
+            long nextSeq = maxSeq.HasValue ? maxSeq.Value + 1 : 1;
+            return yearPrefix + nextSeq.ToString("D4");   // e.g. DC20260001
+        }
+
+        public async Task<long> InsertConsumption(consumption_request request, string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var tran = await conn.BeginTransactionAsync();
+
+            try
+            {
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+
+                if (request.details == null || request.details.Count == 0)
+                    throw new Exception("At least one consumed item is required.");
+
+                // ── Validate the selected location really is a doctor room ──
+                var room = await conn.QueryFirstOrDefaultAsync<warehouse_master>(@"
+            SELECT * FROM public.warehouse_master
+            WHERE warehousecode = @roomwarehousecode
+              AND tenantcode = @tenantcode
+              AND isdeleted = false
+            FOR UPDATE;",
+                    new { request.master.roomwarehousecode, tenantcode }, tran);
+
+                if (room == null)
+                    throw new Exception("Doctor room / warehouse not found.");
+
+                if (!room.isdoctor_room)
+                    throw new Exception("Selected location is not marked as a Doctor Room.");
+
+                // ── Generate consumption number ──
+                request.master.consumptionno = await GetNextConsumptionNo(conn, tran, tenantcode);
+
+                // ── Insert header (totals patched after processing lines) ──
+                long consumptioncode = await conn.ExecuteScalarAsync<long>(@"
+            INSERT INTO public.consumption_master
+            (
+                consumptionno, consumptiondate, roomwarehousecode,
+                departmentname, doctorname, remarks,
+                totalitems, totalqty, totalvalue,
+                isactive, deleted, createddate, usercode, tenantcode, branchcode
+            )
+            VALUES
+            (
+                @consumptionno, @consumptiondate, @roomwarehousecode,
+                @departmentname, @doctorname, @remarks,
+                0, 0, 0,
+                true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode, @branchcode
+            )
+            RETURNING consumptioncode;",
+                    request.master, tran);
+
+                decimal totalqty = 0, totalvalue = 0;
+
+                foreach (var item in request.details)
+                {
+                    if (item.consumedqty <= 0)
+                        throw new Exception($"Consumed quantity must be greater than zero (stock {item.stockcode}).");
+
+                    // ── Lock the EXACT stock row the user selected ──
+                    var stock = await conn.QueryFirstOrDefaultAsync<stock_master>(@"
+                SELECT * FROM public.stock_master
+                WHERE stockcode = @stockcode
+                  AND tenantcode = @tenantcode
+                  AND deleted = false
+                FOR UPDATE;",
+                        new { item.stockcode, tenantcode }, tran);
+
+                    if (stock == null)
+                        throw new Exception($"Stock record {item.stockcode} not found.");
+
+                    if (stock.warehousecode != request.master.roomwarehousecode)
+                        throw new Exception(
+                            $"Stock {item.stockcode} does not belong to the selected doctor room.");
+
+                    if (item.consumedqty > stock.closingstock)
+                        throw new Exception(
+                            $"Consumption quantity ({item.consumedqty}) exceeds available stock " +
+                            $"({stock.closingstock}) for item {item.itemcode}.");
+
+                    decimal newClosing = stock.closingstock - item.consumedqty;
+                    decimal newValue = newClosing * stock.unitcost;
+
+                    // ── Deduct from stock_master (single source of truth, same as your other flows) ──
+                    await conn.ExecuteAsync(@"
+                UPDATE public.stock_master
+                SET closingstock = @closingstock,
+                    stockvalue   = @stockvalue,
+                    modifieddate = CURRENT_TIMESTAMP
+                WHERE stockcode = @stockcode;",
+                        new { closingstock = newClosing, stockvalue = newValue, item.stockcode }, tran);
+
+                    decimal lineValue = item.consumedqty * stock.unitcost;
+
+                    await conn.ExecuteAsync(@"
+                INSERT INTO public.consumption_detail
+                (
+                    consumptioncode, stockcode, itemcode, batchno,
+                    availableqty, consumedqty, unitcost, stockvalue,
+                    remarks, tenantcode
+                )
+                VALUES
+                (
+                    @consumptioncode, @stockcode, @itemcode, @batchno,
+                    @availableqty, @consumedqty, @unitcost, @stockvalue,
+                    @remarks, @tenantcode
+                );",
+                        new
+                        {
+                            consumptioncode,
+                            item.stockcode,
+                            item.itemcode,
+                            batchno = stock.batchno,
+                            availableqty = stock.closingstock,   // BEFORE deduction — audit snapshot
+                            item.consumedqty,
+                            unitcost = stock.unitcost,
+                            stockvalue = lineValue,
+                            item.remarks,
+                            tenantcode
+                        }, tran);
+
+                    totalqty += item.consumedqty;
+                    totalvalue += lineValue;
+                }
+
+                // ── Patch header totals ──
+                await conn.ExecuteAsync(@"
+            UPDATE public.consumption_master
+            SET totalitems = @totalitems,
+                totalqty   = @totalqty,
+                totalvalue = @totalvalue
+            WHERE consumptioncode = @consumptioncode;",
+                    new { totalitems = request.details.Count, totalqty, totalvalue, consumptioncode }, tran);
+
+                await tran.CommitAsync();
+                return consumptioncode;
+            }
+            catch
+            {
+                await tran.RollbackAsync();
+                throw;
+            }
+        }
+
+        public async Task<IEnumerable<consumption_request>> GetAllConsumptions(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            var masters = (await db.QueryAsync<consumption_master>(@"
+        SELECT * FROM public.consumption_master
+        WHERE deleted = false AND tenantcode = @tenantcode
+        ORDER BY consumptioncode DESC;",
+                new { tenantcode })).ToList();
+
+            var details = (await db.QueryAsync<consumption_detail>(@"
+        SELECT d.*, i.itemname
+        FROM public.consumption_detail d
+        LEFT JOIN public.item_master i ON i.itemcode = d.itemcode
+        WHERE d.tenantcode = @tenantcode;",
+                new { tenantcode })).ToList();
+
+            return masters.Select(m => new consumption_request
+            {
+                master = m,
+                details = details.Where(d => d.consumptioncode == m.consumptioncode).ToList()
+            });
+        }
+
+        public async Task<consumption_request?> GetConsumptionByCode(long consumptioncode, string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            var master = await db.QueryFirstOrDefaultAsync<consumption_master>(@"
+        SELECT * FROM public.consumption_master
+        WHERE consumptioncode = @consumptioncode
+          AND tenantcode = @tenantcode
+          AND deleted = false;",
+                new { consumptioncode, tenantcode });
+
+            if (master == null) return null;
+
+            var details = await db.QueryAsync<consumption_detail>(@"
+        SELECT * FROM public.consumption_detail
+        WHERE consumptioncode = @consumptioncode;",
+                new { consumptioncode });
+
+            return new consumption_request { master = master, details = details.ToList() };
+        }
+
+        // Soft delete + restore stock (mirror of DeleteStockAdjustment's restore logic)
+        public async Task<string> DeleteConsumption(long consumptioncode, string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var tran = await conn.BeginTransactionAsync();
+
+            try
+            {
+                var master = await conn.QueryFirstOrDefaultAsync<consumption_master>(@"
+            SELECT * FROM public.consumption_master
+            WHERE consumptioncode = @consumptioncode
+              AND tenantcode = @tenantcode
+              AND deleted = false;",
+                    new { consumptioncode, tenantcode }, tran);
+
+                if (master == null)
+                    return "Consumption record not found.";
+
+                var details = await conn.QueryAsync<consumption_detail>(@"
+            SELECT * FROM public.consumption_detail
+            WHERE consumptioncode = @consumptioncode;",
+                    new { consumptioncode }, tran);
+
+                foreach (var d in details)
+                {
+                    // Give the consumed quantity back to stock
+                    await conn.ExecuteAsync(@"
+                UPDATE public.stock_master
+                SET closingstock = closingstock + @consumedqty,
+                    stockvalue   = (closingstock + @consumedqty) * unitcost,
+                    modifieddate = CURRENT_TIMESTAMP
+                WHERE stockcode = @stockcode
+                  AND tenantcode = @tenantcode;",
+                        new { d.consumedqty, d.stockcode, tenantcode }, tran);
+                }
+
+                await conn.ExecuteAsync(@"
+            UPDATE public.consumption_master
+            SET deleted = true, isactive = false, modifieddate = CURRENT_TIMESTAMP
+            WHERE consumptioncode = @consumptioncode
+              AND tenantcode = @tenantcode;",
+                    new { consumptioncode, tenantcode }, tran);
+
+                await tran.CommitAsync();
+                return "Success";
+            }
+            catch
+            {
+                await tran.RollbackAsync();
+                throw;
+            }
+        }
+        public async Task<string> UpdateConsumption(consumption_request request, string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var tran = await conn.BeginTransactionAsync();
+
+            try
+            {
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+
+                if (request.master.consumptioncode <= 0)
+                    throw new Exception("Valid consumptioncode is required.");
+
+                if (request.details == null || request.details.Count == 0)
+                    throw new Exception("At least one consumed item is required.");
+
+                // ── 1. Lock & validate header exists ──
+                var existingMaster = await conn.QueryFirstOrDefaultAsync<consumption_master>(@"
+            SELECT * FROM public.consumption_master
+            WHERE consumptioncode = @consumptioncode
+              AND tenantcode = @tenantcode
+              AND deleted = false
+            FOR UPDATE;",
+                    new { request.master.consumptioncode, tenantcode }, tran);
+
+                if (existingMaster == null)
+                    return "Consumption record not found.";
+
+                // ── 2. Validate the (possibly changed) room ──
+                var room = await conn.QueryFirstOrDefaultAsync<warehouse_master>(@"
+            SELECT * FROM public.warehouse_master
+            WHERE warehousecode = @roomwarehousecode
+              AND tenantcode = @tenantcode
+              AND isdeleted = false
+            FOR UPDATE;",
+                    new { request.master.roomwarehousecode, tenantcode }, tran);
+
+                if (room == null)
+                    throw new Exception("Doctor room / warehouse not found.");
+
+                if (!room.isdoctor_room)
+                    throw new Exception("Selected location is not marked as a Doctor Room.");
+
+                // ── 3. Reverse OLD detail lines — give qty back to stock ──
+                var oldDetails = await conn.QueryAsync<consumption_detail>(@"
+            SELECT * FROM public.consumption_detail
+            WHERE consumptioncode = @consumptioncode;",
+                    new { request.master.consumptioncode }, tran);
+
+                foreach (var od in oldDetails)
+                {
+                    await conn.ExecuteAsync(@"
+                UPDATE public.stock_master
+                SET closingstock = closingstock + @consumedqty,
+                    stockvalue   = (closingstock + @consumedqty) * unitcost,
+                    modifieddate = CURRENT_TIMESTAMP
+                WHERE stockcode = @stockcode
+                  AND tenantcode = @tenantcode;",
+                        new { od.consumedqty, od.stockcode, tenantcode }, tran);
+                }
+
+                // ── 4. Delete old detail rows ──
+                await conn.ExecuteAsync(@"
+            DELETE FROM public.consumption_detail
+            WHERE consumptioncode = @consumptioncode;",
+                    new { request.master.consumptioncode }, tran);
+
+                // ── 5. Update header ──
+                int masterRows = await conn.ExecuteAsync(@"
+            UPDATE public.consumption_master
+            SET
+                consumptiondate   = @consumptiondate,
+                roomwarehousecode = @roomwarehousecode,
+                departmentname    = @departmentname,
+                doctorname        = @doctorname,
+                remarks           = @remarks,
+                modifieddate      = CURRENT_TIMESTAMP,
+                usercode          = @usercode,
+                branchcode        = @branchcode
+            WHERE consumptioncode = @consumptioncode
+              AND tenantcode = @tenantcode;",
+                    request.master, tran);
+
+                if (masterRows == 0)
+                    throw new Exception("Failed to update consumption header.");
+
+                // ── 6. Re-apply NEW detail lines (same validation as Insert) ──
+                decimal totalqty = 0, totalvalue = 0;
+
+                foreach (var item in request.details)
+                {
+                    if (item.consumedqty <= 0)
+                        throw new Exception($"Consumed quantity must be greater than zero (stock {item.stockcode}).");
+
+                    var stock = await conn.QueryFirstOrDefaultAsync<stock_master>(@"
+                SELECT * FROM public.stock_master
+                WHERE stockcode = @stockcode
+                  AND tenantcode = @tenantcode
+                  AND deleted = false
+                FOR UPDATE;",
+                        new { item.stockcode, tenantcode }, tran);
+
+                    if (stock == null)
+                        throw new Exception($"Stock record {item.stockcode} not found.");
+
+                    if (stock.warehousecode != request.master.roomwarehousecode)
+                        throw new Exception(
+                            $"Stock {item.stockcode} does not belong to the selected doctor room.");
+
+                    if (item.consumedqty > stock.closingstock)
+                        throw new Exception(
+                            $"Consumption quantity ({item.consumedqty}) exceeds available stock " +
+                            $"({stock.closingstock}) for item {item.itemcode}.");
+
+                    decimal newClosing = stock.closingstock - item.consumedqty;
+                    decimal newValue = newClosing * stock.unitcost;
+
+                    await conn.ExecuteAsync(@"
+                UPDATE public.stock_master
+                SET closingstock = @closingstock,
+                    stockvalue   = @stockvalue,
+                    modifieddate = CURRENT_TIMESTAMP
+                WHERE stockcode = @stockcode;",
+                        new { closingstock = newClosing, stockvalue = newValue, item.stockcode }, tran);
+
+                    decimal lineValue = item.consumedqty * stock.unitcost;
+
+                    await conn.ExecuteAsync(@"
+                INSERT INTO public.consumption_detail
+                (
+                    consumptioncode, stockcode, itemcode, batchno,
+                    availableqty, consumedqty, unitcost, stockvalue,
+                    remarks, tenantcode
+                )
+                VALUES
+                (
+                    @consumptioncode, @stockcode, @itemcode, @batchno,
+                    @availableqty, @consumedqty, @unitcost, @stockvalue,
+                    @remarks, @tenantcode
+                );",
+                        new
+                        {
+                            request.master.consumptioncode,
+                            item.stockcode,
+                            item.itemcode,
+                            batchno = stock.batchno,
+                            availableqty = stock.closingstock,   // snapshot BEFORE this deduction
+                            item.consumedqty,
+                            unitcost = stock.unitcost,
+                            stockvalue = lineValue,
+                            item.remarks,
+                            tenantcode
+                        }, tran);
+
+                    totalqty += item.consumedqty;
+                    totalvalue += lineValue;
+                }
+
+                // ── 7. Patch header totals ──
+                await conn.ExecuteAsync(@"
+            UPDATE public.consumption_master
+            SET totalitems = @totalitems,
+                totalqty   = @totalqty,
+                totalvalue = @totalvalue
+            WHERE consumptioncode = @consumptioncode;",
+                    new
+                    {
+                        totalitems = request.details.Count,
+                        totalqty,
+                        totalvalue,
+                        request.master.consumptioncode
+                    }, tran);
+
+                await tran.CommitAsync();
+                return "Success";
+            }
+            catch
+            {
+                await tran.RollbackAsync();
+                throw;
+            }
         }
     }
 }

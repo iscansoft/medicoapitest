@@ -31,6 +31,8 @@ namespace medico_backend.Model
 
         // Status
         public bool refer_to_ip { get; set; } = false;
+        public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
+        public string? visiting_doctor_name { get; set; }
         public bool is_consulted { get; set; } = false;
         public string sheet_status { get; set; } = "DRAFT";  // DRAFT / FINAL
 
@@ -270,6 +272,8 @@ namespace medico_backend.Model
 
         // Sheet status
         public bool refer_to_ip { get; set; } = false;
+        public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
+        public string? visiting_doctor_name { get; set; }
         public string sheet_status { get; set; } = "DRAFT";  // DRAFT / FINAL
 
 
@@ -423,6 +427,8 @@ namespace medico_backend.Model
         public bool is_consulted { get; set; }
         public string? sheet_status { get; set; }
         public bool refer_to_ip { get; set; } = false;
+        public bool referred_to_visiting_doctor { get; set; } = false;   // NEW
+        public string? visiting_doctor_name { get; set; }
 
 
         // Structured lists

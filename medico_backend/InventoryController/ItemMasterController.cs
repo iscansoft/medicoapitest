@@ -473,24 +473,82 @@ namespace medico_backend.InventoryController
         }
 
         [HttpPost("updateindent")]
-        public async Task<IActionResult> UpdateIndent([FromBody] indent_request request)
-        {
-            try
-            {
-                var tenantcode = GetTenantCode();
-                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+ public async Task<IActionResult> UpdateIndent(
+     [FromBody] indent_request request)
+ {
+     try
+     {
+         // ---------------------------------------------
+         // Validate request
+         // ---------------------------------------------
+         if (request == null || request.master == null)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Indent request is required."
+             });
+         }
 
-                request.master.tenantcode = tenantcode;
+         if (request.master.indentcode <= 0)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Valid indent code is required."
+             });
+         }
 
-                var result = await itemclass.UpdateIndent(request);
-                return Ok(new { Status = "Success", Message = "Indent updated successfully", IndentCode = result });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Status = "Failed", Message = ex.Message });
-            }
-        }
+         if (request.details == null || request.details.Count == 0)
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "At least one item is required."
+             });
+         }
 
+         // ---------------------------------------------
+         // Get Tenant Code
+         // ---------------------------------------------
+         string tenantcode =
+             HttpContext.Items["TenantCode"]?.ToString()
+             ?? Request.Headers["tenantcode"].FirstOrDefault()
+             ?? string.Empty;
+
+         if (string.IsNullOrWhiteSpace(tenantcode))
+         {
+             return BadRequest(new
+             {
+                 Status = "Failed",
+                 Message = "Tenant code not found."
+             });
+         }
+
+         // ---------------------------------------------
+         // Update Indent
+         // ---------------------------------------------
+         var result = await itemclass.UpdateIndent(
+             request,
+             tenantcode
+         );
+
+         return Ok(new
+         {
+             Status = "Success",
+             Message = "Indent updated successfully",
+             IndentCode = result
+         });
+     }
+     catch (Exception ex)
+     {
+         return BadRequest(new
+         {
+             Status = "Failed",
+             Message = ex.Message
+         });
+     }
+ }
         [HttpGet("deleteindent")]
         public async Task<IActionResult> DeleteIndent(long indentcode)
         {
@@ -2385,6 +2443,282 @@ namespace medico_backend.InventoryController
             });
         }
     }
+        // ─── GET ALL — STOCK ADJUSTMENT ───────────────────────────────────────────────
+        [HttpGet("getallstockadjustment")]
+        public async Task<IActionResult> GetAllStockAdjustments()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllStockAdjustments(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── GET ALL — SALES RETURN ────────────────────────────────────────────────────
+        [HttpGet("getallsalesreturn")]
+        public async Task<IActionResult> GetAllSalesReturns()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllSalesReturns(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── GET ALL — PURCHASE RETURN ─────────────────────────────────────────────────
+        [HttpGet("getallpurchasereturn")]
+        public async Task<IActionResult> GetAllPurchaseReturns()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllPurchaseReturns(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+        // ─── UPSERT — STOCK ADJUSTMENT (single endpoint: insert or update) ────────────
+        [HttpPost("upsertstockadjustment")]
+        public async Task<IActionResult> UpsertStockAdjustment([FromBody] stock_adjustment_request request)
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = "Failed", message = "Tenant code not found." });
+
+                request.stock.tenantcode = tenantcode;
+                request.adjustmentlog.tenantcode = tenantcode;
+
+                var result = await itemclass.UpsertStockAdjustment(request);
+
+                bool ok = result.StartsWith("Stock Adjustment Saved") || result.StartsWith("Stock Adjustment Updated");
+
+                return ok
+                    ? Ok(new { status = "Success", message = result })
+                    : BadRequest(new { status = "Failed", message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = "Failed", message = ex.Message });
+            }
+        }
+        // ─── FILTER PURCHASES ─────────────────────────────────────────────────────────
+        [HttpGet("filterpurchases")]
+        public async Task<IActionResult> FilterPurchases(
+            string? vendorname,
+            string? billno,
+            string? invoiceno,
+            string? paymentstatus,
+            DateTime? fromdate,
+            DateTime? todate)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.FilterPurchases(
+                    vendorname, billno, invoiceno, paymentstatus, fromdate, todate, tenantcode);
+
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // ─── BULK UPDATE PURCHASE STATUS ──────────────────────────────────────────────
+        [HttpPost("updatemultiplepurchasestatus")]
+        public async Task<IActionResult> UpdateMultiplePurchaseStatus([FromBody] purchase_bulk_status_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.purchasecodes == null || !request.purchasecodes.Any())
+                    return BadRequest(new { Status = "Failed", Message = "purchasecodes is required" });
+
+                if (string.IsNullOrWhiteSpace(request.paymentstatus))
+                    return BadRequest(new { Status = "Failed", Message = "paymentstatus is required" });
+
+                var updatedCount = await itemclass.UpdateMultiplePurchaseStatus(
+                    request.purchasecodes, request.paymentstatus, tenantcode);
+
+                return updatedCount > 0
+                    ? Ok(new { Status = "Success", Message = $"{updatedCount} purchase(s) updated", UpdatedCount = updatedCount })
+                    : BadRequest(new { Status = "Failed", Message = "No matching purchases found to update" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+        // ─── DOCTOR ROOM CONSUMPTION ────────────────────────────────────────────────────
+
+        [HttpGet("getdoctorrooms")]
+        public async Task<IActionResult> GetDoctorRooms()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetDoctorRooms(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getdoctorroomstock")]
+        public async Task<IActionResult> GetDoctorRoomStock(long roomwarehousecode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetDoctorRoomStock(roomwarehousecode, tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpPost("insertconsumption")]
+        public async Task<IActionResult> InsertConsumption([FromBody] consumption_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "Invalid request data" });
+
+                var result = await itemclass.InsertConsumption(request, tenantcode);
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Consumption saved successfully",
+                    ConsumptionCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getallconsumption")]
+        public async Task<IActionResult> GetAllConsumptions()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllConsumptions(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getconsumptionbycode")]
+        public async Task<IActionResult> GetConsumptionByCode(long consumptioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetConsumptionByCode(consumptioncode, tenantcode);
+                return result == null
+                    ? NotFound(new { Status = "Failed", Message = "Consumption record not found" })
+                    : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("deleteconsumption")]
+        public async Task<IActionResult> DeleteConsumption(long consumptioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.DeleteConsumption(consumptioncode, tenantcode);
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Consumption deleted and stock restored" })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+        [HttpPost("updateconsumption")]
+        public async Task<IActionResult> UpdateConsumption([FromBody] consumption_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.master.consumptioncode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid consumptioncode is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one item is required." });
+
+                var result = await itemclass.UpdateConsumption(request, tenantcode);
+
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Consumption updated successfully" })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     
