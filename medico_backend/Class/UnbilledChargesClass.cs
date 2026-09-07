@@ -575,5 +575,30 @@ namespace medico_backend.Class
             }
             catch (Exception ex) { return ex.Message; }
         }
+        
+        public async Task AddOtChargeRow(
+            IDbConnection db, IDbTransaction tx, string? op_id, Guid? ip_id, decimal custid, string tenant_code,
+            string entryType, string entryId, string itemName, decimal quantity, decimal? rate, decimal? amount)
+        {
+            var row = new UnbilledChargeRow
+            {
+                unbilledid = Guid.NewGuid().ToString(),
+                entrytype = entryType,
+                entryid = entryId,
+                chargedate = DateTime.UtcNow,
+                custid = custid,
+                opvisitid = op_id,
+                ip_id = ip_id,
+                quantity = (double?)quantity,
+                rate = (double?)rate,
+                amount = (double?)amount,
+                discount = 0,
+                charityamount = 0,
+                billedstatus = false,
+                tenant_code = tenant_code,
+                particulars = itemName
+            };
+            await db.InsertAsync(row, tx);
+        }
     }
 }

@@ -196,6 +196,8 @@ builder.Services.AddScoped<IpBedsideChartClass>();
 builder.Services.AddScoped<IpBedsideChartController>();
 builder.Services.AddScoped<MasterListController>();
 builder.Services.AddScoped<MasterListClass>();
+builder.Services.AddScoped<OTClass>();
+builder.Services.AddScoped<OTController>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
