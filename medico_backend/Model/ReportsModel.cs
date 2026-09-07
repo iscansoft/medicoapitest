@@ -1407,4 +1407,71 @@ namespace medico_backend.Model
         // Joined field from item master
         public string? itemname { get; set; }
     }
+
+    // CONSOLIDATED LISTS REPORT MODELS (IP, OP & LAB)
+    public class ConsolidatedListRowDto
+    {
+        public string Type { get; set; } = "OP"; // "IP", "OP", "LAB"
+        public string RequestGuid { get; set; } = "";
+        public string Id { get; set; } = ""; // Visit / Admission / Bill No
+        public decimal CustId { get; set; }
+        public string PatientCode { get; set; } = "";
+        public string PatientName { get; set; } = "";
+        public string Age { get; set; } = "";
+        public string Gender { get; set; } = "";
+        public string MobileNo { get; set; } = "";
+        public string DoctorName { get; set; } = "";
+        public string BedNo { get; set; } = "-";
+        public DateTime VisitDate { get; set; }
+        public DateTime? DischargeDate { get; set; }
+        public string Status { get; set; } = "ACTIVE"; // Visit / Admission / Test status
+        public string PaymentStatus { get; set; } = "UNPAID"; // "PAID", "PARTIAL", "UNPAID"
+        public decimal TotalAmount { get; set; }
+        public decimal DiscountAmount { get; set; }
+        public decimal NetAmount { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal BalanceAmount { get; set; }
+        public string? ServicesOrTests { get; set; }
+    }
+
+    public class ConsolidatedListsSummaryDto
+    {
+        public int TotalCount { get; set; }
+        public int IpCount { get; set; }
+        public int OpCount { get; set; }
+        public int LabCount { get; set; }
+        public decimal IpTotalAmount { get; set; }
+        public decimal OpTotalAmount { get; set; }
+        public decimal LabTotalAmount { get; set; }
+        public decimal GrandTotalAmount { get; set; }
+        public decimal TotalDiscountAmount { get; set; }
+        public decimal TotalNetAmount { get; set; }
+        public decimal TotalPaidAmount { get; set; }
+        public decimal TotalBalanceAmount { get; set; }
+    }
+
+    public class ConsolidatedListsReportData
+    {
+        public string? BranchName { get; set; }
+        public string? CompanyName { get; set; }
+        public string? CompanyAddress { get; set; }
+        public string? CompanyContactNo { get; set; }
+        public string? CompanyEmail { get; set; }
+        public DateTime FromDate { get; set; }
+        public DateTime ToDate { get; set; }
+        public string FilterType { get; set; } = "ALL";
+        public ConsolidatedListsSummaryDto Summary { get; set; } = new();
+        public List<ConsolidatedListRowDto> Rows { get; set; } = new();
+    }
+
+    public class ConsolidatedListsReportRequest
+    {
+        public ConsolidatedListsReportData? ReportData { get; set; }
+        public byte[]? LogoImage { get; set; }
+        public bool IsLetterhead { get; set; } = false;
+        public byte[]? HeaderImage { get; set; }
+        public byte[]? FooterImage { get; set; }
+        public bool show_header_footer_image { get; set; } = true;
+        public string? TenantId { get; set; }
+    }
 }

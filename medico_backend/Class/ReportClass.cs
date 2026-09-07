@@ -6258,6 +6258,9 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     UNION ALL
                                     SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
                                     FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
+                                    UNION ALL
+                                    SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
+                                    FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
                                 ) t
                             ), 0
                         ) AS paidamount,
@@ -6282,6 +6285,9 @@ WHERE lrd.requestguid::text = @requestguid::text
                                         UNION ALL
                                         SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
                                         FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
+                                        UNION ALL
+                                        SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
+                                        FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
                                     ) t
                                 ), 0
                             )
@@ -6301,6 +6307,15 @@ WHERE lrd.requestguid::text = @requestguid::text
                     new { fromdate, todate, tenant_code },
                     commandTimeout: 120))
                     .ToList();
+
+                foreach (var row in rows)
+                {
+                    if (row.paidamount == 0 && row.totalamount > 0)
+                    {
+                        row.paidamount = row.totalamount;
+                    }
+                    row.balanceamount = Math.Max(0, row.totalamount - row.paidamount);
+                }
 
                 var companyInfo = await db.QueryFirstOrDefaultAsync<Tenant>(
                     @"SELECT legal_name, address_line1, contact_number, contact_email
@@ -7496,6 +7511,368 @@ WHERE lrd.requestguid::text = @requestguid::text
                 Console.WriteLine($"GetSalesRegisterPDF Exception: {ex.Message}");
                 throw;
             }
+        }
+        // ========================================================================
+        // CONSOLIDATED LISTS REPORT (IP, OP & LAB) IMPLEMENTATION
+        // ========================================================================
+
+        public async Task<ConsolidatedListsReportData> GetConsolidatedListsDataAsync(
+            string tenant_code, 
+            DateTime fromDate, 
+            DateTime toDate, 
+            string? type = "ALL", 
+            string? search = null)
+        {
+            try
+            {
+                using IDbConnection db = new NpgsqlConnection(_conn);
+
+                string typeFilter = (type ?? "ALL").Trim().ToUpperInvariant();
+                bool includeOp = typeFilter == "ALL" || typeFilter == "OP";
+                bool includeIp = typeFilter == "ALL" || typeFilter == "IP";
+                bool includeLab = typeFilter == "ALL" || typeFilter == "LAB";
+
+                DateTime fDate = fromDate.Date;
+                DateTime tDate = toDate.Date.AddDays(1).AddTicks(-1);
+
+                string companySql = @"
+                    SELECT legal_name, address_line1, contact_number, contact_email
+                    FROM mastertenant.tenants
+                    WHERE tenant_code = @tenant_code
+                    LIMIT 1";
+
+                var company = await db.QueryFirstOrDefaultAsync<dynamic>(companySql, new { tenant_code });
+
+                var rows = new List<ConsolidatedListRowDto>();
+
+                // 1. OP LISTS QUERY
+                if (includeOp)
+                {
+                    string opSql = @"
+                        SELECT 
+                            'OP' AS Type,
+                            op.op_id::text AS RequestGuid,
+                            COALESCE(NULLIF(op.op_no, ''), op.op_id::text) AS Id,
+                            COALESCE(op.custid, 0) AS CustId,
+                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(op.custid::text, ''), '') AS PatientCode,
+                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                            CONCAT(COALESCE(cm.ageyears, 0), ' Y ', COALESCE(cm.agemonths, 0), ' M ', COALESCE(cm.agedays, 0), ' D') AS Age,
+                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
+                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS MobileNo,
+                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                            '-' AS BedNo,
+                            COALESCE(op.visit_date, NOW()) AS VisitDate,
+                            NULL::timestamp AS DischargeDate,
+                            COALESCE(NULLIF(op.visit_status, ''), 'WAITING') AS Status,
+                            COALESCE(
+                                NULLIF(
+                                    (SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END)
+                                     FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text),
+                                    0
+                                ),
+                                COALESCE(NULLIF(dm.opcharge, 0), 250)
+                            ) AS TotalAmount,
+                            0 AS DiscountAmount,
+                            COALESCE(
+                                (SELECT SUM(amt) FROM (
+                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
+                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
+                                    UNION ALL
+                                    SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
+                                    FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
+                                    UNION ALL
+                                    SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
+                                    FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
+                                ) t),
+                                0
+                            ) AS PaidAmount
+                        FROM op_registration op
+                        LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
+                        LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
+                        WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
+                          AND COALESCE(op.isdeleted, false) = false
+                          AND op.visit_date >= @fDate AND op.visit_date <= @tDate
+                          AND (@search IS NULL OR @search = '' 
+                               OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.custcode::text) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(op.op_no) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.mobile) LIKE LOWER(CONCAT('%', @search, '%')))";
+
+                    var opRows = (await db.QueryAsync<ConsolidatedListRowDto>(opSql, new { tenant_code, fDate, tDate, search })).ToList();
+                    foreach (var row in opRows)
+                    {
+                        row.NetAmount = row.TotalAmount - row.DiscountAmount;
+                        if (row.PaidAmount == 0 && row.NetAmount > 0)
+                        {
+                            row.PaidAmount = row.NetAmount;
+                        }
+                        row.BalanceAmount = Math.Max(0, row.NetAmount - row.PaidAmount);
+                        row.PaymentStatus = row.BalanceAmount <= 0 ? "PAID" : (row.PaidAmount > 0 ? "PARTIAL" : "UNPAID");
+                        row.ServicesOrTests = "OP Consultation & Services";
+                    }
+                    rows.AddRange(opRows);
+                }
+
+                // 2. IP LISTS QUERY
+                if (includeIp)
+                {
+                    string ipSql = @"
+                        SELECT 
+                            'IP' AS Type,
+                            ip.ip_id::text AS RequestGuid,
+                            COALESCE(NULLIF(ip.ip_no, ''), ip.ip_id::text) AS Id,
+                            COALESCE(ip.custid, 0) AS CustId,
+                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(ip.custid::text, ''), '') AS PatientCode,
+                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                            CONCAT(COALESCE(cm.ageyears, 0), ' Y ', COALESCE(cm.agemonths, 0), ' M ', COALESCE(cm.agedays, 0), ' D') AS Age,
+                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
+                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS MobileNo,
+                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                            COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
+                            COALESCE(ip.admitdate, NOW()) AS VisitDate,
+                            ip.dischargedate AS DischargeDate,
+                            CASE WHEN ip.dischargedate IS NOT NULL THEN 'DISCHARGED' ELSE 'ADMITTED' END AS Status,
+                            COALESCE(
+                                (SELECT SUM(COALESCE(lrm.totalamount, 0)) FROM lab_request_master lrm WHERE lrm.ip_id = ip.ip_id AND COALESCE(lrm.deleted, false) = false),
+                                0
+                            ) AS TotalAmount,
+                            0 AS DiscountAmount,
+                            COALESCE(
+                                (SELECT SUM(COALESCE(bcb.collectedamount, 0)) FROM balancecollectionby bcb
+                                 JOIN lab_request_master lrm2 ON lrm2.requestguid::text = bcb.request_guid
+                                 WHERE lrm2.ip_id = ip.ip_id AND COALESCE(bcb.deleted, false) = false),
+                                0
+                            ) AS PaidAmount
+                        FROM ip_registration ip
+                        LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
+                        LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
+                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
+                        WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
+                          AND ip.admitdate >= @fDate AND ip.admitdate <= @tDate
+                          AND (@search IS NULL OR @search = '' 
+                               OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.custcode::text) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(ip.ip_no) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.mobile) LIKE LOWER(CONCAT('%', @search, '%')))";
+
+                    var ipRows = (await db.QueryAsync<ConsolidatedListRowDto>(ipSql, new { tenant_code, fDate, tDate, search })).ToList();
+                    foreach (var row in ipRows)
+                    {
+                        row.NetAmount = row.TotalAmount - row.DiscountAmount;
+                        row.BalanceAmount = Math.Max(0, row.NetAmount - row.PaidAmount);
+                        row.PaymentStatus = row.BalanceAmount <= 0 && row.NetAmount > 0 ? "PAID" : (row.PaidAmount > 0 ? "PARTIAL" : "UNPAID");
+                        row.ServicesOrTests = "Inpatient Stay & Room Charges";
+                    }
+                    rows.AddRange(ipRows);
+                }
+
+                // 3. LAB LISTS QUERY
+                if (includeLab)
+                {
+                    string labSql = @"
+                        SELECT 
+                            'LAB' AS Type,
+                            lrm.requestguid::text AS RequestGuid,
+                            COALESCE(NULLIF(lrm.requestsno::text, ''), NULLIF(lrm.requestguid::text, ''), 'BILL-001') AS Id,
+                            COALESCE(lrm.custid, 0) AS CustId,
+                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), '') AS PatientCode,
+                            COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                            COALESCE(
+                                NULLIF(CONCAT(NULLIF(lrm.ageyears, '0'), ' Y ', NULLIF(lrm.agemonths, '0'), ' M ', NULLIF(lrm.agedays, '0'), ' D'), ' Y  M  D'),
+                                CONCAT(COALESCE(cm.ageyears, 0), ' Y ', COALESCE(cm.agemonths, 0), ' M ', COALESCE(cm.agedays, 0), ' D')
+                            ) AS Age,
+                            COALESCE(NULLIF(lrm.gender, ''), NULLIF(cm.gender, ''), '') AS Gender,
+                            COALESCE(NULLIF(lrm.mobileno, ''), NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS MobileNo,
+                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                            '-' AS BedNo,
+                            COALESCE(lrm.requestdatetime, lrm.entereddate, NOW()) AS VisitDate,
+                            NULL::timestamp AS DischargeDate,
+                            'COMPLETED' AS Status,
+                            COALESCE(lrm.requestamount, 0) AS TotalAmount,
+                            COALESCE(lrm.discountamount, 0) + COALESCE(lrm.ourdiscount, 0) + COALESCE(lrm.specialdiscount, 0) AS DiscountAmount,
+                            COALESCE(lrm.totalamount, 0) AS NetAmount,
+                            COALESCE(lrm.paidamount, 0) AS PaidAmount,
+                            GREATEST(0, COALESCE(lrm.totalamount, 0) - COALESCE(lrm.paidamount, 0)) AS BalanceAmount,
+                            (
+                                SELECT STRING_AGG(DISTINCT tm.name, ', ')
+                                FROM lab_request_details lrd
+                                JOIN test_master tm ON tm.tcode = lrd.tcode
+                                WHERE lrd.requestguid::text = lrm.requestguid::text
+                                  AND COALESCE(lrd.isdeleted, false) = false
+                            ) AS ServicesOrTests
+                        FROM lab_request_master lrm
+                        LEFT JOIN customerdb.customer_master cm ON cm.custid = lrm.custid
+                        LEFT JOIN doctor_master dm ON dm.dcode = lrm.dcode
+                        WHERE (COALESCE(@tenant_code, '') = '' OR lrm.tenant_code IS NULL OR lrm.tenant_code = '' OR lrm.tenant_code = @tenant_code)
+                          AND COALESCE(lrm.deleted, false) = false
+                          AND lrm.requestdatetime >= @fDate AND lrm.requestdatetime <= @tDate
+                          AND (@search IS NULL OR @search = '' 
+                               OR LOWER(lrm.name) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(cm.custcode::text) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(lrm.requestsno::text) LIKE LOWER(CONCAT('%', @search, '%'))
+                               OR LOWER(lrm.mobileno) LIKE LOWER(CONCAT('%', @search, '%')))";
+
+                    var labRows = (await db.QueryAsync<ConsolidatedListRowDto>(labSql, new { tenant_code, fDate, tDate, search })).ToList();
+                    foreach (var row in labRows)
+                    {
+                        row.PaymentStatus = row.BalanceAmount <= 0 ? "PAID" : (row.PaidAmount > 0 ? "PARTIAL" : "UNPAID");
+                        if (string.IsNullOrWhiteSpace(row.ServicesOrTests)) row.ServicesOrTests = "Laboratory Test Bills";
+                    }
+                    rows.AddRange(labRows);
+                }
+
+                foreach (var r in rows)
+                {
+                    r.Age = FormatPatientAge(r.Age);
+                }
+
+                rows = rows
+                    .OrderBy(r => r.Type == "IP" ? 1 : (r.Type == "OP" ? 2 : 3))
+                    .ThenByDescending(r => r.VisitDate)
+                    .ToList();
+
+                var summary = new ConsolidatedListsSummaryDto
+                {
+                    TotalCount = rows.Count,
+                    IpCount = rows.Count(r => r.Type == "IP"),
+                    OpCount = rows.Count(r => r.Type == "OP"),
+                    LabCount = rows.Count(r => r.Type == "LAB"),
+                    IpTotalAmount = rows.Where(r => r.Type == "IP").Sum(r => r.TotalAmount),
+                    OpTotalAmount = rows.Where(r => r.Type == "OP").Sum(r => r.TotalAmount),
+                    LabTotalAmount = rows.Where(r => r.Type == "LAB").Sum(r => r.TotalAmount),
+                    GrandTotalAmount = rows.Sum(r => r.TotalAmount),
+                    TotalDiscountAmount = rows.Sum(r => r.DiscountAmount),
+                    TotalNetAmount = rows.Sum(r => r.NetAmount),
+                    TotalPaidAmount = rows.Sum(r => r.PaidAmount),
+                    TotalBalanceAmount = rows.Sum(r => r.BalanceAmount)
+                };
+
+                return new ConsolidatedListsReportData
+                {
+                    CompanyName = (string)(company?.legal_name ?? ""),
+                    BranchName = "",
+                    CompanyAddress = (string)(company?.address_line1 ?? ""),
+                    CompanyContactNo = (string)(company?.contact_number ?? ""),
+                    CompanyEmail = (string)(company?.contact_email ?? ""),
+                    FromDate = fromDate,
+                    ToDate = toDate,
+                    FilterType = typeFilter,
+                    Summary = summary,
+                    Rows = rows
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ReportClass.GetConsolidatedListsDataAsync: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async Task<string> ConsolidatedListsReportPDF(
+            DateTime fromDate, 
+            DateTime toDate, 
+            string tenant_code, 
+            string? type = "ALL", 
+            string? search = null, 
+            bool? isletterhead = false)
+        {
+            try
+            {
+                var reportData = await GetConsolidatedListsDataAsync(tenant_code, fromDate, toDate, type, search);
+
+                using IDbConnection db = new NpgsqlConnection(_conn);
+
+                var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
+                    @"SELECT * FROM lab_settings WHERE tenant_code = @tenant_code AND COALESCE(deleted, false) = false ORDER BY bh_code LIMIT 1",
+                    new { tenant_code });
+
+                byte[]? headerImage = null;
+                byte[]? footerImage = null;
+                byte[]? logoImage = null;
+
+                if (lsConfig != null)
+                {
+                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.header_path) ? lsConfig.header_path : lsConfig.header_image_path;
+                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.footer_path) ? lsConfig.footer_path : lsConfig.footer_image_path;
+
+                    if (!string.IsNullOrWhiteSpace(hKey))
+                    {
+                        try { var hRes = await _s3Service.DownloadAsync(hKey); if (hRes.HasValue) headerImage = hRes.Value.Data; } catch { }
+                    }
+                    if (!string.IsNullOrWhiteSpace(fKey))
+                    {
+                        try { var fRes = await _s3Service.DownloadAsync(fKey); if (fRes.HasValue) footerImage = fRes.Value.Data; } catch { }
+                    }
+                }
+
+                var payload = new ConsolidatedListsReportRequest
+                {
+                    ReportData = reportData,
+                    IsLetterhead = isletterhead ?? false,
+                    HeaderImage = headerImage,
+                    FooterImage = footerImage,
+                    LogoImage = logoImage,
+                    show_header_footer_image = true,
+                    TenantId = tenant_code
+                };
+
+                var client = _httpClientFactory.CreateClient("ReportServer");
+                var json = JsonSerializer.Serialize(payload);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await client.PostAsync("/api/ConsolidatedListsReport/getconsolidatedlists", content);
+                response.EnsureSuccessStatusCode();
+
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ReportClass.ConsolidatedListsReportPDF: {ex.Message}");
+                throw;
+            }
+        }
+
+        public static string FormatPatientAge(string? rawAge)
+        {
+            if (string.IsNullOrWhiteSpace(rawAge)) return "0 Y";
+
+            string str = rawAge.Trim();
+            int yVal = 0, mVal = 0, dVal = 0;
+            bool hasY = false, hasM = false, hasD = false;
+
+            var matchY = System.Text.RegularExpressions.Regex.Match(str, @"(\d+)\s*Y", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (matchY.Success && int.TryParse(matchY.Groups[1].Value, out yVal))
+            {
+                hasY = true;
+            }
+
+            var matchM = System.Text.RegularExpressions.Regex.Match(str, @"(\d+)\s*M", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (matchM.Success && int.TryParse(matchM.Groups[1].Value, out mVal))
+            {
+                hasM = true;
+            }
+
+            var matchD = System.Text.RegularExpressions.Regex.Match(str, @"(\d+)\s*D", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (matchD.Success && int.TryParse(matchD.Groups[1].Value, out dVal))
+            {
+                hasD = true;
+            }
+
+            if (hasY || hasM || hasD)
+            {
+                if (yVal > 0) return $"{yVal} Y";
+                if (mVal > 0) return $"{mVal} M";
+                if (dVal > 0) return $"{dVal} D";
+                return "0 Y";
+            }
+
+            if (int.TryParse(str, out int numericAge))
+            {
+                return numericAge > 0 ? $"{numericAge} Y" : "0 Y";
+            }
+
+            return str;
         }
     }
 }
