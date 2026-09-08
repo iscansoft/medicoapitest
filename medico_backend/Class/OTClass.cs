@@ -261,24 +261,66 @@ namespace medico_backend.Class
             return rows > 0 ? "Success" : "Surgery request not found";
         }
 
-        public async Task<OtSurgeryRequestModel?> GetSurgeryRequestById(Guid request_id, string tenant_code)
+        public async Task<OtSurgeryRequestListModel?> GetSurgeryRequestById(Guid request_id, string tenant_code)
         {
             using IDbConnection db = GetConnection();
-            return await db.QueryFirstOrDefaultAsync<OtSurgeryRequestModel>(
-                @"SELECT * FROM ot_surgery_request WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
-                new { request_id, tenant_code });
+
+            string sql = @"
+        SELECT
+            r.*,
+            c.name         AS patient_name,
+            c.mobile,
+            c.gender,
+            c.ageyears,
+            c.isvip,
+            dm.name        AS doctor_name,
+            dm.qualification AS doctor_qualification,
+            dm.spcode      AS doctor_spcode
+        FROM ot_surgery_request r
+        LEFT JOIN customerdb.customer_master c
+               ON c.custid::numeric = r.custid::numeric
+              AND c.deleted = false
+        LEFT JOIN doctor_master dm
+               ON dm.dcode = r.dcode
+              AND TRIM(dm.tenant_code) = TRIM(r.tenant_code)
+              AND dm.deleted = false
+        WHERE r.request_id = @request_id AND r.tenant_code = @tenant_code AND r.isdeleted = false";
+
+            return await db.QueryFirstOrDefaultAsync<OtSurgeryRequestListModel>(
+                sql, new { request_id, tenant_code });
         }
 
-        public async Task<List<OtSurgeryRequestModel>> GetSurgeryRequestList(
+        public async Task<List<OtSurgeryRequestListModel>> GetSurgeryRequestList(
             string tenant_code, string? status = null, decimal? custid = null)
         {
             using IDbConnection db = GetConnection();
-            string sql = @"SELECT * FROM ot_surgery_request WHERE tenant_code = @tenant_code AND isdeleted = false";
-            if (!string.IsNullOrWhiteSpace(status)) sql += " AND status = @status";
-            if (custid.HasValue) sql += " AND custid = @custid";
-            sql += " ORDER BY created_at DESC";
 
-            var res = await db.QueryAsync<OtSurgeryRequestModel>(sql,
+            string sql = @"
+        SELECT
+            r.*,
+            c.name         AS patient_name,
+            c.mobile,
+            c.gender,
+            c.ageyears,
+            c.isvip,
+            dm.name        AS doctor_name,
+            dm.qualification AS doctor_qualification,
+            dm.spcode      AS doctor_spcode
+        FROM ot_surgery_request r
+        LEFT JOIN customerdb.customer_master c
+               ON c.custid::numeric = r.custid::numeric
+              AND c.deleted = false
+        LEFT JOIN doctor_master dm
+               ON dm.dcode = r.dcode
+              AND TRIM(dm.tenant_code) = TRIM(r.tenant_code)
+              AND dm.deleted = false
+        WHERE r.tenant_code = @tenant_code AND r.isdeleted = false";
+
+            if (!string.IsNullOrWhiteSpace(status)) sql += " AND r.status = @status";
+            if (custid.HasValue) sql += " AND r.custid = @custid";
+            sql += " ORDER BY r.created_at DESC";
+
+            var res = await db.QueryAsync<OtSurgeryRequestListModel>(sql,
                 new { tenant_code, status = status?.ToUpper(), custid });
             return res.ToList();
         }

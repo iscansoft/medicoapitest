@@ -166,5 +166,6 @@ namespace medico_backend.Model
             public Guid? slot_detail_id { get; set; }
             public string? notes { get; set; }
         }
+
     }
 }

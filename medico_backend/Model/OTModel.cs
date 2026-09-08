@@ -590,7 +590,7 @@ namespace medico_backend.Model
     // ═══════════════════════════════════════════════════════════════
     public class OtSummaryModel
     {
-        public OtSurgeryRequestModel? request { get; set; }
+        public OtSurgeryRequestListModel? request { get; set; }
         public OtScheduleModel? schedule { get; set; }
         public List<OtTeamMemberModel> team { get; set; } = new();
         public OtPreOpAssessmentModel? preop { get; set; }
@@ -737,5 +737,17 @@ namespace medico_backend.Model
         public TimeOnly day_start { get; set; }
         public TimeOnly day_end { get; set; }
         public List<OtDayAvailability> days { get; set; } = new();
+    }
+    public class OtSurgeryRequestListModel : OtSurgeryRequestModel
+    {
+        public string? patient_name { get; set; }
+        public string? mobile { get; set; }
+        public string? gender { get; set; }
+        public int? ageyears { get; set; }
+        public bool? isvip { get; set; }
+
+        public string? doctor_name { get; set; }
+        public string? doctor_qualification { get; set; }   // ✅ real column on doctor_master
+        public int? doctor_spcode { get; set; }              // ✅ specialty code — join separately if you have a specialty master
     }
 }
