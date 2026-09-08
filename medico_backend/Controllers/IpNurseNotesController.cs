@@ -155,6 +155,7 @@ namespace medico_backend.Controllers
         public async Task<IActionResult> AddService([FromBody] AddServiceRequest req)
         {
             var tenant = GetTenantCode();
+            Console.WriteLine($"[DEBUG] tenant_code header received = '{tenant}' (length={tenant.Length})");
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
 
             var res = await cls.AddService(req, GetUserCode(), tenant);

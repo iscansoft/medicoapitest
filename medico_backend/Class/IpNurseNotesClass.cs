@@ -16,19 +16,27 @@ namespace medico_backend.Class
     public class IpBedsideChartClass
     {
         private readonly string _db_conn;
+        private readonly UnbilledChargesClass _unbilledCls;   // NEW
 
-        public IpBedsideChartClass(IConfiguration configuration)
+        public IpBedsideChartClass(IConfiguration configuration, UnbilledChargesClass unbilledCls)
         {
             _db_conn = configuration.GetConnectionString("conn")!;
+            _unbilledCls = unbilledCls;
         }
 
         private async Task<bool> IpExists(IDbConnection db, Guid ip_id, string tenant_code)
         {
-            int count = await db.ExecuteScalarAsync<int>(
-                @"SELECT COUNT(1) FROM ip_registration
-                  WHERE ip_id = @ip_id AND tenant_code = @tenant_code",
-                new { ip_id, tenant_code });
-            return count > 0;
+            // Step 1 — does this ip_id exist at all, regardless of tenant_code?
+            var row = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT tenant_code FROM ip_registration WHERE ip_id = @ip_id",
+                new { ip_id });
+
+            if (row == null)
+                return false;   // ip_id genuinely doesn't exist
+
+            // Step 2 — tenant match, trim-tolerant (matches the rest of the codebase's pattern)
+            string? dbTenant = (string?)row.tenant_code;
+            return string.Equals(dbTenant?.Trim(), tenant_code?.Trim(), StringComparison.OrdinalIgnoreCase);
         }
 
         // ═══════════════════════════════════════════════════════
@@ -222,10 +230,37 @@ namespace medico_backend.Class
         // ═══════════════════════════════════════════════════════
         // 4. SERVICE
         // ═══════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // 4. SERVICE
+        // Pushes an 'IP_SERVICE' row into unbilledcharges the moment
+        // it's saved — rate resolved from test_master via tcode using
+        // the shared UnbilledChargesClass.GetTestMasterRate lookup.
+        // ═══════════════════════════════════════════════════════
+        // ═══════════════════════════════════════════════════════
+        // 4. SERVICE
+        // ip_nurse_note_service stores only the clinical note
+        // (service_name/action/remarks) — no pricing columns, same
+        // as op_registration carries no fee fields. Pricing lives
+        // solely in unbilledcharges, resolved from test_master via
+        // tcode, pushed as an 'IP_SERVICE' row keyed on service_id —
+        // exactly the AddConsultationCharge pattern for OP.
+        // ═══════════════════════════════════════════════════════
         public async Task<string> AddService(AddServiceRequest req, int usercode, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
-            if (!await IpExists(db, req.ip_id, tenant_code)) return "IP Registration not found";
+            db.Open();
+
+            if (!await IpExists(db, req.ip_id, tenant_code))
+                return "IP Registration not found";
+
+            if (string.IsNullOrWhiteSpace(req.service_name))
+                return "service_name is required";
+
+            // Resolve tcode + rate from test_master by name — same helper OP uses
+            // for Dressing/Service registration, now shared via UnbilledChargesClass.
+            var (tcode, rate) = await _unbilledCls.GetTestMasterRateByName(db, null, req.service_name, tenant_code);
+            if (tcode == null)
+                return $"Service '{req.service_name}' not configured in test master for this tenant";
 
             var data = new NurseServiceModel
             {
@@ -240,33 +275,43 @@ namespace medico_backend.Class
             };
 
             await db.ExecuteAsync(@"
-                INSERT INTO ip_nurse_note_service
-                (service_id, ip_id, custid, entry_date, entry_time, shift, service_name, action,
-                 remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
-                VALUES
-                (@service_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @service_name, @action,
-                 @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
-    new
-    {
-        data.service_id,
-        data.ip_id,
-        data.custid,
-        entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
-        entry_time = data.entry_time.ToTimeSpan(),
-        data.shift,
-        data.service_name,
-        data.action,
-        data.remarks,
-        data.usercode,
-        data.tenant_code,
-        data.isdeleted,
-        data.created_at,
-        data.updated_at
-    });
+        INSERT INTO ip_nurse_note_service
+        (service_id, ip_id, custid, entry_date, entry_time, shift, service_name, action,
+         remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
+        VALUES
+        (@service_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @service_name, @action,
+         @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+                new
+                {
+                    data.service_id,
+                    data.ip_id,
+                    data.custid,
+                    entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+                    entry_time = data.entry_time.ToTimeSpan(),
+                    data.shift,
+                    data.service_name,
+                    data.action,
+                    data.remarks,
+                    data.usercode,
+                    data.tenant_code,
+                    data.isdeleted,
+                    data.created_at,
+                    data.updated_at
+                });
+
+            // Push into unbilledcharges — only place pricing lives.
+            decimal amount = rate * req.quantity;
+            await _unbilledCls.AddOtChargeRow(
+                db, null, op_id: null, ip_id: req.ip_id, custid: req.custid, tenant_code: tenant_code,
+                entryType: "IP_SERVICE",
+                entryId: data.service_id.ToString(),
+                itemName: data.service_name,
+                quantity: req.quantity,
+                rate: rate,
+                amount: amount);
 
             return $"Success|Id:{data.service_id}";
         }
-
         public async Task<string> UpdateService(UpdateServiceRequest req, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
@@ -296,9 +341,18 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(
                 @"UPDATE ip_nurse_note_service SET isdeleted = true, updated_at = now()
-                  WHERE service_id = @service_id AND tenant_code = @tenant_code",
+          WHERE service_id = @service_id AND tenant_code = @tenant_code",
                 new { service_id, tenant_code });
-            return rows > 0 ? "Success" : "Record not found";
+
+            if (rows == 0) return "Record not found";
+
+            await db.ExecuteAsync(
+                @"DELETE FROM unbilledcharges
+          WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid AND tenant_code = @tenant_code
+          AND (billedstatus = false OR billedstatus IS NULL)",
+                new { entryid = service_id.ToString(), tenant_code });
+
+            return "Success";
         }
 
         // ═══════════════════════════════════════════════════════

@@ -125,8 +125,9 @@ namespace medico_backend.Model
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
             public string shift { get; set; } = "MORNING";
-            public string service_name { get; set; } = string.Empty;
+            public string service_name { get; set; } = string.Empty;   // resolved against test_master
             public string? action { get; set; }
+            public decimal quantity { get; set; } = 1;                  // NEW — used to compute the unbilled amount
             public string? remarks { get; set; }
         }
 

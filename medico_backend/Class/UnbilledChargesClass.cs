@@ -575,10 +575,10 @@ namespace medico_backend.Class
             }
             catch (Exception ex) { return ex.Message; }
         }
-        
+
         public async Task AddOtChargeRow(
-            IDbConnection db, IDbTransaction tx, string? op_id, Guid? ip_id, decimal custid, string tenant_code,
-            string entryType, string entryId, string itemName, decimal quantity, decimal? rate, decimal? amount)
+    IDbConnection db, IDbTransaction? tx, string? op_id, Guid? ip_id, decimal custid, string tenant_code,
+    string entryType, string entryId, string itemName, decimal quantity, decimal? rate, decimal? amount)
         {
             var row = new UnbilledChargeRow
             {
@@ -598,7 +598,63 @@ namespace medico_backend.Class
                 tenant_code = tenant_code,
                 particulars = itemName
             };
-            await db.InsertAsync(row, tx);
+            await db.InsertAsync(row, tx);   // Dapper.Contrib's InsertAsync overload accepts a nullable IDbTransaction fine
+        }
+        
+        // ── Resolve name + rate for a tcode, shared by every module that
+        // prices an item off test_master before pushing an unbilled charge
+        // (OT consumables/implants, IP nurse-note services, etc.) ──
+        public async Task<(string? name, decimal rate)> GetTestMasterRate(
+            IDbConnection db, IDbTransaction? tx, int tcode, string tenant_code)
+        {
+            var testInfo = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT name, amount FROM test_master
+          WHERE tcode = @tcode
+          AND   TRIM(tenant_code) = TRIM(@tenant_code)
+          AND   deleted = false",
+                new { tcode, tenant_code }, tx);
+
+            if (testInfo == null)
+                return (null, 0);
+
+            return ((string)testInfo.name, (decimal)(testInfo.amount ?? 0));
+        }
+
+        // ── Resolve tcode + rate for a service by NAME, shared by every module
+        // that prices an item by matching test_master.name (dressing/service
+        // registration in OP, IP nurse-note services, etc.) — same exact-then-
+        // prefix match OpRegistrationClass.GetServiceCharge used to do inline. ──
+        public async Task<(int? tcode, decimal rate)> GetTestMasterRateByName(
+            IDbConnection db, IDbTransaction? tx, string service_name, string tenant_code)
+        {
+            // 1️⃣ Exact match first (case-insensitive) — avoids picking up
+            // unrelated rows that merely start with the same letters.
+            var test = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT tcode, amount FROM test_master
+          WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+          AND   deleted = false
+          AND   name ILIKE @exact_name
+          ORDER BY tcode
+          LIMIT 1",
+                new { tenant_code, exact_name = service_name }, tx);
+
+            // 2️⃣ Fallback: prefix match, only if no exact match was found
+            if (test == null)
+            {
+                test = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT tcode, amount FROM test_master
+              WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+              AND   deleted = false
+              AND   name ILIKE @name_pattern
+              ORDER BY tcode
+              LIMIT 1",
+                    new { tenant_code, name_pattern = $"{service_name}%" }, tx);
+            }
+
+            if (test == null)
+                return (null, 0);
+
+            return ((int)test.tcode, (decimal)(test.amount ?? 0));
         }
     }
 }
