@@ -314,11 +314,11 @@ namespace medico_backend.Class
                     new { request_id, tenant_code }, tx)).Select(g => g.ToString()));
 
                 await db.ExecuteAsync(
-                    @"DELETE FROM unbilledcharges
-                      WHERE entrytype IN ('OT_PROCEDURE','OT_CONSUMABLE','OT_IMPLANT')
-                      AND entryid IN @chargeIds AND tenant_code = @tenant_code
-                      AND (billedstatus = false OR billedstatus IS NULL)",
-                    new { chargeIds, tenant_code }, tx);
+     @"DELETE FROM unbilledcharges
+      WHERE entrytype IN ('OT_PROCEDURE','OT_CONSUMABLE','OT_IMPLANT')
+      AND entryid = ANY(@chargeIds) AND tenant_code = @tenant_code
+      AND (billedstatus = false OR billedstatus IS NULL)",
+     new { chargeIds, tenant_code }, tx);
 
                 tx.Commit();
                 return "Success";
@@ -1441,13 +1441,13 @@ namespace medico_backend.Class
             using (IDbConnection db = GetConnection())
             {
                 var counts = await db.QueryFirstOrDefaultAsync<dynamic>(
-                    @"SELECT COUNT(*) AS total,
-                             COUNT(*) FILTER (WHERE billedstatus = false OR billedstatus IS NULL) AS pending
-                      FROM   unbilledcharges
-                      WHERE  tenant_code = @tenant_code
-                      AND    entrytype IN ('OT_PROCEDURE', 'OT_CONSUMABLE', 'OT_IMPLANT')
-                      AND    entryid IN @chargeIds",
-                    new { tenant_code, chargeIds });
+    @"SELECT COUNT(*) AS total,
+             COUNT(*) FILTER (WHERE billedstatus = false OR billedstatus IS NULL) AS pending
+      FROM   unbilledcharges
+      WHERE  tenant_code = @tenant_code
+      AND    entrytype IN ('OT_PROCEDURE', 'OT_CONSUMABLE', 'OT_IMPLANT')
+      AND    entryid = ANY(@chargeIds)",
+    new { tenant_code, chargeIds });
 
                 totalCharges = counts != null ? Convert.ToInt32(counts.total) : 0;
                 pendingCharges = counts != null ? Convert.ToInt32(counts.pending) : 0;
