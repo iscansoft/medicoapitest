@@ -50,7 +50,6 @@ namespace medico_backend.Class
             var data = new OtMasterModel
             {
                 ot_name = req.ot_name,
-                ot_type = req.ot_type,
                 location = req.location,
                 specialty = req.specialty,
                 timing_from = req.timing_from,
@@ -62,16 +61,15 @@ namespace medico_backend.Class
 
             await db.ExecuteAsync(@"
                 INSERT INTO ot_master
-                (ot_id, ot_name, ot_type, location, specialty, timing_from, timing_to,
+                (ot_id, ot_name,  location, specialty, timing_from, timing_to,
                  equipment, is_active, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
-                (@ot_id, @ot_name, @ot_type, @location, @specialty, @timing_from, @timing_to,
+                (@ot_id, @ot_name,  @location, @specialty, @timing_from, @timing_to,
                  @equipment, @is_active, @tenant_code, @isdeleted, @created_at, @updated_at)",
                 new
                 {
                     data.ot_id,
                     data.ot_name,
-                    data.ot_type,
                     data.location,
                     data.specialty,
                     timing_from = data.timing_from.HasValue ? data.timing_from.Value.ToTimeSpan() : (TimeSpan?)null,
@@ -92,7 +90,7 @@ namespace medico_backend.Class
             using IDbConnection db = GetConnection();
             int rows = await db.ExecuteAsync(@"
                 UPDATE ot_master
-                SET ot_name = @ot_name, ot_type = @ot_type, location = @location, specialty = @specialty,
+                SET ot_name = @ot_name,location = @location, specialty = @specialty,
                     timing_from = @timing_from, timing_to = @timing_to, equipment = @equipment,
                     is_active = @is_active, updated_at = now()
                 WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false",
@@ -100,7 +98,6 @@ namespace medico_backend.Class
                 {
                     req.ot_id,
                     req.ot_name,
-                    req.ot_type,
                     req.location,
                     req.specialty,
                     timing_from = req.timing_from.HasValue ? req.timing_from.Value.ToTimeSpan() : (TimeSpan?)null,
@@ -164,6 +161,7 @@ namespace medico_backend.Class
                     procedure_name = req.procedure_name,
                     procedure_code = req.procedure_code,
                     priority = string.IsNullOrWhiteSpace(req.priority) ? "ELECTIVE" : req.priority.ToUpper(),
+                    surgery_type = string.IsNullOrWhiteSpace(req.surgery_type) ? null : req.surgery_type.ToUpper(),  // ADD
                     expected_duration_minutes = req.expected_duration_minutes,
                     anesthesia_type = req.anesthesia_type,
                     procedure_fee = req.procedure_fee,
@@ -172,14 +170,14 @@ namespace medico_backend.Class
                 };
 
                 await db.ExecuteAsync(@"
-                    INSERT INTO ot_surgery_request
-                    (request_id, op_id, ip_id, custid, dcode, diagnosis, procedure_name, procedure_code,
-                     priority, expected_duration_minutes, anesthesia_type, procedure_fee, notes, status,
-                     tenant_code, isdeleted, created_at, updated_at)
-                    VALUES
-                    (@request_id, CAST(@op_id AS uuid), CAST(@ip_id AS uuid), @custid, @dcode, @diagnosis, @procedure_name, @procedure_code,
-                     @priority, @expected_duration_minutes, @anesthesia_type, @procedure_fee, @notes, @status,
-                     @tenant_code, @isdeleted, @created_at, @updated_at)",
+    INSERT INTO ot_surgery_request
+    (request_id, op_id, ip_id, custid, dcode, diagnosis, procedure_name, procedure_code,
+     priority, surgery_type, expected_duration_minutes, anesthesia_type, procedure_fee, notes, status,
+     tenant_code, isdeleted, created_at, updated_at)
+    VALUES
+    (@request_id, CAST(@op_id AS uuid), CAST(@ip_id AS uuid), @custid, @dcode, @diagnosis, @procedure_name, @procedure_code,
+     @priority, @surgery_type, @expected_duration_minutes, @anesthesia_type, @procedure_fee, @notes, @status,
+     @tenant_code, @isdeleted, @created_at, @updated_at)",
                     new
                     {
                         data.request_id,
@@ -191,6 +189,7 @@ namespace medico_backend.Class
                         data.procedure_name,
                         data.procedure_code,
                         data.priority,
+                        data.surgery_type,   // ADD
                         data.expected_duration_minutes,
                         data.anesthesia_type,
                         data.procedure_fee,
@@ -228,11 +227,11 @@ namespace medico_backend.Class
         {
             using IDbConnection db = GetConnection();
             int rows = await db.ExecuteAsync(@"
-                UPDATE ot_surgery_request
-                SET diagnosis = @diagnosis, procedure_name = @procedure_name, procedure_code = @procedure_code,
-                    priority = @priority, expected_duration_minutes = @expected_duration_minutes,
-                    anesthesia_type = @anesthesia_type, notes = @notes, updated_at = now()
-                WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+        UPDATE ot_surgery_request
+        SET diagnosis = @diagnosis, procedure_name = @procedure_name, procedure_code = @procedure_code,
+            priority = @priority, surgery_type = @surgery_type, expected_duration_minutes = @expected_duration_minutes,
+            anesthesia_type = @anesthesia_type, notes = @notes, updated_at = now()
+        WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.request_id,
@@ -240,6 +239,7 @@ namespace medico_backend.Class
                     req.procedure_name,
                     req.procedure_code,
                     priority = string.IsNullOrWhiteSpace(req.priority) ? "ELECTIVE" : req.priority.ToUpper(),
+                    surgery_type = string.IsNullOrWhiteSpace(req.surgery_type) ? null : req.surgery_type.ToUpper(),
                     req.expected_duration_minutes,
                     req.anesthesia_type,
                     req.notes,
@@ -1416,7 +1416,52 @@ namespace medico_backend.Class
                 @"SELECT * FROM ot_operation_note WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new { request_id, tenant_code });
         }
+        public async Task<string> AddOtSterilization(AddOtSterilizationRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var data = new OtSterilizationModel
+            {
+                request_id = req.request_id,
+                instrument_set = req.instrument_set,
+                sterilization_method = req.sterilization_method.ToUpper(),
+                cycle_number = req.cycle_number,
+                sterilized_by = req.sterilized_by,
+                expiry_date = req.expiry_date,
+                status = req.status.ToUpper(),
+                remarks = req.remarks,
+                tenant_code = tenant_code
+            };
 
+            await db.ExecuteAsync(@"
+        INSERT INTO ot_sterilization
+        (sterilization_id, request_id, instrument_set, sterilization_method, cycle_number, sterilized_by,
+         sterilization_date, expiry_date, status, remarks, tenant_code, isdeleted, created_at)
+        VALUES
+        (@sterilization_id, @request_id, @instrument_set, @sterilization_method, @cycle_number, @sterilized_by,
+         @sterilization_date, @expiry_date, @status, @remarks, @tenant_code, @isdeleted, @created_at)",
+                data);
+
+            return $"Success|Id:{data.sterilization_id}";
+        }
+
+        public async Task<List<OtSterilizationModel>> GetOtSterilization(Guid request_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var res = await db.QueryAsync<OtSterilizationModel>(
+                @"SELECT * FROM ot_sterilization WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false
+          ORDER BY created_at",
+                new { request_id, tenant_code });
+            return res.ToList();
+        }
+
+        public async Task<string> DeleteOtSterilization(Guid sterilization_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(
+                @"UPDATE ot_sterilization SET isdeleted = true WHERE sterilization_id = @sterilization_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { sterilization_id, tenant_code });
+            return rows > 0 ? "Success" : "Sterilization record not found";
+        }
         // ═══════════════════════════════════════════════════════
         // 15. OT SUMMARY — one call, everything for a request.
         // Billed/pending state is read live from unbilledcharges
@@ -1467,10 +1512,453 @@ namespace medico_backend.Class
                 implants = implants,
                 recovery = await GetOtRecovery(request_id, tenant_code),
                 postop_orders = await GetOtPostOpOrders(request_id, tenant_code),
+                sterilization = await GetOtSterilization(request_id, tenant_code),
+                checklist_extra_items = await GetOtChecklistItemsForRequest(request_id, tenant_code),
                 operation_note = await GetOtOperationNote(request_id, tenant_code),
                 total_charge_count = totalCharges,
                 pending_charge_count = pendingCharges,
                 is_fully_billed = totalCharges > 0 && pendingCharges == 0
+            };
+        }
+        public async Task<List<OtMasterModel>> GetAvailableOts(
+    DateOnly scheduled_date, TimeOnly scheduled_time, TimeOnly estimated_end_time,
+    string tenant_code, string? specialty = null)
+        {
+            using IDbConnection db = GetConnection();
+            string sql = @"
+        SELECT m.* FROM ot_master m
+        WHERE m.tenant_code = @tenant_code AND m.isdeleted = false AND m.is_active = true";
+
+            if (!string.IsNullOrWhiteSpace(specialty)) sql += " AND m.specialty = @specialty";
+
+            sql += @"
+        AND NOT EXISTS (
+            SELECT 1 FROM ot_schedule s
+            WHERE s.ot_id = m.ot_id AND s.tenant_code = @tenant_code AND s.isdeleted = false
+            AND s.scheduled_date = @scheduled_date
+            AND s.status NOT IN ('CANCELLED')
+            AND s.scheduled_time < @estimated_end_time
+            AND s.estimated_end_time > @scheduled_time
+        )
+        ORDER BY m.ot_name";
+
+            var res = await db.QueryAsync<OtMasterModel>(sql, new
+            {
+                tenant_code,
+                specialty,
+                scheduled_date = scheduled_date.ToDateTime(TimeOnly.MinValue),
+                scheduled_time = scheduled_time.ToTimeSpan(),
+                estimated_end_time = estimated_end_time.ToTimeSpan()
+            });
+            return res.ToList();
+        }
+        public async Task<string> PostponeOtSchedule(PostponeOtScheduleRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var existing = await db.QueryFirstOrDefaultAsync<OtScheduleModel>(
+                    @"SELECT * FROM ot_schedule WHERE schedule_id = @schedule_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { req.schedule_id, tenant_code }, tx);
+
+                if (existing == null)
+                {
+                    tx.Rollback();
+                    return "Schedule not found";
+                }
+
+                int overlapping = await db.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1) FROM ot_schedule
+              WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false
+              AND schedule_id <> @schedule_id
+              AND scheduled_date = @scheduled_date
+              AND status NOT IN ('CANCELLED')
+              AND scheduled_time < @estimated_end_time
+              AND estimated_end_time > @scheduled_time",
+                    new
+                    {
+                        existing.ot_id,
+                        tenant_code,
+                        schedule_id = req.schedule_id,
+                        scheduled_date = req.new_scheduled_date.ToDateTime(TimeOnly.MinValue),
+                        scheduled_time = req.new_scheduled_time.ToTimeSpan(),
+                        estimated_end_time = req.new_estimated_end_time.ToTimeSpan()
+                    }, tx);
+
+                if (overlapping > 0)
+                {
+                    tx.Rollback();
+                    return "This OT already has an overlapping booking for the new date/time.";
+                }
+
+                string noteAppend =
+                    $"[POSTPONED from {existing.scheduled_date:yyyy-MM-dd} {existing.scheduled_time} " +
+                    $"to {req.new_scheduled_date:yyyy-MM-dd} {req.new_scheduled_time}]" +
+                    (string.IsNullOrWhiteSpace(req.reason) ? "" : $" Reason: {req.reason}");
+
+                string combinedNotes = string.IsNullOrWhiteSpace(existing.notes)
+                    ? noteAppend
+                    : existing.notes + " | " + noteAppend;
+
+                int rows = await db.ExecuteAsync(@"
+            UPDATE ot_schedule
+            SET scheduled_date = @scheduled_date, scheduled_time = @scheduled_time,
+                estimated_end_time = @estimated_end_time, status = 'POSTPONED',
+                notes = @notes, updated_at = now()
+            WHERE schedule_id = @schedule_id AND tenant_code = @tenant_code",
+                    new
+                    {
+                        req.schedule_id,
+                        scheduled_date = req.new_scheduled_date.ToDateTime(TimeOnly.MinValue),
+                        scheduled_time = req.new_scheduled_time.ToTimeSpan(),
+                        estimated_end_time = req.new_estimated_end_time.ToTimeSpan(),
+                        notes = combinedNotes,
+                        tenant_code
+                    }, tx);
+
+                tx.Commit();
+                return rows > 0 ? "Success" : "Schedule not found";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+        // ═══════════════════════════════════════════════════════
+        // CHECKLIST MASTER (tenant-wide, reusable)
+        // ═══════════════════════════════════════════════════════
+        public async Task<string> AddOtChecklistMaster(AddOtChecklistMasterRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var data = new OtChecklistMasterModel
+            {
+                item_label = req.item_label,
+                category = req.category,
+                is_active = req.is_active,
+                tenant_code = tenant_code
+            };
+
+            await db.ExecuteAsync(@"
+        INSERT INTO ot_checklist_master
+        (item_master_id, item_label, category, is_active, tenant_code, isdeleted, created_at)
+        VALUES
+        (@item_master_id, @item_label, @category, @is_active, @tenant_code, @isdeleted, @created_at)",
+                data);
+
+            return $"Success|Id:{data.item_master_id}";
+        }
+
+        public async Task<string> UpdateOtChecklistMaster(UpdateOtChecklistMasterRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(@"
+        UPDATE ot_checklist_master
+        SET item_label = @item_label, category = @category, is_active = @is_active
+        WHERE item_master_id = @item_master_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { req.item_master_id, req.item_label, req.category, req.is_active, tenant_code });
+
+            return rows > 0 ? "Success" : "Checklist master item not found";
+        }
+
+        public async Task<List<OtChecklistMasterModel>> GetOtChecklistMasterList(string tenant_code, bool activeOnly = true)
+        {
+            using IDbConnection db = GetConnection();
+            string sql = @"SELECT * FROM ot_checklist_master WHERE tenant_code = @tenant_code AND isdeleted = false";
+            if (activeOnly) sql += " AND is_active = true";
+            sql += " ORDER BY category, item_label";
+
+            var res = await db.QueryAsync<OtChecklistMasterModel>(sql, new { tenant_code });
+            return res.ToList();
+        }
+
+        public async Task<string> DeleteOtChecklistMaster(Guid item_master_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(
+                @"UPDATE ot_checklist_master SET isdeleted = true WHERE item_master_id = @item_master_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { item_master_id, tenant_code });
+            return rows > 0 ? "Success" : "Checklist master item not found";
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // CHECKLIST ITEM (per request) — upsert against (checklist_id, item_master_id)
+        // ═══════════════════════════════════════════════════════
+
+        // Toggling/checking an extra item for a specific patient's case.
+        // request_id -> resolves to the ONE ot_checklist row for that request
+        // (creating an empty checklist shell if SaveOtChecklist hasn't run yet),
+        // then upserts the (checklist_id, item_master_id) pair.
+        public async Task<string> SaveOtChecklistItem(SaveOtChecklistItemRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var checklist = await db.QueryFirstOrDefaultAsync<OtChecklistModel>(
+                    @"SELECT * FROM ot_checklist WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { req.request_id, tenant_code }, tx);
+
+                // Auto-create the base checklist shell for this request if it doesn't exist yet,
+                // so extra items can be recorded even before the fixed checklist is filled in.
+                if (checklist == null)
+                {
+                    checklist = new OtChecklistModel { request_id = req.request_id, tenant_code = tenant_code };
+                    await db.ExecuteAsync(@"
+                INSERT INTO ot_checklist
+                (checklist_id, request_id, patient_confirmed, procedure_confirmed, site_marked, consent_confirmed,
+                 investigations_confirmed, blood_arranged, instruments_confirmed, implants_confirmed, antibiotic_given,
+                 tenant_code, isdeleted, created_at, updated_at)
+                VALUES
+                (@checklist_id, @request_id, false, false, false, false, false, false, false, false, false,
+                 @tenant_code, false, @created_at, @updated_at)",
+                        checklist, tx);
+                }
+
+                var existingItem = await db.QueryFirstOrDefaultAsync<OtChecklistItemModel>(
+                    @"SELECT * FROM ot_checklist_item
+              WHERE checklist_id = @checklist_id AND item_master_id = @item_master_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { checklist.checklist_id, req.item_master_id, tenant_code }, tx);
+
+                if (existingItem == null)
+                {
+                    var data = new OtChecklistItemModel
+                    {
+                        checklist_id = checklist.checklist_id,
+                        item_master_id = req.item_master_id,
+                        is_checked = req.is_checked,
+                        checked_by = req.checked_by,
+                        checked_at = req.is_checked ? DateTime.UtcNow : (DateTime?)null,
+                        remarks = req.remarks,
+                        tenant_code = tenant_code
+                    };
+
+                    await db.ExecuteAsync(@"
+                INSERT INTO ot_checklist_item
+                (item_id, checklist_id, item_master_id, is_checked, checked_by, checked_at, remarks, tenant_code, isdeleted, created_at)
+                VALUES
+                (@item_id, @checklist_id, @item_master_id, @is_checked, @checked_by, @checked_at, @remarks, @tenant_code, @isdeleted, @created_at)",
+                        data, tx);
+
+                    tx.Commit();
+                    return $"Success|Id:{data.item_id}";
+                }
+                else
+                {
+                    await db.ExecuteAsync(@"
+                UPDATE ot_checklist_item
+                SET is_checked = @is_checked, checked_by = @checked_by,
+                    checked_at = CASE WHEN @is_checked THEN now() ELSE NULL END,
+                    remarks = @remarks
+                WHERE item_id = @item_id AND tenant_code = @tenant_code",
+                        new { existingItem.item_id, req.is_checked, req.checked_by, req.remarks, tenant_code }, tx);
+
+                    tx.Commit();
+                    return $"Success|Id:{existingItem.item_id}";
+                }
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        // Returns ALL active master items for the tenant, LEFT JOINed with this
+        // request's checked-state — so the UI can render the full checklist
+        // (checked + unchecked) in one call, including items never touched yet.
+        public async Task<List<OtChecklistItemModel>> GetOtChecklistItemsForRequest(Guid request_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+
+            var res = await db.QueryAsync<OtChecklistItemModel>(@"
+        SELECT
+            COALESCE(i.item_id, gen_random_uuid())   AS item_id,
+            c.checklist_id                            AS checklist_id,
+            m.item_master_id                          AS item_master_id,
+            COALESCE(i.is_checked, false)             AS is_checked,
+            i.checked_by                              AS checked_by,
+            i.checked_at                              AS checked_at,
+            i.remarks                                 AS remarks,
+            m.tenant_code                             AS tenant_code,
+            false                                     AS isdeleted,
+            m.created_at                              AS created_at,
+            m.item_label                              AS item_label,
+            m.category                                AS category
+        FROM ot_checklist_master m
+        LEFT JOIN ot_checklist c
+               ON c.request_id = @request_id AND c.tenant_code = @tenant_code AND c.isdeleted = false
+        LEFT JOIN ot_checklist_item i
+               ON i.checklist_id = c.checklist_id AND i.item_master_id = m.item_master_id AND i.isdeleted = false
+        WHERE m.tenant_code = @tenant_code AND m.isdeleted = false AND m.is_active = true
+        ORDER BY m.category, m.item_label",
+                new { request_id, tenant_code });
+
+            return res.ToList();
+        }
+
+        public async Task<string> DeleteOtChecklistItem(Guid item_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(
+                @"UPDATE ot_checklist_item SET isdeleted = true WHERE item_id = @item_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { item_id, tenant_code });
+            return rows > 0 ? "Success" : "Checklist item not found";
+        }
+        // Row shapes for Dapper (avoids dynamic/tuple mapping overhead)
+        private class BookingRow
+        {
+            public TimeOnly scheduled_time { get; set; }        
+            public TimeOnly estimated_end_time { get; set; }     
+        }
+
+        private class RangeBookingRow
+        {
+            public DateOnly scheduled_date { get; set; }
+            public TimeOnly scheduled_time { get; set; }         
+            public TimeOnly estimated_end_time { get; set; }     
+        }
+
+        // Merges overlapping bookings, then returns the gaps within [dayStart, dayEnd].
+        // Pure in-memory computation — no DB hit, so it's cheap to call per-day.
+        private static List<OtTimeSlot> ComputeFreeSlots(
+            TimeOnly dayStart, TimeOnly dayEnd, List<(TimeOnly start, TimeOnly end)> booked)
+        {
+            var clipped = booked
+                .Where(b => b.end > dayStart && b.start < dayEnd)
+                .Select(b => (start: b.start < dayStart ? dayStart : b.start,
+                               end: b.end > dayEnd ? dayEnd : b.end))
+                .OrderBy(b => b.start)
+                .ToList();
+
+            var merged = new List<(TimeOnly start, TimeOnly end)>();
+            foreach (var b in clipped)
+            {
+                if (merged.Count > 0 && b.start <= merged[^1].end)
+                {
+                    if (b.end > merged[^1].end) merged[^1] = (merged[^1].start, b.end);
+                }
+                else
+                {
+                    merged.Add(b);
+                }
+            }
+
+            var free = new List<OtTimeSlot>();
+            var cursor = dayStart;
+            foreach (var m in merged)
+            {
+                if (m.start > cursor) free.Add(new OtTimeSlot { start_time = cursor, end_time = m.start });
+                if (m.end > cursor) cursor = m.end;
+            }
+            if (cursor < dayEnd) free.Add(new OtTimeSlot { start_time = cursor, end_time = dayEnd });
+
+            return free;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // ENDPOINT 1: single OT, single day — full slot breakdown.
+        // 2 queries: ot_master (1) + ot_schedule for that day (1).
+        // ═══════════════════════════════════════════════════════
+        public async Task<OtAvailabilitySlotsResponse?> GetOtAvailabilitySlots(
+            Guid ot_id, DateOnly date, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+
+            var ot = await db.QueryFirstOrDefaultAsync<OtMasterModel>(
+                @"SELECT * FROM ot_master WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ot_id, tenant_code });
+            if (ot == null) return null;
+
+            var dayStart = ot.timing_from ?? new TimeOnly(0, 0);
+            var dayEnd = ot.timing_to ?? new TimeOnly(23, 59);
+
+            var bookingRows = (await db.QueryAsync<BookingRow>(
+    @"SELECT scheduled_time, estimated_end_time FROM ot_schedule
+      WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false
+      AND scheduled_date = @date AND status NOT IN ('CANCELLED')
+      ORDER BY scheduled_time",
+    new { ot_id, tenant_code, date = date.ToDateTime(TimeOnly.MinValue) })).ToList();
+
+            var bookings = bookingRows
+                .Select(b => (b.scheduled_time, b.estimated_end_time))   // ✅ no conversion needed now
+                .ToList();
+
+            return new OtAvailabilitySlotsResponse
+            {
+                ot_id = ot.ot_id,
+                ot_name = ot.ot_name,
+                date = date,
+                day_start = dayStart,
+                day_end = dayEnd,
+                available_slots = ComputeFreeSlots(dayStart, dayEnd, bookings),
+                booked_slots = bookings.Select(b => new OtTimeSlot { start_time = b.Item1, end_time = b.Item2 }).ToList()
+            };
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // ENDPOINT 2: single OT, date range — day-wise breakdown.
+        // Still only 2 queries total, regardless of range length —
+        // all bookings for the whole range are fetched in ONE query,
+        // then grouped/gap-computed per day in memory.
+        // ═══════════════════════════════════════════════════════
+        public async Task<OtAvailabilityRangeResponse?> GetOtAvailabilityRange(
+    Guid ot_id, DateOnly from_date, DateOnly to_date, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+
+            var ot = await db.QueryFirstOrDefaultAsync<OtMasterModel>(
+                @"SELECT * FROM ot_master WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ot_id, tenant_code });
+            if (ot == null) return null;
+
+            var dayStart = ot.timing_from ?? new TimeOnly(0, 0);
+            var dayEnd = ot.timing_to ?? new TimeOnly(23, 59);
+
+            var rows = (await db.QueryAsync<RangeBookingRow>(
+                @"SELECT scheduled_date, scheduled_time, estimated_end_time FROM ot_schedule
+          WHERE ot_id = @ot_id AND tenant_code = @tenant_code AND isdeleted = false
+          AND scheduled_date BETWEEN @from_date AND @to_date
+          AND status NOT IN ('CANCELLED')
+          ORDER BY scheduled_date, scheduled_time",
+                new
+                {
+                    ot_id,
+                    tenant_code,
+                    from_date = from_date.ToDateTime(TimeOnly.MinValue),   // fine — this is a query PARAMETER, Npgsql handles the cast going in
+                    to_date = to_date.ToDateTime(TimeOnly.MinValue)
+                })).ToList();
+
+            var byDate = rows
+    .GroupBy(r => r.scheduled_date)
+    .ToDictionary(
+        g => g.Key,
+        g => g.Select(x => (x.scheduled_time, x.estimated_end_time)).ToList());   // ✅ no conversion needed now
+
+            var days = new List<OtDayAvailability>();
+            for (var d = from_date; d <= to_date; d = d.AddDays(1))
+            {
+                var bookings = byDate.TryGetValue(d, out var list) ? list : new List<(TimeOnly, TimeOnly)>();
+                days.Add(new OtDayAvailability
+                {
+                    date = d,
+                    available_slots = ComputeFreeSlots(dayStart, dayEnd, bookings),
+                    booked_slots = bookings.Select(b => new OtTimeSlot { start_time = b.Item1, end_time = b.Item2 }).ToList()
+                });
+            }
+
+            return new OtAvailabilityRangeResponse
+            {
+                ot_id = ot.ot_id,
+                ot_name = ot.ot_name,
+                day_start = dayStart,
+                day_end = dayEnd,
+                days = days
             };
         }
     }

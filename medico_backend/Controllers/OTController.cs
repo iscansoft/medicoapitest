@@ -540,5 +540,146 @@ namespace medico_backend.Controllers
             var res = await cls.GetOtSummary(request_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Surgery request not found" });
         }
+        [HttpPost("sterilization/add")]
+        public async Task<IActionResult> AddOtSterilization([FromBody] AddOtSterilizationRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.AddOtSterilization(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpGet("sterilization/by-request")]
+        public async Task<IActionResult> GetOtSterilization([FromQuery] Guid request_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            return Ok(await cls.GetOtSterilization(request_id, tenant));
+        }
+
+        [HttpGet("sterilization/delete")]
+        public async Task<IActionResult> DeleteOtSterilization([FromQuery] Guid sterilization_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.DeleteOtSterilization(sterilization_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+        // GET api/OT/availability?scheduled_date=2026-09-10&scheduled_time=10:00&estimated_end_time=12:00&specialty=ORTHO
+        [HttpGet("availability")]
+        public async Task<IActionResult> GetAvailableOts(
+            [FromQuery] DateOnly scheduled_date,
+            [FromQuery] TimeOnly scheduled_time,
+            [FromQuery] TimeOnly estimated_end_time,
+            [FromQuery] string? specialty)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetAvailableOts(scheduled_date, scheduled_time, estimated_end_time, tenant, specialty));
+        }
+        [HttpPost("schedule/postpone")]
+        public async Task<IActionResult> PostponeOtSchedule([FromBody] PostponeOtScheduleRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.PostponeOtSchedule(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+        // ═══════════════════════════════════════════════════════
+        // CHECKLIST MASTER (admin-managed, tenant-wide)
+        // ═══════════════════════════════════════════════════════
+
+        [HttpPost("checklist-master/add")]
+        public async Task<IActionResult> AddOtChecklistMaster([FromBody] AddOtChecklistMasterRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.AddOtChecklistMaster(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpPost("checklist-master/update")]
+        public async Task<IActionResult> UpdateOtChecklistMaster([FromBody] UpdateOtChecklistMasterRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.UpdateOtChecklistMaster(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        [HttpGet("checklist-master/list")]
+        public async Task<IActionResult> GetOtChecklistMasterList([FromQuery] bool activeOnly = true)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            return Ok(await cls.GetOtChecklistMasterList(tenant, activeOnly));
+        }
+
+        [HttpGet("checklist-master/delete")]
+        public async Task<IActionResult> DeleteOtChecklistMaster([FromQuery] Guid item_master_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.DeleteOtChecklistMaster(item_master_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // CHECKLIST ITEM (per patient/request — references request_id at API level,
+        // resolved internally to checklist_id since it's 1-per-request anyway)
+        // ═══════════════════════════════════════════════════════
+
+        [HttpPost("checklist/item/save")]
+        public async Task<IActionResult> SaveOtChecklistItem([FromBody] SaveOtChecklistItemRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.SaveOtChecklistItem(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpGet("checklist/item/by-request")]
+        public async Task<IActionResult> GetOtChecklistItemsForRequest([FromQuery] Guid request_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            return Ok(await cls.GetOtChecklistItemsForRequest(request_id, tenant));
+        }
+
+        [HttpGet("checklist/item/delete")]
+        public async Task<IActionResult> DeleteOtChecklistItem([FromQuery] Guid item_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.DeleteOtChecklistItem(item_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+        // GET api/OT/availability/slots?ot_id=...&date=2026-09-10
+        [HttpGet("availability/slots")]
+        public async Task<IActionResult> GetOtAvailabilitySlots([FromQuery] Guid ot_id, [FromQuery] DateOnly date)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetOtAvailabilitySlots(ot_id, date, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "OT not found" });
+        }
+
+        // GET api/OT/availability/range?ot_id=...&from_date=2026-09-08&to_date=2026-09-14
+        [HttpGet("availability/range")]
+        public async Task<IActionResult> GetOtAvailabilityRange(
+            [FromQuery] Guid ot_id, [FromQuery] DateOnly from_date, [FromQuery] DateOnly to_date)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            if ((to_date.ToDateTime(TimeOnly.MinValue) - from_date.ToDateTime(TimeOnly.MinValue)).TotalDays > 31)
+                return BadRequest(new { message = "Range too large — max 31 days" });
+
+            var res = await cls.GetOtAvailabilityRange(ot_id, from_date, to_date, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "OT not found" });
+        }
     }
 }

@@ -10,7 +10,6 @@ namespace medico_backend.Model
     {
         [ExplicitKey] public Guid ot_id { get; set; } = Guid.NewGuid();
         public string ot_name { get; set; } = string.Empty;
-        public string? ot_type { get; set; }
         public string? location { get; set; }
         public string? specialty { get; set; }
         public TimeOnly? timing_from { get; set; }
@@ -26,7 +25,6 @@ namespace medico_backend.Model
     public class AddOtMasterRequest
     {
         public string ot_name { get; set; } = string.Empty;
-        public string? ot_type { get; set; }
         public string? location { get; set; }
         public string? specialty { get; set; }
         public TimeOnly? timing_from { get; set; }
@@ -39,7 +37,6 @@ namespace medico_backend.Model
     {
         public Guid ot_id { get; set; }
         public string ot_name { get; set; } = string.Empty;
-        public string? ot_type { get; set; }
         public string? location { get; set; }
         public string? specialty { get; set; }
         public TimeOnly? timing_from { get; set; }
@@ -60,6 +57,7 @@ namespace medico_backend.Model
         public decimal custid { get; set; }
         public int dcode { get; set; }
         public string? diagnosis { get; set; }
+        public string? surgery_type { get; set; }  // e.g. MAJOR / MINOR / DAYCARE / LOCAL
         public string procedure_name { get; set; } = string.Empty;
         public string? procedure_code { get; set; }
         public string priority { get; set; } = "ELECTIVE";
@@ -89,6 +87,7 @@ namespace medico_backend.Model
         public decimal custid { get; set; }
         public int dcode { get; set; }
         public string? diagnosis { get; set; }
+        public string? surgery_type { get; set; }  // e.g. MAJOR / MINOR / DAYCARE / LOCAL
         public string procedure_name { get; set; } = string.Empty;
         public string? procedure_code { get; set; }
         public string priority { get; set; } = "ELECTIVE";
@@ -102,6 +101,7 @@ namespace medico_backend.Model
     {
         public Guid request_id { get; set; }
         public string? diagnosis { get; set; }
+        public string? surgery_type { get; set; }  // e.g. MAJOR / MINOR / DAYCARE / LOCAL
         public string procedure_name { get; set; } = string.Empty;
         public string? procedure_code { get; set; }
         public string priority { get; set; } = "ELECTIVE";
@@ -602,11 +602,140 @@ namespace medico_backend.Model
         public List<OtImplantModel> implants { get; set; } = new();
         public OtRecoveryModel? recovery { get; set; }
         public List<OtPostOpOrderModel> postop_orders { get; set; } = new();
+        public List<OtSterilizationModel> sterilization { get; set; } = new();
+        public List<OtChecklistItemModel> checklist_extra_items { get; set; } = new();
         public OtOperationNoteModel? operation_note { get; set; }
 
         // Derived straight from unbilledcharges — no separate bill record.
         public int total_charge_count { get; set; }
         public int pending_charge_count { get; set; }
         public bool is_fully_billed { get; set; }
+    }
+    [Table("ot_sterilization")]
+    public class OtSterilizationModel
+    {
+        [ExplicitKey] public Guid sterilization_id { get; set; } = Guid.NewGuid();
+        public Guid request_id { get; set; }
+        public string instrument_set { get; set; } = string.Empty;
+        public string sterilization_method { get; set; } = "AUTOCLAVE";
+        public string? cycle_number { get; set; }
+        public string? sterilized_by { get; set; }
+        public DateTime sterilization_date { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+        public DateTime? expiry_date { get; set; }
+        public string status { get; set; } = "STERILE";
+        public string? remarks { get; set; }
+        public string? tenant_code { get; set; }
+        public bool isdeleted { get; set; } = false;
+        public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+    }
+
+    public class AddOtSterilizationRequest
+    {
+        public Guid request_id { get; set; }
+        public string instrument_set { get; set; } = string.Empty;
+        public string sterilization_method { get; set; } = "AUTOCLAVE";
+        public string? cycle_number { get; set; }
+        public string? sterilized_by { get; set; }
+        public DateTime? expiry_date { get; set; }
+        public string status { get; set; } = "STERILE";
+        public string? remarks { get; set; }
+    }
+    public class PostponeOtScheduleRequest
+    {
+        public Guid schedule_id { get; set; }
+        public DateOnly new_scheduled_date { get; set; }
+        public TimeOnly new_scheduled_time { get; set; }
+        public TimeOnly new_estimated_end_time { get; set; }
+        public string? reason { get; set; }
+    }
+    // ── MASTER ──────────────────────────────────────
+    [Table("ot_checklist_master")]
+    public class OtChecklistMasterModel
+    {
+        [ExplicitKey] public Guid item_master_id { get; set; } = Guid.NewGuid();
+        public string item_label { get; set; } = string.Empty;
+        public string? category { get; set; }
+        public bool is_active { get; set; } = true;
+        public string? tenant_code { get; set; }
+        public bool isdeleted { get; set; } = false;
+        public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+    }
+
+    public class AddOtChecklistMasterRequest
+    {
+        public string item_label { get; set; } = string.Empty;
+        public string? category { get; set; }
+        public bool is_active { get; set; } = true;
+    }
+
+    public class UpdateOtChecklistMasterRequest
+    {
+        public Guid item_master_id { get; set; }
+        public string item_label { get; set; } = string.Empty;
+        public string? category { get; set; }
+        public bool is_active { get; set; } = true;
+    }
+
+    // ── TRANSACTION (per request, via checklist_id) ──
+    [Table("ot_checklist_item")]
+    public class OtChecklistItemModel
+    {
+        [ExplicitKey] public Guid item_id { get; set; } = Guid.NewGuid();
+        public Guid checklist_id { get; set; }
+        public Guid item_master_id { get; set; }
+        public bool is_checked { get; set; } = false;
+        public string? checked_by { get; set; }
+        public DateTime? checked_at { get; set; }
+        public string? remarks { get; set; }
+        public string? tenant_code { get; set; }
+        public bool isdeleted { get; set; } = false;
+        public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+
+        // populated only in GET response, not persisted
+        public string? item_label { get; set; }
+        public string? category { get; set; }
+    }
+
+    // request_id is used at the API boundary (that's what the caller knows);
+    // internally we resolve it to checklist_id since ot_checklist is 1-per-request.
+    public class SaveOtChecklistItemRequest
+    {
+        public Guid request_id { get; set; }
+        public Guid item_master_id { get; set; }
+        public bool is_checked { get; set; } = false;
+        public string? checked_by { get; set; }
+        public string? remarks { get; set; }
+    }
+    public class OtTimeSlot
+    {
+        public TimeOnly start_time { get; set; }
+        public TimeOnly end_time { get; set; }
+    }
+
+    public class OtDayAvailability
+    {
+        public DateOnly date { get; set; }
+        public List<OtTimeSlot> available_slots { get; set; } = new();
+        public List<OtTimeSlot> booked_slots { get; set; } = new();
+    }
+
+    public class OtAvailabilitySlotsResponse
+    {
+        public Guid ot_id { get; set; }
+        public string ot_name { get; set; } = string.Empty;
+        public DateOnly date { get; set; }
+        public TimeOnly day_start { get; set; }
+        public TimeOnly day_end { get; set; }
+        public List<OtTimeSlot> available_slots { get; set; } = new();
+        public List<OtTimeSlot> booked_slots { get; set; } = new();
+    }
+
+    public class OtAvailabilityRangeResponse
+    {
+        public Guid ot_id { get; set; }
+        public string ot_name { get; set; } = string.Empty;
+        public TimeOnly day_start { get; set; }
+        public TimeOnly day_end { get; set; }
+        public List<OtDayAvailability> days { get; set; } = new();
     }
 }
