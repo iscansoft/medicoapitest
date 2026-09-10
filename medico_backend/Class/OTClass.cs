@@ -2003,5 +2003,305 @@ namespace medico_backend.Class
                 days = days
             };
         }
+        public async Task<string> AddOtStaffNote(AddOtStaffNoteRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var surgeryReq = await db.QueryFirstOrDefaultAsync<OtSurgeryRequestModel>(
+                    @"SELECT * FROM ot_surgery_request WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { req.request_id, tenant_code }, tx);
+
+                if (surgeryReq == null)
+                {
+                    tx.Rollback();
+                    return "Surgery request not found";
+                }
+
+                decimal? amount = req.amount ?? (req.rate.HasValue ? req.rate.Value * req.quantity : null);
+
+                var data = new OtStaffNoteModel
+                {
+                    request_id = req.request_id,
+                    item_type = string.IsNullOrWhiteSpace(req.item_type) ? "MEDICINE" : req.item_type.ToUpper(),
+                    item_name = req.item_name,
+                    quantity = req.quantity,
+                    unit = req.unit,
+                    rate = req.rate,
+                    amount = amount,
+                    used_by = req.used_by,
+                    remarks = req.remarks,
+                    tenant_code = tenant_code
+                };
+
+                await db.ExecuteAsync(@"
+                    INSERT INTO ot_staff_note
+                    (note_id, request_id, item_type, item_name, quantity, unit, rate, amount, used_by,
+                     is_billed, remarks, tenant_code, isdeleted, created_at)
+                    VALUES
+                    (@note_id, @request_id, @item_type, @item_name, @quantity, @unit, @rate, @amount, @used_by,
+                     false, @remarks, @tenant_code, @isdeleted, @created_at)",
+                    data, tx);
+
+                // Only pushes to billing when it actually has a chargeable amount —
+                // e.g. a reusable tool logged with no rate stays a note-only entry.
+                if (data.amount.HasValue && data.amount.Value > 0)
+                {
+                    await _unbilledCls.AddOtChargeRow(
+                        db, tx, surgeryReq.op_id, surgeryReq.ip_id, surgeryReq.custid, tenant_code,
+                        entryType: "OT_STAFF_ITEM",
+                        entryId: data.note_id.ToString(),
+                        itemName: data.item_name,
+                        quantity: data.quantity,
+                        rate: data.rate,
+                        amount: data.amount);
+                }
+
+                tx.Commit();
+                return $"Success|Id:{data.note_id}";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        public async Task<List<OtStaffNoteModel>> GetOtStaffNotes(Guid request_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var res = await db.QueryAsync<OtStaffNoteModel>(
+                @"SELECT * FROM ot_staff_note WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false
+                  ORDER BY created_at",
+                new { request_id, tenant_code });
+            return res.ToList();
+        }
+
+        // Soft-deletes the note AND clears its pending (not-yet-billed)
+        // unbilledcharges row. Already-billed rows are left alone.
+        public async Task<string> DeleteOtStaffNote(Guid note_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                int rows = await db.ExecuteAsync(
+                    @"UPDATE ot_staff_note SET isdeleted = true WHERE note_id = @note_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { note_id, tenant_code }, tx);
+
+                if (rows == 0)
+                {
+                    tx.Rollback();
+                    return "Staff note not found";
+                }
+
+                await db.ExecuteAsync(
+                    @"DELETE FROM unbilledcharges
+                      WHERE entrytype = 'OT_STAFF_ITEM' AND entryid = @entryid AND tenant_code = @tenant_code
+                      AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { entryid = note_id.ToString(), tenant_code }, tx);
+
+                tx.Commit();
+                return "Success";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // OT FEE SPLIT MASTER (tenant-wide, reusable)
+        // ═══════════════════════════════════════════════════════
+        public async Task<string> AddOtFeeSplitMaster(AddOtFeeSplitMasterRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var data = new OtFeeSplitMasterModel
+            {
+                fee_type_label = req.fee_type_label,
+                is_active = req.is_active,
+                tenant_code = tenant_code
+            };
+
+            await db.ExecuteAsync(@"
+                INSERT INTO ot_fee_split_master
+                (fee_type_id, fee_type_label, is_active, tenant_code, isdeleted, created_at)
+                VALUES
+                (@fee_type_id, @fee_type_label, @is_active, @tenant_code, @isdeleted, @created_at)",
+                data);
+
+            return $"Success|Id:{data.fee_type_id}";
+        }
+
+        public async Task<string> UpdateOtFeeSplitMaster(UpdateOtFeeSplitMasterRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(@"
+                UPDATE ot_fee_split_master
+                SET fee_type_label = @fee_type_label, is_active = @is_active
+                WHERE fee_type_id = @fee_type_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { req.fee_type_id, req.fee_type_label, req.is_active, tenant_code });
+
+            return rows > 0 ? "Success" : "Fee type not found";
+        }
+
+        public async Task<List<OtFeeSplitMasterModel>> GetOtFeeSplitMasterList(string tenant_code, bool activeOnly = true)
+        {
+            using IDbConnection db = GetConnection();
+            string sql = @"SELECT * FROM ot_fee_split_master WHERE tenant_code = @tenant_code AND isdeleted = false";
+            if (activeOnly) sql += " AND is_active = true";
+            sql += " ORDER BY fee_type_label";
+
+            var res = await db.QueryAsync<OtFeeSplitMasterModel>(sql, new { tenant_code });
+            return res.ToList();
+        }
+
+        public async Task<string> DeleteOtFeeSplitMaster(Guid fee_type_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            int rows = await db.ExecuteAsync(
+                @"UPDATE ot_fee_split_master SET isdeleted = true WHERE fee_type_id = @fee_type_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { fee_type_id, tenant_code });
+            return rows > 0 ? "Success" : "Fee type not found";
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // OT FEE SPLIT ITEM (per request — freely addable, not one-per-type)
+        // ═══════════════════════════════════════════════════════
+        public async Task<string> AddOtFeeSplitItem(AddOtFeeSplitItemRequest req, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var surgeryReq = await db.QueryFirstOrDefaultAsync<OtSurgeryRequestModel>(
+                    @"SELECT * FROM ot_surgery_request WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { req.request_id, tenant_code }, tx);
+
+                if (surgeryReq == null)
+                {
+                    tx.Rollback();
+                    return "Surgery request not found";
+                }
+
+                var data = new OtFeeSplitItemModel
+                {
+                    request_id = req.request_id,
+                    fee_type_id = req.fee_type_id,
+                    staff_name = req.staff_name,
+                    dcode = req.dcode,
+                    amount = req.amount,
+                    remarks = req.remarks,
+                    tenant_code = tenant_code
+                };
+
+                await db.ExecuteAsync(@"
+                    INSERT INTO ot_fee_split_item
+                    (item_id, request_id, fee_type_id, staff_name, dcode, amount, is_billed, remarks,
+                     tenant_code, isdeleted, created_at)
+                    VALUES
+                    (@item_id, @request_id, @fee_type_id, @staff_name, @dcode, @amount, false, @remarks,
+                     @tenant_code, @isdeleted, @created_at)",
+                    data, tx);
+
+                await _unbilledCls.AddOtChargeRow(
+                    db, tx, surgeryReq.op_id, surgeryReq.ip_id, surgeryReq.custid, tenant_code,
+                    entryType: "OT_FEE_SPLIT",
+                    entryId: data.item_id.ToString(),
+                    itemName: $"{req.staff_name} - Fee Share",
+                    quantity: 1,
+                    rate: data.amount,
+                    amount: data.amount);
+
+                tx.Commit();
+                return $"Success|Id:{data.item_id}";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        // Joins each item with its fee-type label so the UI can render
+        // "Surgeon Fee - Dr. X - ₹5000" in one call, no second lookup.
+        public async Task<List<OtFeeSplitItemModel>> GetOtFeeSplitItems(Guid request_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var res = await db.QueryAsync<OtFeeSplitItemModel>(@"
+                SELECT i.*, m.fee_type_label
+                FROM ot_fee_split_item i
+                LEFT JOIN ot_fee_split_master m ON m.fee_type_id = i.fee_type_id
+                WHERE i.request_id = @request_id AND i.tenant_code = @tenant_code AND i.isdeleted = false
+                ORDER BY i.created_at",
+                new { request_id, tenant_code });
+            return res.ToList();
+        }
+
+        public async Task<string> DeleteOtFeeSplitItem(Guid item_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                int rows = await db.ExecuteAsync(
+                    @"UPDATE ot_fee_split_item SET isdeleted = true WHERE item_id = @item_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { item_id, tenant_code }, tx);
+
+                if (rows == 0)
+                {
+                    tx.Rollback();
+                    return "Fee split item not found";
+                }
+
+                await db.ExecuteAsync(
+                    @"DELETE FROM unbilledcharges
+                      WHERE entrytype = 'OT_FEE_SPLIT' AND entryid = @entryid AND tenant_code = @tenant_code
+                      AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { entryid = item_id.ToString(), tenant_code }, tx);
+
+                tx.Commit();
+                return "Success";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        // Reconciliation: total of all fee-split items vs. the request's single
+        // procedure_fee, so the UI can flag a mismatch before billing goes out.
+        public async Task<OtFeeSplitSummaryModel?> GetOtFeeSplitSummary(Guid request_id, string tenant_code)
+        {
+            using IDbConnection db = GetConnection();
+            var request = await db.QueryFirstOrDefaultAsync<OtSurgeryRequestModel>(
+                @"SELECT * FROM ot_surgery_request WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { request_id, tenant_code });
+
+            if (request == null) return null;
+
+            var items = await GetOtFeeSplitItems(request_id, tenant_code);
+            decimal total = items.Sum(i => i.amount);
+
+            return new OtFeeSplitSummaryModel
+            {
+                request_id = request_id,
+                procedure_fee = request.procedure_fee,
+                total_split_amount = total,
+                variance = (request.procedure_fee ?? 0) - total,
+                items = items
+            };
+        }
     }
 }

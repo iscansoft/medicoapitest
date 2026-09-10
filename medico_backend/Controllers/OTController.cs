@@ -681,5 +681,123 @@ namespace medico_backend.Controllers
             var res = await cls.GetOtAvailabilityRange(ot_id, from_date, to_date, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "OT not found" });
         }
+        // ═══════════════════════════════════════════════════════
+        // OT STAFF NOTES  (medicines / tools used, logged by staff)
+        // ═══════════════════════════════════════════════════════
+
+        [HttpPost("staff-note/add")]
+        public async Task<IActionResult> AddOtStaffNote([FromBody] AddOtStaffNoteRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.AddOtStaffNote(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpGet("staff-note/by-request")]
+        public async Task<IActionResult> GetOtStaffNotes([FromQuery] Guid request_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetOtStaffNotes(request_id, tenant));
+        }
+
+        [HttpGet("staff-note/delete")]
+        public async Task<IActionResult> DeleteOtStaffNote([FromQuery] Guid note_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.DeleteOtStaffNote(note_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // OT FEE SPLIT MASTER (admin-managed, tenant-wide)
+        // ═══════════════════════════════════════════════════════
+
+        [HttpPost("fee-split-master/add")]
+        public async Task<IActionResult> AddOtFeeSplitMaster([FromBody] AddOtFeeSplitMasterRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.AddOtFeeSplitMaster(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpPost("fee-split-master/update")]
+        public async Task<IActionResult> UpdateOtFeeSplitMaster([FromBody] UpdateOtFeeSplitMasterRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.UpdateOtFeeSplitMaster(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        [HttpGet("fee-split-master/list")]
+        public async Task<IActionResult> GetOtFeeSplitMasterList([FromQuery] bool activeOnly = true)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetOtFeeSplitMasterList(tenant, activeOnly));
+        }
+
+        [HttpGet("fee-split-master/delete")]
+        public async Task<IActionResult> DeleteOtFeeSplitMaster([FromQuery] Guid fee_type_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.DeleteOtFeeSplitMaster(fee_type_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // OT FEE SPLIT ITEM (per surgery request)
+        // ═══════════════════════════════════════════════════════
+
+        [HttpPost("fee-split/item/add")]
+        public async Task<IActionResult> AddOtFeeSplitItem([FromBody] AddOtFeeSplitItemRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.AddOtFeeSplitItem(req, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpGet("fee-split/item/by-request")]
+        public async Task<IActionResult> GetOtFeeSplitItems([FromQuery] Guid request_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            return Ok(await cls.GetOtFeeSplitItems(request_id, tenant));
+        }
+
+        [HttpGet("fee-split/item/delete")]
+        public async Task<IActionResult> DeleteOtFeeSplitItem([FromQuery] Guid item_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.DeleteOtFeeSplitItem(item_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        [HttpGet("fee-split/summary/{request_id}")]
+        public async Task<IActionResult> GetOtFeeSplitSummary(Guid request_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetOtFeeSplitSummary(request_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Surgery request not found" });
+        }
     }
 }
