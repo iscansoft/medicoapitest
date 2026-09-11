@@ -1052,7 +1052,7 @@ namespace medico_backend.Class
                 s.followup_date::timestamp AS followup_date,
                 s.followup_notes, s.is_consulted, s.sheet_status,
                 s.refer_to_ip,
-                s.referred_to_visiting_doctor, s.visiting_doctor_name,
+                s.referred_to_visiting_doctor,
                 s.tenant_code, s.isdeleted, s.created_at, s.updated_at,
                 c.name AS patient_name,
                 c.mobile,
