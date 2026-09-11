@@ -695,7 +695,7 @@ namespace medico_backend.Class
              advise, notes,
              followup_date::timestamp AS followup_date,
              followup_notes, is_consulted, refer_to_ip, sheet_status,
-             referred_to_visiting_doctor, visiting_doctor_name,
+             referred_to_visiting_doctor, 
              tenant_code, isdeleted, created_at, updated_at
       FROM   op_case_sheet
       WHERE  ((@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
