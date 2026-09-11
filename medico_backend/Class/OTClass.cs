@@ -2264,11 +2264,11 @@ namespace medico_backend.Class
                     return "Fee split item not found";
                 }
 
-                await db.ExecuteAsync(
-                    @"DELETE FROM unbilledcharges
-                      WHERE entrytype = 'OT_FEE_SPLIT' AND entryid = @entryid AND tenant_code = @tenant_code
-                      AND (billedstatus = false OR billedstatus IS NULL)",
-                    new { entryid = item_id.ToString(), tenant_code }, tx);
+                //await db.ExecuteAsync(
+                //    @"DELETE FROM unbilledcharges
+                //      WHERE entrytype = 'OT_FEE_SPLIT' AND entryid = @entryid AND tenant_code = @tenant_code
+                //      AND (billedstatus = false OR billedstatus IS NULL)",
+                //    new { entryid = item_id.ToString(), tenant_code }, tx);
 
                 tx.Commit();
                 return "Success";
