@@ -2212,14 +2212,14 @@ namespace medico_backend.Class
                      @tenant_code, @isdeleted, @created_at)",
                     data, tx);
 
-                await _unbilledCls.AddOtChargeRow(
-                    db, tx, surgeryReq.op_id, surgeryReq.ip_id, surgeryReq.custid, tenant_code,
-                    entryType: "OT_FEE_SPLIT",
-                    entryId: data.item_id.ToString(),
-                    itemName: $"{req.staff_name} - Fee Share",
-                    quantity: 1,
-                    rate: data.amount,
-                    amount: data.amount);
+                //await _unbilledCls.AddOtChargeRow(
+                //    db, tx, surgeryReq.op_id, surgeryReq.ip_id, surgeryReq.custid, tenant_code,
+                //    entryType: "OT_FEE_SPLIT",
+                //    entryId: data.item_id.ToString(),
+                //    itemName: $"{req.staff_name} - Fee Share",
+                //    quantity: 1,
+                //    rate: data.amount,
+                //    amount: data.amount);
 
                 tx.Commit();
                 return $"Success|Id:{data.item_id}";
