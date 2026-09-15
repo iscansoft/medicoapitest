@@ -218,9 +218,11 @@ namespace medico_backend.InventoryModel
 
     public string? companycode { get; set; }
 
-    public long grncode { get; set; }
-}
-public class purchase_detail
+        public long grncode { get; set; }
+        public string? chequeno { get; set; }     // NEW
+        public string? accountno { get; set; }
+    }
+    public class purchase_detail
 {
     public long purchasedetailcode { get; set; }
 
@@ -767,13 +769,12 @@ public class purchase_detail
         public long? warehousecode { get; set; }
     }
 
-    // Step 2 input: user enters returnqty + packsize
-    public class purchase_return_request
+    // Step 2 input: ONE line item inside a multi-item return submission
+    public class purchase_return_item_request
     {
         public long purchasedetailcode { get; set; }
         public long purchasecode { get; set; }
         public long itemcode { get; set; }
-        public long vendorcode { get; set; }
         public string batchno { get; set; }
 
         public decimal returnqty { get; set; }
@@ -781,11 +782,18 @@ public class purchase_detail
 
         public long? warehousecode { get; set; }
         public string? remarks { get; set; }
-
-        public long? usercode { get; set; }
-        public string? tenantcode { get; set; }
     }
 
+    // Step 2 input: the whole submission — one vendor, many items
+    public class purchase_return_request
+    {
+        public long vendorcode { get; set; }
+        public long? usercode { get; set; }
+        public string? tenantcode { get; set; }
+        public string? remarks { get; set; }   // header-level remark, optional
+
+        public List<purchase_return_item_request> items { get; set; } = new();
+    }
     // Persisted return record
     [Table("purchase_return_master")]
     public class purchase_return_master
@@ -1172,6 +1180,8 @@ public long? customercode { get; set; }
         public decimal netamount { get; set; }
         public string? paymentmode { get; set; }
         public string? paymentstatus { get; set; }
+        public string? chequeno { get; set; }     // NEW
+        public string? accountno { get; set; }
         public DateTime createddate { get; set; }
     }
 
@@ -1180,6 +1190,9 @@ public long? customercode { get; set; }
     {
         public List<long> purchasecodes { get; set; } = new();
         public string paymentstatus { get; set; } = string.Empty;
+        public string? paymentmode { get; set; }   // NEW
+        public string? chequeno { get; set; }      // NEW
+        public string? accountno { get; set; }     // NEW
         public long? usercode { get; set; }
     }
     public class consumption_master

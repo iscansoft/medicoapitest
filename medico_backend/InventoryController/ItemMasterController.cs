@@ -1582,7 +1582,6 @@ namespace medico_backend.InventoryController
             }
         }
 
-        // Step 2: submit returnqty + packsize → computes amount, updates stock + purchase_detail
         [HttpPost("insertpurchasereturn")]
         public async Task<IActionResult> InsertPurchaseReturn([FromBody] purchase_return_request request)
         {
@@ -1593,13 +1592,16 @@ namespace medico_backend.InventoryController
 
                 request.tenantcode = tenantcode;
 
-                var result = await itemclass.InsertPurchaseReturn(request);
+                if (request.items == null || !request.items.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one return item is required." });
+
+                var returncodes = await itemclass.InsertPurchaseReturn(request);
 
                 return Ok(new
                 {
                     Status = "Success",
-                    Message = "Purchase return processed successfully",
-                    PurchaseReturnCode = result
+                    Message = $"{returncodes.Count} purchase return item(s) processed successfully",
+                    PurchaseReturnCodes = returncodes
                 });
             }
             catch (Exception ex)
@@ -1607,8 +1609,8 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
-         // Step 2: Submit Sales Return
- [HttpPost("insertsalesreturn")]
+        // Step 2: Submit Sales Return
+        [HttpPost("insertsalesreturn")]
  public async Task<IActionResult> InsertSalesReturn([FromBody] sales_return_request request)
  {
      try
@@ -2567,8 +2569,20 @@ namespace medico_backend.InventoryController
                 if (string.IsNullOrWhiteSpace(request.paymentstatus))
                     return BadRequest(new { Status = "Failed", Message = "paymentstatus is required" });
 
+                // If mode is CHEQUE, chequeno should be supplied
+                if (string.Equals(request.paymentmode, "CHEQUE", StringComparison.OrdinalIgnoreCase)
+                    && string.IsNullOrWhiteSpace(request.chequeno))
+                {
+                    return BadRequest(new { Status = "Failed", Message = "chequeno is required when paymentmode is CHEQUE" });
+                }
+
                 var updatedCount = await itemclass.UpdateMultiplePurchaseStatus(
-                    request.purchasecodes, request.paymentstatus, tenantcode);
+                    request.purchasecodes,
+                    request.paymentstatus,
+                    request.paymentmode,
+                    request.chequeno,
+                    request.accountno,
+                    tenantcode);
 
                 return updatedCount > 0
                     ? Ok(new { Status = "Success", Message = $"{updatedCount} purchase(s) updated", UpdatedCount = updatedCount })

@@ -3413,18 +3413,25 @@ WHERE stockcode=@stockcode;";
                 query, new { itemcode, batchno, tenantcode });
         }
 
-        public async Task<long> InsertPurchaseReturn(purchase_return_request request)
+        public async Task<List<long>> InsertPurchaseReturn(purchase_return_request request)
         {
+            if (request.items == null || !request.items.Any())
+                throw new Exception("At least one return item is required.");
+
             using IDbConnection db = new NpgsqlConnection(con);
             db.Open();
 
             using var transaction = db.BeginTransaction();
+            var returncodes = new List<long>();
+
             try
             {
-                // ==========================
-                // 1) Pull purchase_detail row (for rate / audit fields)
-                // ==========================
-                var detail = await db.QueryFirstOrDefaultAsync<purchase_detail>(@"
+                foreach (var item in request.items)
+                {
+                    // ==========================
+                    // 1) Pull purchase_detail row (for rate / audit fields)
+                    // ==========================
+                    var detail = await db.QueryFirstOrDefaultAsync<purchase_detail>(@"
     SELECT
         purchasedetailcode, purchasecode, itemcode, quantity, freequantity,
         uomcode, rate, discountpercentage, discountamount, taxpercentage, taxamount,
@@ -3437,17 +3444,17 @@ WHERE stockcode=@stockcode;";
     FROM public.purchase_detail
     WHERE purchasedetailcode = @purchasedetailcode
       AND tenantcode = @tenantcode;",
-                    new { request.purchasedetailcode, request.tenantcode }, transaction);
+                        new { item.purchasedetailcode, request.tenantcode }, transaction);
 
-                if (detail == null)
-                    throw new Exception("Purchase detail not found");
+                    if (detail == null)
+                        throw new Exception($"Purchase detail not found for purchasedetailcode={item.purchasedetailcode}");
 
-                decimal totalqty = request.returnqty * request.packsize;
+                    decimal totalqty = item.returnqty * item.packsize;
 
-                // ==========================
-                // 1b) Validate against ACTUAL stock (same source the lookup screen shows)
-                // ==========================
-                var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
+                    // ==========================
+                    // 1b) Validate against ACTUAL stock
+                    // ==========================
+                    var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
     SELECT stockcode, closingstock, unitcost
     FROM public.stock_master
     WHERE itemcode = @itemcode
@@ -3455,47 +3462,47 @@ WHERE stockcode=@stockcode;";
       AND tenantcode = @tenantcode
       AND deleted = false
       AND (@warehousecode IS NULL OR warehousecode = @warehousecode);",
-                    new
-                    {
-                        request.itemcode,
-                        request.batchno,
-                        request.tenantcode,
-                        request.warehousecode
-                    }, transaction);
+                        new
+                        {
+                            item.itemcode,
+                            item.batchno,
+                            request.tenantcode,
+                            item.warehousecode
+                        }, transaction);
 
-                if (stock == null)
-                    throw new Exception($"Stock not found for item {request.itemcode}, batch {request.batchno}");
+                    if (stock == null)
+                        throw new Exception($"Stock not found for item {item.itemcode}, batch {item.batchno}");
 
-                if (totalqty > stock.closingstock)
-                    throw new Exception($"Cannot return {totalqty}; only {stock.closingstock} available");
+                    if (totalqty > stock.closingstock)
+                        throw new Exception($"Cannot return {totalqty} for item {item.itemcode}; only {stock.closingstock} available");
 
-                decimal amount = totalqty * detail.rate;
+                    decimal amount = totalqty * detail.rate;
 
-                // ==========================
-                // 2) Update purchase_detail.returnedqty (audit trail against the batch line)
-                // ==========================
-                await db.ExecuteAsync(@"
+                    // ==========================
+                    // 2) Update purchase_detail.returnedqty
+                    // ==========================
+                    await db.ExecuteAsync(@"
             UPDATE public.purchase_detail
             SET returnedqty = COALESCE(returnedqty,0) + @totalqty
             WHERE purchasedetailcode = @purchasedetailcode;",
-                    new { totalqty, request.purchasedetailcode }, transaction);
+                        new { totalqty, item.purchasedetailcode }, transaction);
 
-                // ==========================
-                // 3) Update stock_master by stockcode (exact row we validated against)
-                // ==========================
-                await db.ExecuteAsync(@"
+                    // ==========================
+                    // 3) Update stock_master by stockcode
+                    // ==========================
+                    await db.ExecuteAsync(@"
             UPDATE public.stock_master
             SET returnqty    = COALESCE(returnqty,0) + @totalqty,
                 closingstock = closingstock - @totalqty,
                 stockvalue   = (closingstock - @totalqty) * unitcost,
                 modifieddate = CURRENT_TIMESTAMP
             WHERE stockcode = @stockcode;",
-                    new { totalqty, stockcode = stock.stockcode }, transaction);
+                        new { totalqty, stockcode = stock.stockcode }, transaction);
 
-                // ==========================
-                // 4) Insert the return record
-                // ==========================
-                long returncode = await db.ExecuteScalarAsync<long>(@"
+                    // ==========================
+                    // 4) Insert the return record for THIS item
+                    // ==========================
+                    long returncode = await db.ExecuteScalarAsync<long>(@"
             INSERT INTO public.purchase_return_master
             (
                 purchasedetailcode, purchasecode, itemcode, vendorcode, batchno,
@@ -3511,26 +3518,29 @@ WHERE stockcode=@stockcode;";
                 true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
             )
             RETURNING purchasereturncode;",
-                    new
-                    {
-                        request.purchasedetailcode,
-                        request.purchasecode,
-                        request.itemcode,
-                        request.vendorcode,
-                        request.batchno,
-                        request.returnqty,
-                        request.packsize,
-                        totalqty,
-                        rate = detail.rate,
-                        amount,
-                        request.warehousecode,
-                        request.remarks,
-                        request.usercode,
-                        request.tenantcode
-                    }, transaction);
+                        new
+                        {
+                            item.purchasedetailcode,
+                            item.purchasecode,
+                            item.itemcode,
+                            request.vendorcode,
+                            item.batchno,
+                            item.returnqty,
+                            item.packsize,
+                            totalqty,
+                            rate = detail.rate,
+                            amount,
+                            item.warehousecode,
+                            remarks = item.remarks ?? request.remarks,
+                            request.usercode,
+                            request.tenantcode
+                        }, transaction);
+
+                    returncodes.Add(returncode);
+                }
 
                 transaction.Commit();
-                return returncode;
+                return returncodes;
             }
             catch (Exception ex)
             {
@@ -6687,6 +6697,8 @@ AND deleted = false;";
             m.netamount,
             m.paymentmode,
             m.paymentstatus,
+            m.chequeno,
+            m.accountno,
             m.createddate::timestamp AS createddate
         FROM public.purchase_master m
         LEFT JOIN public.vendor_master v ON v.vendorcode = m.vendorcode
@@ -6714,9 +6726,12 @@ AND deleted = false;";
 
         // ─── PURCHASE BULK STATUS UPDATE ──────────────────────────────────────────────
         public async Task<int> UpdateMultiplePurchaseStatus(
-            List<long> purchasecodes,
-            string paymentstatus,
-            string tenantcode)
+    List<long> purchasecodes,
+    string paymentstatus,
+    string? paymentmode,
+    string? chequeno,
+    string? accountno,
+    string tenantcode)
         {
             using IDbConnection db = new NpgsqlConnection(con);
             db.Open();
@@ -6724,6 +6739,9 @@ AND deleted = false;";
             string query = @"
         UPDATE public.purchase_master
         SET paymentstatus = @paymentstatus,
+            paymentmode   = COALESCE(@paymentmode, paymentmode),
+            chequeno      = COALESCE(@chequeno, chequeno),
+            accountno     = COALESCE(@accountno, accountno),
             modifieddate  = CURRENT_TIMESTAMP
         WHERE purchasecode = ANY(@purchasecodes)
           AND tenantcode = @tenantcode
@@ -6732,6 +6750,9 @@ AND deleted = false;";
             int rows = await db.ExecuteAsync(query, new
             {
                 paymentstatus,
+                paymentmode,
+                chequeno,
+                accountno,
                 purchasecodes = purchasecodes.ToArray(),
                 tenantcode
             });
