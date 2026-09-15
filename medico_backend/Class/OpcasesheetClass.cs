@@ -137,7 +137,7 @@ namespace medico_backend.Class
        chief_complaint, symptoms, examination,
        advise, notes, followup_date, followup_notes,
        is_consulted, refer_to_ip, sheet_status,
-       referred_to_visiting_doctor,  
+       referred_to_visiting_doctor, referred_to_operation, 
        tenant_code, isdeleted, created_at, updated_at)
       VALUES
       (@sheet_id, CAST(@op_id AS uuid), CAST(@ip_id AS uuid), @custid, @dcode, NOW()::date,
@@ -163,6 +163,7 @@ namespace medico_backend.Class
         req.refer_to_ip,          // <-- new
         req.sheet_status,
         req.referred_to_visiting_doctor,   // NEW
+        req.referred_to_operation,
         tenant_code
     }, tx);
                 }
@@ -189,6 +190,7 @@ namespace medico_backend.Class
              sheet_status    = @sheet_status,
              refer_to_ip     = @refer_to_ip,
              referred_to_visiting_doctor = @referred_to_visiting_doctor,  -- NEW
+             referred_to_operation       = @referred_to_operation,
              updated_at      = NOW()
              WHERE  sheet_id    = @sheet_id
       AND    tenant_code = @tenant_code",
@@ -205,6 +207,7 @@ namespace medico_backend.Class
         req.sheet_status,
         req.refer_to_ip,          // <-- new
         req.referred_to_visiting_doctor,   // NEW
+        req.referred_to_operation,
         tenant_code
     }, tx);
                 }
@@ -695,7 +698,7 @@ namespace medico_backend.Class
              advise, notes,
              followup_date::timestamp AS followup_date,
              followup_notes, is_consulted, refer_to_ip, sheet_status,
-             referred_to_visiting_doctor, 
+             referred_to_visiting_doctor, referred_to_operation,
              tenant_code, isdeleted, created_at, updated_at
       FROM   op_case_sheet
       WHERE  ((@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
@@ -726,7 +729,7 @@ namespace medico_backend.Class
                 is_consulted = sheet.is_consulted,
                 refer_to_ip = sheet.refer_to_ip,      // <-- new
                 referred_to_visiting_doctor = sheet.referred_to_visiting_doctor,  // NEW
-
+                referred_to_operation = sheet.referred_to_operation,
                 sheet_status = sheet.sheet_status
             };
             vm.visiting_doctor_list = (await db.QueryAsync<OpCaseSheetVisitingDoctorModel>(
@@ -1053,6 +1056,7 @@ namespace medico_backend.Class
                 s.followup_notes, s.is_consulted, s.sheet_status,
                 s.refer_to_ip,
                 s.referred_to_visiting_doctor,
+                s.referred_to_operation, 
                 s.tenant_code, s.isdeleted, s.created_at, s.updated_at,
                 c.name AS patient_name,
                 c.mobile,
@@ -1099,7 +1103,8 @@ namespace medico_backend.Class
                     is_consulted = s.is_consulted,
                     sheet_status = s.sheet_status,
                     refer_to_ip = s.refer_to_ip,
-                    referred_to_visiting_doctor = s.referred_to_visiting_doctor
+                    referred_to_visiting_doctor = s.referred_to_visiting_doctor,
+                    referred_to_operation = s.referred_to_operation
                 };
                 vm.visiting_doctor_list = (await db.QueryAsync<OpCaseSheetVisitingDoctorModel>(
     @"SELECT vd.* FROM op_case_sheet_visiting_doctors vd
