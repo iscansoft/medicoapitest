@@ -84,7 +84,7 @@ namespace Medico_Backend.Class
 
                 var existing = await db.QueryFirstOrDefaultAsync<PaymodeMasterModel>(
                     @"SELECT * FROM public.paymode_master
-                      WHERE pmcode = @pmcode AND tenant_code = @tenant_code",
+              WHERE pmcode = @pmcode AND tenant_code = @tenant_code",
                     new { data.pmcode, data.tenant_code });
 
                 if (existing == null) return "No data found";
@@ -92,8 +92,25 @@ namespace Medico_Backend.Class
                 data.ibsdate = DateTime.UtcNow;
                 data.entereddate = existing.entereddate; // preserve original entered date
 
-                var res = await db.UpdateAsync(data);
-                return res ? "Success" : "No data found";
+                string sql = @"
+            UPDATE public.paymode_master
+            SET
+                orderno      = @orderno,
+                shortname    = @shortname,
+                name         = @name,
+                durationtime = @durationtime,
+                duration     = @duration,
+                description  = @description,
+                footer       = @footer,
+                usercode     = @usercode,
+                computercode = @computercode,
+                ibsdate      = @ibsdate
+            WHERE pmcode      = @pmcode
+              AND tenant_code = @tenant_code;";   // ← BOTH keys now scope the update
+
+                int rows = await db.ExecuteAsync(sql, data);
+
+                return rows > 0 ? "Success" : "No data found";
             }
             catch (Exception ex)
             {

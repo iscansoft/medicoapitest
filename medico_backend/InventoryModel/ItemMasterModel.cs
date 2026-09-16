@@ -606,6 +606,8 @@ namespace medico_backend.InventoryModel
      public string? address { get; set; }        // Patient Address
 
      public string? consultant { get; set; }     // Consultant Name
+     public int? prescribeddays { get; set; }   // total days prescribed by doctor
+     public int? converteddays { get; set; }
 
      public decimal grossamount { get; set; }
 

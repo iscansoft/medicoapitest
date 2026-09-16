@@ -144,7 +144,7 @@ namespace medico_backend.Class
        @chief_complaint, @symptoms, @examination,
        @advise, @notes, @followup_date, @followup_notes,
        false, @refer_to_ip, @sheet_status,
-       @referred_to_visiting_doctor,
+       @referred_to_visiting_doctor,@referred_to_operation,
        @tenant_code, false, NOW(), NOW())",
     new
     {
