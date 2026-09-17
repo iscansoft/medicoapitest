@@ -3554,19 +3554,25 @@ WHERE stockcode=@stockcode;";
                 throw new Exception("Purchase return failed: " + ex.Message);
             }
         }
-        public async Task<long> InsertSalesReturn(sales_return_request request)
+        public async Task<List<long>> InsertSalesReturn(sales_return_request request)
         {
+            if (request.items == null || !request.items.Any())
+                throw new Exception("At least one return item is required.");
+
             using IDbConnection db = new NpgsqlConnection(con);
             db.Open();
 
             using var transaction = db.BeginTransaction();
+            var returncodes = new List<long>();
 
             try
             {
-                // ==========================
-                // 1) Pull sales_detail row (for rate / audit fields)
-                // ==========================
-                var detail = await db.QueryFirstOrDefaultAsync<sales_detail>(@"
+                foreach (var item in request.items)
+                {
+                    // ==========================
+                    // 1) Pull sales_detail row (for rate / audit fields)
+                    // ==========================
+                    var detail = await db.QueryFirstOrDefaultAsync<sales_detail>(@"
 SELECT
     salesdetailcode, salescode, itemcode, quantity, freequantity, uomcode, rate,
     discountpercentage, discountamount, taxpercentage, taxamount,
@@ -3576,17 +3582,17 @@ SELECT
 FROM public.sales_detail
 WHERE salesdetailcode = @salesdetailcode
   AND tenantcode = @tenantcode;",
-                    new { request.salesdetailcode, request.tenantcode }, transaction);
+                        new { item.salesdetailcode, request.tenantcode }, transaction);
 
-                if (detail == null)
-                    throw new Exception("Sales detail not found.");
+                    if (detail == null)
+                        throw new Exception($"Sales detail not found for salesdetailcode={item.salesdetailcode}");
 
-                decimal totalqty = request.returnqty * request.packsize;
+                    decimal totalqty = item.returnqty * item.packsize;
 
-                // ==========================
-                // 1b) Validate against ACTUAL stock (same source the lookup screen shows)
-                // ==========================
-                var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
+                    // ==========================
+                    // 1b) Validate against ACTUAL stock
+                    // ==========================
+                    var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
     SELECT stockcode, closingstock, unitcost
     FROM public.stock_master
     WHERE itemcode = @itemcode
@@ -3594,48 +3600,48 @@ WHERE salesdetailcode = @salesdetailcode
       AND tenantcode = @tenantcode
       AND deleted = false
       AND (@warehousecode IS NULL OR warehousecode = @warehousecode);",
-                    new
-                    {
-                        request.itemcode,
-                        request.batchno,
-                        request.tenantcode,
-                        request.warehousecode
-                    }, transaction);
+                        new
+                        {
+                            item.itemcode,
+                            item.batchno,
+                            request.tenantcode,
+                            item.warehousecode
+                        }, transaction);
 
-                if (stock == null)
-                    throw new Exception($"Stock not found for item {request.itemcode}, batch {request.batchno}");
+                    if (stock == null)
+                        throw new Exception($"Stock not found for item {item.itemcode}, batch {item.batchno}");
 
-                if (totalqty > stock.closingstock)
-                    throw new Exception($"Cannot return {totalqty}. Only {stock.closingstock} available.");
+                    if (totalqty > stock.closingstock)
+                        throw new Exception($"Cannot return {totalqty} for item {item.itemcode}; only {stock.closingstock} available");
 
-                decimal amount = totalqty * detail.rate;
+                    decimal amount = totalqty * detail.rate;
 
-                // ==========================
-                // 2) Update sales_detail.returnedqty (audit trail against the sold line)
-                // ==========================
-                await db.ExecuteAsync(@"
+                    // ==========================
+                    // 2) Update sales_detail.returnedqty
+                    // ==========================
+                    await db.ExecuteAsync(@"
 UPDATE public.sales_detail
 SET returnedqty = COALESCE(returnedqty,0) + @totalqty
 WHERE salesdetailcode = @salesdetailcode;",
-                    new { totalqty, request.salesdetailcode }, transaction);
+                        new { totalqty, item.salesdetailcode }, transaction);
 
-                // ==========================
-                // 3) Update stock_master by stockcode (exact row we validated against)
-                // ==========================
-                await db.ExecuteAsync(@"
+                    // ==========================
+                    // 3) Update stock_master by stockcode
+                    // ==========================
+                    await db.ExecuteAsync(@"
 UPDATE public.stock_master
 SET
-    damagedqty    = COALESCE(damagedqty,0) + @totalqty,
+    damagedqty   = COALESCE(damagedqty,0) + @totalqty,
     closingstock = closingstock + @totalqty,
     stockvalue   = (closingstock + @totalqty) * unitcost,
     modifieddate = CURRENT_TIMESTAMP
 WHERE stockcode = @stockcode;",
-                    new { totalqty, stockcode = stock.stockcode }, transaction);
+                        new { totalqty, stockcode = stock.stockcode }, transaction);
 
-                // ==========================
-                // 4) Insert the return record
-                // ==========================
-                long returncode = await db.ExecuteScalarAsync<long>(@"
+                    // ==========================
+                    // 4) Insert the return record for THIS item
+                    // ==========================
+                    long returncode = await db.ExecuteScalarAsync<long>(@"
 INSERT INTO public.sales_return_master
 (
     salesdetailcode, salescode, itemcode, customercode, batchno,
@@ -3651,32 +3657,34 @@ VALUES
     true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
 )
 RETURNING salesreturncode;",
-                    new
-                    {
-                        request.salesdetailcode,
-                        request.salescode,
-                        request.itemcode,
-                        request.customercode,
-                        request.batchno,
-                        request.returnqty,
-                        request.packsize,
-                        totalqty,
-                        rate = detail.rate,
-                        amount,
-                        request.warehousecode,
-                        request.remarks,
-                        request.usercode,
-                        request.tenantcode
-                    }, transaction);
+                        new
+                        {
+                            item.salesdetailcode,
+                            item.salescode,
+                            item.itemcode,
+                            request.customercode,
+                            item.batchno,
+                            item.returnqty,
+                            item.packsize,
+                            totalqty,
+                            rate = detail.rate,
+                            amount,
+                            item.warehousecode,
+                            remarks = item.remarks ?? request.remarks,
+                            request.usercode,
+                            request.tenantcode
+                        }, transaction);
+
+                    returncodes.Add(returncode);
+                }
 
                 transaction.Commit();
-
-                return returncode;
+                return returncodes;
             }
             catch (Exception ex)
             {
                 transaction.Rollback();
-                throw new Exception("Sales Return Failed : " + ex.Message);
+                throw new Exception("Sales return failed: " + ex.Message);
             }
         }
         public async Task<IEnumerable<sales_return_lookup_result>> GetSalesReturnLookup(

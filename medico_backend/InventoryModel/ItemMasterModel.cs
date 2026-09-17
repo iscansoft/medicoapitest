@@ -824,6 +824,7 @@ namespace medico_backend.InventoryModel
         public long? usercode { get; set; }
         public string? tenantcode { get; set; }
     }
+
        public class sales_return_lookup_request
    {
        public long itemcode { get; set; }
@@ -862,31 +863,32 @@ public long? customercode { get; set; }
 
        public long? warehousecode { get; set; }
    }
-   public class sales_return_request
-   {
-       public long salesdetailcode { get; set; }
+   
+    // Step 2 input: ONE line item inside a multi-item sales return submission
+    public class sales_return_item_request
+    {
+        public long salesdetailcode { get; set; }
+        public long salescode { get; set; }
+        public long itemcode { get; set; }
+        public string? batchno { get; set; }
 
-       public long salescode { get; set; }
+        public decimal returnqty { get; set; }
+        public decimal packsize { get; set; }
 
-       public long itemcode { get; set; }
-
-       public long? customercode { get; set; }
-
-       public string? batchno { get; set; }
-
-       public decimal returnqty { get; set; }
-
-       public decimal packsize { get; set; }
-
-       public long? warehousecode { get; set; }
-
-       public string? remarks { get; set; }
-
-       public long? usercode { get; set; }
-
-       public string? tenantcode { get; set; }
+        public long? warehousecode { get; set; }
+        public string? remarks { get; set; }
     }
 
+    // Step 2 input: the whole submission — one customer, many items
+    public class sales_return_request
+    {
+        public long? customercode { get; set; }
+        public long? usercode { get; set; }
+        public string? tenantcode { get; set; }
+        public string? remarks { get; set; }   // header-level remark, optional
+
+        public List<sales_return_item_request> items { get; set; } = new();
+    }
     public class sales_return_master
     {
 

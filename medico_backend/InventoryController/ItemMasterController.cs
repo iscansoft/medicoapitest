@@ -1609,34 +1609,32 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
-        // Step 2: Submit Sales Return
         [HttpPost("insertsalesreturn")]
- public async Task<IActionResult> InsertSalesReturn([FromBody] sales_return_request request)
- {
-     try
-     {
-         var tenantcode = GetTenantCode();
-         if (string.IsNullOrEmpty(tenantcode))
-             return MissingTenantCode();
+        public async Task<IActionResult> InsertSalesReturn([FromBody] sales_return_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode))
+                    return MissingTenantCode();
 
-         request.tenantcode = tenantcode;
+                request.tenantcode = tenantcode;
 
-         var result = await itemclass.InsertSalesReturn(request);
+                if (request.items == null || !request.items.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one return item is required." });
 
-         return Ok(new
-         {
-             Status = "Success",
-             Message = "Sales return processed successfully",
-             SalesReturnCode = result
-         });
-     }
-     catch (Exception ex)
-     {
-         return BadRequest(new
-         {
-             Status = "Failed",
-             Message = ex.Message
-         });
+                var returncodes = await itemclass.InsertSalesReturn(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = $"{returncodes.Count} sales return item(s) processed successfully",
+                    SalesReturnCodes = returncodes
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
         [HttpGet("getsalesreturn")]
