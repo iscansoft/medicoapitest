@@ -682,10 +682,10 @@ namespace medico_backend.InventoryModel
 
      public decimal soldqty { get; set; }
       public decimal returnedqty { get; set; }
+        public int days { get; set; }
 
-     
 
-     public long? warehousecode { get; set; }
+        public long? warehousecode { get; set; }
 
      public string? tenantcode { get; set; }
  }

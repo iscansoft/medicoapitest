@@ -2925,6 +2925,7 @@ INSERT INTO sales_detail
     manufacturingdate,
     expirydate,
     soldqty,
+    days,
     warehousecode,
     tenantcode
 )
@@ -2946,6 +2947,7 @@ VALUES
     @manufacturingdate,
     @expirydate,
     @soldqty,
+    @days,
     @warehousecode,
     @tenantcode
 );";
@@ -3083,7 +3085,7 @@ WHERE stockcode=@stockcode;";
                         taxpercentage, taxamount,
                         amount, totalamount, batchno,
                         manufacturingdate, expirydate,
-                        soldqty, returnedqty, warehousecode,
+                        soldqty, returnedqty,days, warehousecode,
                         tenantcode
                     )
                     VALUES
@@ -3094,7 +3096,7 @@ WHERE stockcode=@stockcode;";
                         @taxpercentage, @taxamount,
                         @amount, @totalamount, @batchno,
                         @manufacturingdate, @expirydate,
-                        @soldqty, @returnedqty, @warehousecode,
+                        @soldqty, @returnedqty,@days, @warehousecode,
                         @tenantcode
                     )";
 
