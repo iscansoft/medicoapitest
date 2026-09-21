@@ -53,6 +53,7 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS preparedby_description TEXT;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS preparedby_signature TEXT;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS inspectedby_name TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS payment_required_online_reg BOOLEAN DEFAULT true;
                 ";
                 await db.ExecuteAsync(sql);
             }

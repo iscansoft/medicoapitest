@@ -752,28 +752,27 @@ VALUES
 
                 // STEP 1.5 — Mark all active bookings in the old slot as RESCHEDULE_PENDING
                 string markPendingSql = @"
-                    UPDATE appointment_booking ab
-                    SET    booking_status = 'RESCHEDULE_PENDING',
-                           updated_at     = now()
-                    FROM   doctor_appointment_slot_details sd
-                    WHERE  sd.slot_detail_id = ab.slot_detail_id
-                    AND    sd.slot_master_id = @slot_master_id
-                    AND    ab.tenant_code    = @tenant_code
-                    AND    ab.isdeleted      = false
-                    AND    ab.booking_status NOT IN ('CANCELLED', 'VISITED', 'RESCHEDULE_PENDING')
-                    AND    NOT EXISTS (
-                    SELECT 1 FROM op_registration op
-                    LEFT JOIN unbilledcharges uc
-                    ON uc.op_id = op.op_id::text
-                    AND uc.tenant_code = op.tenant_code
-                    WHERE op.booking_id = ab.booking_id
-                    AND   op.tenant_code = ab.tenant_code
-                    AND   op.isdeleted = false
-                    AND   (
-                    op.visit_status = 'COMPLETED'
-                    OR uc.is_billed = true          -- or uc.status = 'PAID' / uc.bill_id IS NOT NULL, whatever the actual paid-flag column is
-                )
-            )";
+    UPDATE appointment_booking ab
+    SET    booking_status = 'RESCHEDULE_PENDING',
+           updated_at     = now()
+    FROM   doctor_appointment_slot_details sd
+    WHERE  sd.slot_detail_id = ab.slot_detail_id
+    AND    sd.slot_master_id = @slot_master_id
+    AND    ab.tenant_code    = @tenant_code
+    AND    ab.isdeleted      = false
+    AND    ab.booking_status NOT IN ('CANCELLED', 'VISITED', 'RESCHEDULE_PENDING')
+    AND    NOT EXISTS (
+        SELECT 1
+        FROM   op_registration op
+        LEFT JOIN unbilledcharges uc
+               ON uc.opvisitid   = op.op_id::text
+              AND uc.entrytype   = 'CONSULTATION'
+              AND uc.tenant_code = op.tenant_code
+        WHERE  op.booking_id  = ab.booking_id
+        AND    op.tenant_code = ab.tenant_code
+        AND    op.isdeleted   = false
+        AND    (op.visit_status = 'COMPLETED' OR uc.billedstatus = true)
+    )";
 
 
                 await db.ExecuteAsync(markPendingSql, new
