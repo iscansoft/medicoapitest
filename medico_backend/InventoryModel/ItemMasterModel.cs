@@ -610,8 +610,8 @@ namespace medico_backend.InventoryModel
      public int? converteddays { get; set; }
 
      public decimal grossamount { get; set; }
-
-     public decimal discountamount { get; set; }
+        public decimal discountpercentage { get; set; }
+        public decimal discountamount { get; set; }
 
      public decimal taxamount { get; set; }
      public decimal roundoff { get; set; }
