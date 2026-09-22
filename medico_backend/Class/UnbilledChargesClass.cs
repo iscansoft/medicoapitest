@@ -656,5 +656,45 @@ namespace medico_backend.Class
 
             return ((int)test.tcode, (decimal)(test.amount ?? 0));
         }
+        public async Task<string> DeleteUnbilledForOp(string op_id, string tenant_code)
+        {
+            try
+            {
+                using var db = GetConnection();
+
+                // Debug: see exactly what's sitting in the table for this op_id first,
+                // regardless of tenant/entrytype/billedstatus filters — tells us if the
+                // row exists at all vs. exists but doesn't match on one of the filters.
+                var probe = await db.QueryAsync<dynamic>(
+                    @"SELECT unbilledid, entrytype, opvisitid, tenant_code, billedstatus
+              FROM unbilledcharges
+              WHERE TRIM(opvisitid) = TRIM(@op_id)",
+                    new { op_id });
+
+                foreach (var p in probe)
+                {
+                    Console.WriteLine($"[DELETE-UNBILL-PROBE] unbilledid={p.unbilledid} entrytype='{p.entrytype}' " +
+                        $"opvisitid='{p.opvisitid}' tenant_code='{p.tenant_code}' billedstatus={p.billedstatus} " +
+                        $"(expecting tenant_code='{tenant_code}')");
+                }
+
+                int rows = await db.ExecuteAsync(
+                    @"DELETE FROM unbilledcharges
+              WHERE TRIM(opvisitid)    = TRIM(@op_id)
+              AND   TRIM(entrytype)    = 'CONSULTATION'
+              AND   TRIM(tenant_code)  = TRIM(@tenant_code)
+              AND   (billedstatus = false OR billedstatus IS NULL)",
+                    new { op_id, tenant_code });
+
+                Console.WriteLine($"[DELETE-UNBILL] op_id={op_id} tenant_code={tenant_code} rowsDeleted={rows}");
+
+                return $"Success|Deleted:{rows}";
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DELETE-UNBILL-ERROR] {ex.Message}");
+                return ex.Message;
+            }
+        }
     }
 }

@@ -1738,7 +1738,15 @@ AND b.tenant_code = @tenant_code
 
                 int rows = await db.ExecuteAsync(sql, new { req.op_id, notes, tenant_code });
 
-                return rows > 0 ? "Success" : "Cancel failed";
+                if (rows == 0)
+                    return "Cancel failed";
+
+                // ✅ NEW — drop any pending unbilled fee (consultation/service) for this visit.
+                // Failure here shouldn't undo the cancel itself, so it's logged, not thrown.
+                var unbillRes = await _unbilledCls.DeleteUnbilledForOp(req.op_id.ToString(), tenant_code);
+                Console.WriteLine($"[CANCEL-OP] DeleteUnbilledForOp op_id={req.op_id} result={unbillRes}");
+
+                return "Success";
             }
             catch (Exception ex) { return ex.Message; }
         }
