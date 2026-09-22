@@ -31,12 +31,21 @@ namespace Medico_Backend.Class
                 sql, new { tenant_code });
         }
 
-        // ─── Insert ───────────────────────────────────────────────────
         public async Task<string> Insert(TenantReportMethodModel data)
         {
             try
             {
                 using IDbConnection db = Connection();
+
+                // Check if a non-deleted row already exists for this tenant
+                const string checkSql = @"
+            SELECT id FROM mastertenant.tenant_report_method
+            WHERE tenant_code = @tenant_code AND deleted = false
+            LIMIT 1";
+
+                var existingId = await db.ExecuteScalarAsync<int?>(checkSql, new { data.tenant_code });
+                if (existingId != null)
+                    return "Settings already exist for this tenant. Use update instead.";
 
                 data.created_at = DateTime.UtcNow;
                 data.updated_at = DateTime.UtcNow;
@@ -44,78 +53,33 @@ namespace Medico_Backend.Class
 
                 const string sql = @"
             INSERT INTO mastertenant.tenant_report_method
-                (tenant_code,
-                 logo_url,
-                 isletterhead, letterhead_url,
-                 isletterbottom, bottom_url,
-                 all_branch,
-                 iswatermark, watermark_url,
+                (tenant_code, logo_url, isletterhead, letterhead_url,
+                 isletterbottom, bottom_url, all_branch, iswatermark, watermark_url,
                  report_title, report_font, report_font_size, report_color,
-                 paper_size, orientation,
-                 margin_top, margin_bottom, margin_left, margin_right,
+                 paper_size, orientation, margin_top, margin_bottom, margin_left, margin_right,
                  issignature, signature_url, signature_label,
-                 isheadertext, header_text,
-                 isfootertext, footer_text,
-                 isbarcode, isqrcode,
-                 show_printed_datetime, datetime_format,
+                 isheadertext, header_text, isfootertext, footer_text,
+                 isbarcode, isqrcode, show_printed_datetime, datetime_format,
                  created_at, updated_at, deleted)
             VALUES
-                (@tenant_code,
-                 @logo_url,
-                 @isletterhead, @letterhead_url,
-                 @isletterbottom, @bottom_url,
-                 @all_branch,
-                 @iswatermark, @watermark_url,
+                (@tenant_code, @logo_url, @isletterhead, @letterhead_url,
+                 @isletterbottom, @bottom_url, @all_branch, @iswatermark, @watermark_url,
                  @report_title, @report_font, @report_font_size, @report_color,
-                 @paper_size, @orientation,
-                 @margin_top, @margin_bottom, @margin_left, @margin_right,
+                 @paper_size, @orientation, @margin_top, @margin_bottom, @margin_left, @margin_right,
                  @issignature, @signature_url, @signature_label,
-                 @isheadertext, @header_text,
-                 @isfootertext, @footer_text,
-                 @isbarcode, @isqrcode,
-                 @show_printed_datetime, @datetime_format,
+                 @isheadertext, @header_text, @isfootertext, @footer_text,
+                 @isbarcode, @isqrcode, @show_printed_datetime, @datetime_format,
                  @created_at, @updated_at, @deleted)
             RETURNING id";
 
-                // ← Pass anonymous object WITHOUT id
-                data.id = await db.ExecuteScalarAsync<int>(sql, new
-                {
-                    data.tenant_code,
-                    data.logo_url,
-                    data.isletterhead,
-                    data.letterhead_url,
-                    data.isletterbottom,
-                    data.bottom_url,
-                    data.all_branch,
-                    data.iswatermark,
-                    data.watermark_url,
-                    data.report_title,
-                    data.report_font,
-                    data.report_font_size,
-                    data.report_color,
-                    data.paper_size,
-                    data.orientation,
-                    data.margin_top,
-                    data.margin_bottom,
-                    data.margin_left,
-                    data.margin_right,
-                    data.issignature,
-                    data.signature_url,
-                    data.signature_label,
-                    data.isheadertext,
-                    data.header_text,
-                    data.isfootertext,
-                    data.footer_text,
-                    data.isbarcode,
-                    data.isqrcode,
-                    data.show_printed_datetime,
-                    data.datetime_format,
-                    data.created_at,
-                    data.updated_at,
-                    data.deleted
-                });
+                data.id = await db.ExecuteScalarAsync<int>(sql, data);
 
                 return "Success";
+            }
+            catch (Npgsql.PostgresException ex) when (ex.SqlState == "23505")
+            {
+                // Race condition fallback: two inserts hit at nearly the same time
+                return "Settings already exist for this tenant. Use update instead.";
             }
             catch (Exception ex)
             {
