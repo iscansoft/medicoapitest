@@ -696,5 +696,38 @@ namespace medico_backend.Class
                 return ex.Message;
             }
         }
+        // ── Fetch charges that HAVE been billed for this visit — mirror of GetUnbilledByVisit ──
+        public async Task<List<UnbilledChargeRow>> GetBilledByVisit(
+            string? opvisitid, string? ip_id, string tenant_code)
+        {
+            using var db = GetConnection();
+            db.Open();
+
+            var rows = await db.QueryAsync<UnbilledChargeRow>(
+                @"SELECT
+              u.*,
+              CASE
+                  WHEN u.billedstatus = true
+                   AND lrm.requestguid IS NOT NULL
+                   AND (COALESCE(lrm.totalamount, 0) - COALESCE(lrm.paidamount, 0)) <= 0.05
+                  THEN true
+                  ELSE false
+              END AS paid_status
+          FROM unbilledcharges u
+          LEFT JOIN lab_request_master lrm
+                 ON  lrm.requestguid = u.billid
+                 AND lrm.tenant_code = u.tenant_code
+                 AND COALESCE(lrm.isdeleted, false) = false
+                 AND COALESCE(lrm.deleted,   false) = false
+          WHERE ((@opvisitid IS NOT NULL AND u.opvisitid = @opvisitid)
+                 OR (@ip_id IS NOT NULL AND u.ip_id = CAST(@ip_id AS uuid)))
+          AND u.tenant_code = @tenant_code
+          AND u.billedstatus = true
+          ORDER BY u.billeddate DESC NULLS LAST, u.chargedate",
+                new { opvisitid, ip_id, tenant_code },
+                commandTimeout: 60
+            );
+            return rows.ToList();
+        }
     }
 }

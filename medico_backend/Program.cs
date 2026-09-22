@@ -198,6 +198,8 @@ builder.Services.AddScoped<MasterListController>();
 builder.Services.AddScoped<MasterListClass>();
 builder.Services.AddScoped<OTClass>();
 builder.Services.AddScoped<OTController>();
+builder.Services.AddScoped<BillingSummaryClass>();
+builder.Services.AddScoped<BillingSummaryController>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
