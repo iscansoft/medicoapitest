@@ -11,11 +11,13 @@ namespace medico_backend.Class
     {
         private readonly string _db_conn;
         private readonly UnbilledChargesClass _unbilledCls;   // ADD
+        private readonly HmsBillingClass _billingCls;
 
-        public OpRegistrationClass(IConfiguration configuration, UnbilledChargesClass unbilledCls)
+        public OpRegistrationClass(IConfiguration configuration, UnbilledChargesClass unbilledCls, HmsBillingClass billingCls)
         {
             _db_conn = configuration.GetConnectionString("conn")!;
             _unbilledCls = unbilledCls;
+            _billingCls = billingCls;
         }
 
         // ─────────────────────────────────────────
@@ -2059,5 +2061,314 @@ AND b.tenant_code = @tenant_code
             int dcode, Guid? slot_detail_id, string reg_type,
             DateOnly visit_date, string tenant_code, int? service_id = null)
             => GenerateNextTokenNo(db, tx, dcode, slot_detail_id, reg_type, visit_date, tenant_code, service_id);
+
+        // ─────────────────────────────────────────
+        // COMBO REGISTRATION (NEW)
+        // Bundles a primary item (CONSULTATION / SERVICE / DRESSING) with
+        // any number of additional SERVICE/DRESSING items under ONE
+        // op_registration row — all billed onto the same op_id so they
+        // show up together at billing. Additional items do NOT get their
+        // own token/queue slot; only the primary item consumes a token.
+        // Gated per-tenant by lab_settings.enable_combo_registration.
+        // Does not modify CreateOpRegistration / DirectWalkinRegistration /
+        // ServiceRegistration / DressingRegistration in any way.
+        // ─────────────────────────────────────────
+        public async Task<string> ComboRegistration(ComboRegistrationRequest req, string tenant_code)
+        {
+            try
+            {
+                using IDbConnection db = new NpgsqlConnection(_db_conn);
+                db.Open();
+
+                bool comboEnabled = await db.ExecuteScalarAsync<bool?>(
+                    @"SELECT enable_combo_registration FROM lab_settings
+                      WHERE tenant_code = @tenant_code AND deleted = false
+                      ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? false;
+
+                if (!comboEnabled)
+                    return "Combo registration is not enabled for this tenant. Enable 'enable_combo_registration' in lab settings.";
+
+                if (req.dcode == 0)
+                    return "dcode is required";
+
+                string primaryType = string.IsNullOrWhiteSpace(req.primary_type) ? "CONSULTATION" : req.primary_type.ToUpper();
+                var allowedPrimary = new[] { "CONSULTATION", "SERVICE", "DRESSING" };
+                if (!allowedPrimary.Contains(primaryType))
+                    return "Invalid primary_type. Allowed: CONSULTATION, SERVICE, DRESSING";
+
+                if (primaryType != "CONSULTATION" && (!req.primary_service_id.HasValue || req.primary_service_id <= 0))
+                    return "primary_service_id is required when primary_type is SERVICE or DRESSING";
+
+                foreach (var item in req.additional_items ?? new())
+                {
+                    string t = (item.item_type ?? "").ToUpper();
+                    if (t != "SERVICE" && t != "DRESSING")
+                        return $"Invalid additional item_type '{item.item_type}'. Allowed: SERVICE, DRESSING";
+                    if (t == "SERVICE" && (!item.service_id.HasValue || item.service_id <= 0))
+                        return "service_id is required for every additional SERVICE item";
+                }
+
+                ServiceTypeModel? primarySvc = null;
+                bool isDressing = primaryType == "DRESSING";
+                string visitType;
+
+                if (primaryType == "CONSULTATION")
+                {
+                    visitType = "NEWVISIT";
+                }
+                else
+                {
+                    primarySvc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
+                        @"SELECT * FROM service_type_master
+                          WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+                        new { service_id = req.primary_service_id, tenant_code });
+
+                    if (primarySvc == null)
+                        return $"Service id {req.primary_service_id} not configured for this tenant";
+
+                    visitType = primarySvc.service_name;
+                    isDressing = isDressing || string.Equals(primarySvc.service_name?.Trim(), "Dressing", StringComparison.OrdinalIgnoreCase);
+                }
+
+                // Same is_slot_required flag your existing endpoints already use
+                bool slotRequired = await db.ExecuteScalarAsync<bool?>(
+                    @"SELECT is_slot_required FROM lab_settings
+                      WHERE tenant_code = @tenant_code AND deleted = false
+                      ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? true;
+
+                DoctorAppointmentSlotDetailsModel? slot = null;
+                DateOnly visitDate;
+
+                if (slotRequired)
+                {
+                    slot = await db.QueryFirstOrDefaultAsync<DoctorAppointmentSlotDetailsModel>(
+                        @"SELECT * FROM doctor_appointment_slot_details
+                          WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code
+                          AND isdeleted = false AND is_active = true",
+                        new { req.slot_detail_id, tenant_code });
+
+                    if (slot == null) return "Slot not found";
+                    if (slot.dcode != req.dcode) return "Selected slot does not belong to selected doctor";
+                    if (slot.slot_status == "FULL") return "Slot is full";
+                    if (slot.slot_status == "CANCELLED") return "Slot is cancelled";
+                    if (slot.slot_status == "CLOSED") return "Slot is closed";
+                    if (slot.walkin_count >= slot.max_walkin) return "Walk-in quota full for this slot";
+                    if (slot.booked_count >= slot.max_patients) return "Slot capacity reached";
+
+                    visitDate = slot.appointment_date;
+                }
+                else
+                {
+                    visitDate = DateOnly.FromDateTime(
+                        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")));
+                }
+
+                var data = new OpRegistrationModel
+                {
+                    op_id = Guid.NewGuid(),
+                    op_no = await GenerateOpNo(db, tenant_code),
+                    custid = req.custid,
+                    dcode = req.dcode,
+                    department_code = req.department_code,
+                    slot_detail_id = slot?.slot_detail_id,
+                    visit_type = visitType,
+                    reg_type = "WALKIN",
+                    visit_date = visitDate,
+                    visit_status = "WAITING",
+                    notes = req.notes,
+                    is_direct_walkin = true,
+                    is_dressing = isDressing,
+                    service_id = primaryType == "CONSULTATION" ? null : req.primary_service_id,
+                    tenant_code = tenant_code,
+                    isdeleted = false,
+                    created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+                    updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
+                };
+
+                string token;
+                int seq;
+
+                using (var tx = db.BeginTransaction())
+                {
+                    try
+                    {
+                        var (tokenStr, s) = await GenerateNextTokenNo(
+                            db, tx, req.dcode, slot?.slot_detail_id, "WALKIN",
+                            data.visit_date, tenant_code,
+                            service_id: primaryType == "CONSULTATION" ? null : req.primary_service_id);
+
+                        token = tokenStr;
+                        seq = s;
+                        data.token_no = token;
+                        data.queue_no = seq;
+
+                        await db.ExecuteAsync(@"
+                            INSERT INTO op_registration
+                            (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
+                             reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
+                             visit_status, notes, is_direct_walkin, tenant_code, isdeleted, created_at, updated_at)
+                            VALUES
+                            (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
+                             @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
+                             @visit_status, @notes, @is_direct_walkin, @tenant_code, @isdeleted, @created_at, @updated_at)",
+                            new
+                            {
+                                data.op_id,
+                                data.op_no,
+                                data.custid,
+                                data.dcode,
+                                data.department_code,
+                                data.slot_detail_id,
+                                data.visit_type,
+                                data.reg_type,
+                                visit_date = data.visit_date.ToDateTime(TimeOnly.MinValue),
+                                data.token_no,
+                                data.queue_no,
+                                data.is_dressing,
+                                data.service_id,
+                                data.visit_status,
+                                data.notes,
+                                data.is_direct_walkin,
+                                data.tenant_code,
+                                data.isdeleted,
+                                data.created_at,
+                                data.updated_at
+                            }, tx);
+
+                        tx.Commit();
+                    }
+                    catch { tx.Rollback(); throw; }
+                }
+
+                if (slot != null)
+                {
+                    await db.ExecuteAsync(@"
+        UPDATE doctor_appointment_slot_details
+        SET booked_count = booked_count + 1,
+            updated_at = now()
+        WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
+                        new { slot_detail_id = slot.slot_detail_id, tenant_code });
+
+                    await db.ExecuteAsync(@"
+        UPDATE doctor_appointment_slot_details
+        SET slot_status = 'FULL'
+        WHERE slot_detail_id = @slot_detail_id
+        AND booked_count >= max_patients AND tenant_code = @tenant_code",
+                        new { slot_detail_id = slot.slot_detail_id, tenant_code });
+                }
+
+                // ── Primary charge ──
+                int? primaryTcode; double primaryRate; double primaryAmount;
+                if (primaryType == "CONSULTATION")
+                    (primaryTcode, primaryRate, primaryAmount) = await GetDoctorConsultationFee(db, req.dcode, tenant_code, req.custid);
+                else
+                    (primaryTcode, primaryRate, primaryAmount) = await GetServiceCharge(db, primarySvc!.service_name, tenant_code);
+
+                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                {
+                    op_id = data.op_id.ToString(),
+                    custid = data.custid,
+                    tcode = primaryTcode,
+                    rate = primaryRate,
+                    amount = primaryAmount,
+                    quantity = 1
+                }, tenant_code);
+
+                var billedItems = new List<string> { primaryType == "CONSULTATION" ? "CONSULTATION" : primarySvc!.service_name };
+
+                // ── Additional items — billed onto the SAME op_id, no separate token ──
+                foreach (var item in req.additional_items ?? new())
+                {
+                    string itemType = item.item_type.ToUpper();
+                    string serviceName;
+
+                    if (itemType == "DRESSING")
+                    {
+                        serviceName = "Dressing";
+                    }
+                    else
+                    {
+                        var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
+                            @"SELECT * FROM service_type_master
+                              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+                            new { item.service_id, tenant_code });
+
+                        if (svc == null)
+                            return $"Success-Partial|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Error:Service id {item.service_id} not configured, remaining items skipped";
+
+                        serviceName = svc.service_name;
+                    }
+
+                    var (itemTcode, itemRate, itemAmount) = await GetServiceCharge(db, serviceName, tenant_code);
+
+                    // ✅ CHANGED — was AddConsultationCharge (blocked by the CONSULTATION guard).
+                    var addRes = await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = data.op_id.ToString(),
+                        custid = data.custid,
+                        tcode = itemTcode,
+                        rate = itemRate,
+                        amount = itemAmount,
+                        quantity = 1
+                    }, itemType, tenant_code);   // itemType = "SERVICE" or "DRESSING"
+
+                    if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                        return $"Success-Partial|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Error:{serviceName}: {addRes}";
+
+                    billedItems.Add(serviceName);
+                }
+
+                bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
+     @"SELECT auto_route_billing_after_register FROM lab_settings
+                      WHERE tenant_code = @tenant_code AND deleted = false
+                      ORDER BY (bh_code IS NULL) LIMIT 1",
+     new { tenant_code }) ?? false;
+
+                string autoBillTag = "";
+                if (routeToBilling)
+                {
+                    var (billStatus, billData) = await _billingCls.AutoBillOpVisit(
+                        data.op_id.ToString(), data.custid, data.dcode,
+                        req.enteredbhcode, req.cntcode, tenant_code);
+
+                    autoBillTag = billStatus.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase)
+                        ? $"|AutoBilled:true|BillNo:{billData?.bill_no}|BillGuid:{billData?.requestguid}|Balance:{billData?.balance_amount}"
+                        : $"|AutoBilled:false|AutoBillError:{billStatus}";
+                }
+
+                return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling}{autoBillTag}";
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+        }
+
+        // ─────────────────────────────────────────
+        // Read-only settings lookup for the frontend — tells it whether
+        // combo registration / auto-route-to-billing are on for this
+        // tenant, and the existing slot flag, so it can decide which
+        // endpoint to call and what to do after a successful register.
+        // Pure read, touches nothing else.
+        // ─────────────────────────────────────────
+        public async Task<(bool comboEnabled, bool routeToBilling, bool slotRequired)> GetRegistrationSettings(string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            var row = await db.QueryFirstOrDefaultAsync(
+                @"SELECT enable_combo_registration, auto_route_billing_after_register, is_slot_required
+                  FROM lab_settings
+                  WHERE tenant_code = @tenant_code AND deleted = false
+                  ORDER BY (bh_code IS NULL) LIMIT 1",
+                new { tenant_code });
+
+            return (
+                (bool?)row?.enable_combo_registration ?? false,
+                (bool?)row?.auto_route_billing_after_register ?? false,
+                (bool?)row?.is_slot_required ?? true
+            );
+        }
     }
+
 }

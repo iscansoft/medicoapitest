@@ -729,5 +729,67 @@ namespace medico_backend.Class
             );
             return rows.ToList();
         }
+        // ── Add a non-consultation charge line (SERVICE / DRESSING) onto an
+        // existing OP visit — used by ComboRegistration for "additional_items".
+        // AddConsultationCharge always writes entrytype='CONSULTATION' and its
+        // guard blocks a second CONSULTATION row per visit — reusing it for
+        // additional items is exactly what was silently swallowing them.
+        // This writes entrytype='SERVICE'/'DRESSING' and dedupes per tcode
+        // instead of per-visit, so multiple different additional items can
+        // coexist on the same visit without blocking each other or the primary.
+        public async Task<string> AddVisitAdditionalCharge(AddUnbilledConsultationRequest req, string entryType, string tenant_code)
+        {
+            try
+            {
+                using var db = GetConnection();
+
+                string normalizedType = string.IsNullOrWhiteSpace(entryType) ? "SERVICE" : entryType.ToUpper();
+
+                int already = await db.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1) FROM unbilledcharges
+                      WHERE opvisitid = @op_id AND entrytype = @entryType
+                      AND (tcode = @tcode OR (tcode IS NULL AND @tcode IS NULL))
+                      AND tenant_code = @tenant_code
+                      AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { req.op_id, entryType = normalizedType, req.tcode, tenant_code });
+
+                if (already > 0)
+                    return $"{normalizedType} charge already pending for this visit";
+
+                string? itemName = req.particulars;
+                if (string.IsNullOrWhiteSpace(itemName) && req.tcode.HasValue)
+                {
+                    itemName = await db.ExecuteScalarAsync<string?>(
+                        @"SELECT name FROM test_master
+                          WHERE tcode = @tcode
+                          AND   TRIM(tenant_code) = TRIM(@tenant_code)
+                          AND   deleted = false",
+                        new { req.tcode, tenant_code });
+                }
+
+                var row = new UnbilledChargeRow
+                {
+                    unbilledid = Guid.NewGuid().ToString(),
+                    entrytype = normalizedType,
+                    entryid = req.op_id,
+                    chargedate = DateTime.UtcNow,
+                    custid = req.custid,
+                    opvisitid = req.op_id,
+                    tcode = req.tcode,
+                    quantity = req.quantity,
+                    rate = req.rate,
+                    amount = req.amount,
+                    discount = 0,
+                    charityamount = 0,
+                    billedstatus = false,
+                    tenant_code = tenant_code,
+                    particulars = itemName ?? normalizedType
+                };
+
+                await db.InsertAsync(row);
+                return $"Success|UnbilledId:{row.unbilledid}";
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
     }
 }

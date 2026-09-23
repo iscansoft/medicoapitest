@@ -16,12 +16,14 @@ namespace medico_backend.Class
     {
         private readonly string _conn;
         private readonly ILogger<HmsBillingClass> _logger;
+        private readonly UnbilledChargesClass _unbilledCls;   // ADD
 
-        public HmsBillingClass(IConfiguration cfg, ILogger<HmsBillingClass> logger)
+        public HmsBillingClass(IConfiguration cfg, ILogger<HmsBillingClass> logger, UnbilledChargesClass unbilledCls)
         {
             _conn = cfg.GetConnectionString("conn")
                 ?? throw new InvalidOperationException("Database connection string 'conn' not found.");
             _logger = logger;
+            _unbilledCls = unbilledCls;
         }
 
         private IDbConnection GetConnection() => new NpgsqlConnection(_conn);
@@ -1758,6 +1760,81 @@ namespace medico_backend.Class
           WHERE c.bhcode = @bhcode AND c.cntcode = @cntcode AND c.todate IS NULL AND c.tenant_code = @tenantCode
           LIMIT 1", new { bhcode, cntcode, tenantCode });
         }
+        // ════════════════════════════════════════════════════════════════════════
+        //  AUTO-BILL AN OP VISIT — pulls all pending unbilled charges for the
+        //  visit (consultation + any additional SERVICE/DRESSING items) and
+        //  raises a single bill from them via the normal SaveBill/CreateBill path.
+        //  Used by ComboRegistration when auto_route_billing_after_register = true.
+        // ════════════════════════════════════════════════════════════════════════
+        public async Task<(string status, HmsBillResponse? data)> AutoBillOpVisit(
+            string op_id, decimal custid, int dcode,
+            int? enteredbhcode, int? cntcode, string tenantCode)
+        {
+            try
+            {
+                // 1. Pull everything still pending for this visit
+                var pending = await _unbilledCls.GetUnbilledByVisit(op_id, null, tenantCode);
 
+                if (pending == null || !pending.Any())
+                    return ("No unbilled charges found for this OP visit.", null);
+
+                using var db = GetConnection();
+
+                // 2. Patient + doctor display info for the bill header
+                var patient = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT name, mobile, gender, dateofbirth, ageyears, agemonths, agedays
+              FROM customerdb.customer_master
+              WHERE custid = @custid AND deleted = false",
+                    new { custid });
+
+                // 3. Map pending unbilled rows -> bill line items
+                int sno = 1;
+                var items = pending.Select(u => new HmsBillLineItemDto
+                {
+                    sno = sno++,
+                    charge_type = string.IsNullOrWhiteSpace(u.entrytype) ? "CONSULTATION" : u.entrytype!,
+                    item_name = u.particulars,
+                    tcode = u.tcode.HasValue ? (decimal?)u.tcode.Value : null,
+                    unit_rate = u.rate,
+                    amount = u.amount,
+                    qty = u.quantity ?? 1,
+                    discount = u.discount,
+                    gst_per = 0
+                }).ToList();
+
+                var billReq = new CreateHmsBillRequest
+                {
+                    op_id = op_id,
+                    custid = custid,
+                    patient_name = (string?)patient?.name ?? "Unknown",
+                    gender = (string?)patient?.gender,
+                    dateofbirth = patient?.dateofbirth?.ToString(),
+                    ageyears = patient?.ageyears?.ToString(),
+                    agemonths = patient?.agemonths?.ToString(),
+                    agedays = patient?.agedays?.ToString(),
+                    mobileno = (string?)patient?.mobile,
+                    dcode = dcode,
+                    enteredbhcode = enteredbhcode,
+                    cntcode = cntcode,
+                    iscashbill = true,
+                    iscreditbill = false,
+                    collection_type = "CASH",
+                    paidamount = 0,
+                    items = items,
+                    unbilled_charge_ids = pending
+                        .Where(u => !string.IsNullOrWhiteSpace(u.unbilledid))
+                        .Select(u => u.unbilledid!)
+                        .ToList()
+                };
+
+                // 4. Reuse the existing create-bill pipeline (numbering, receipt, tx, etc.)
+                return await SaveBill(billReq, tenantCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AutoBillOpVisit failed for op_id={op_id}", op_id);
+                return ($"AutoBillOpVisit error: {ex.Message}", null);
+            }
+        }
     }
 }

@@ -191,5 +191,53 @@ namespace medico_backend.Controllers
             var res = await cls.ServiceRegistration(req, tenant);
             return Ok(res);
         }
+        // POST api/OpRegistration/combo-registration
+        // Bundles a primary item (consultation/service/dressing) with any
+        // number of additional services/dressing under ONE visit + op_id.
+        // Only active when lab_settings.enable_combo_registration = true.
+        [HttpPost("combo-registration")]
+        public async Task<IActionResult> ComboRegistration([FromBody] ComboRegistrationRequest req)
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            var res = await cls.ComboRegistration(req, tenant);
+
+            if (res.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = res.Split('|');
+                string GetVal(string prefix) =>
+                    parts.FirstOrDefault(p => p.StartsWith(prefix + ":"))?.Substring(prefix.Length + 1) ?? "";
+
+                return Ok(new
+                {
+                    Status = res.StartsWith("Success-Partial") ? "Partial" : "Success",
+                    OpNo = GetVal("OpNo"),
+                    OpId = GetVal("OpId"),
+                    Token = GetVal("Token"),
+                    Items = GetVal("Items"),
+                    RouteToBilling = GetVal("RouteToBilling") == "True",
+                    Error = GetVal("Error")
+                });
+            }
+
+            return Ok(new { Status = "Error", Message = res });
+        }
+
+        // GET api/OpRegistration/registration-settings
+        // Frontend calls this once (e.g. on the registration screen load)
+        // to know whether combo registration is available and whether it
+        // should navigate to billing right after any successful register
+        // (create / direct-walkin / dressing / service-registration / combo).
+        [HttpGet("registration-settings")]
+        public async Task<IActionResult> GetRegistrationSettings()
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            var flags = await cls.GetRegistrationSettings(tenant);
+            return Ok(new
+            {
+                EnableComboRegistration = flags.comboEnabled,
+                AutoRouteBillingAfterRegister = flags.routeToBilling,
+                IsSlotRequired = flags.slotRequired
+            });
+        }
     }
 }
