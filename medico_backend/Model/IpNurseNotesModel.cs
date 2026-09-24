@@ -156,6 +156,7 @@ namespace medico_backend.Model
             public decimal? dose { get; set; }
             public string? unit { get; set; }
             public string? route { get; set; }
+            public decimal quantity { get; set; } = 1;
             public string status { get; set; } = "GIVEN";   // GIVEN / REFUSED / MISSED
             public string? remarks { get; set; }
             public int? usercode { get; set; }
@@ -174,6 +175,7 @@ namespace medico_backend.Model
             public decimal? dose { get; set; }
             public string? unit { get; set; }
             public string? route { get; set; }
+            public decimal quantity { get; set; } = 1;
             public string status { get; set; } = "GIVEN";
             public string? remarks { get; set; }
         }
@@ -186,6 +188,7 @@ namespace medico_backend.Model
             public decimal? dose { get; set; }
             public string? unit { get; set; }
             public string? route { get; set; }
+            public decimal quantity { get; set; } = 1;
             public string status { get; set; } = "GIVEN";
             public string? remarks { get; set; }
         }

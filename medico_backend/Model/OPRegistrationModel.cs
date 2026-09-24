@@ -35,6 +35,7 @@ namespace medico_backend.Model
             public string? transfer_reason { get; set; }
             public bool is_dressing { get; set; } = false;
             public int? service_id { get; set; }
+            public int? usercode { get; set; }
 
         }
 
@@ -111,6 +112,7 @@ namespace medico_backend.Model
             public string visit_type { get; set; } = "NEWVISIT";
             public string? notes { get; set; }
             public int? service_id { get; set; }
+            public int? usercode { get; set; }
         }
 
         // Transfer to another doctor after duty doctor consultation
@@ -121,6 +123,7 @@ namespace medico_backend.Model
             public string? transfer_reason { get; set; }
             public Guid? slot_detail_id { get; set; }
             public DateOnly visit_date { get; set; }
+            public int? usercode { get; set; }
         }
         public class DoctorBookingListModel
         {
@@ -143,6 +146,7 @@ namespace medico_backend.Model
             public string? booking_type { get; set; }
 
             public string? notes { get; set; }
+            public int? usercode { get; set; }
         }
         public class DressingRegistrationRequest
         {
@@ -151,6 +155,7 @@ namespace medico_backend.Model
             public int? department_code { get; set; }
             public Guid? slot_detail_id { get; set; }
             public string? notes { get; set; }
+            public int? usercode { get; set; }
         }
         public class CancelOpRequest
         {
@@ -165,6 +170,7 @@ namespace medico_backend.Model
             public int? department_code { get; set; }
             public Guid? slot_detail_id { get; set; }
             public string? notes { get; set; }
+            public int? usercode { get; set; }
         }
         public class ComboRegistrationItemRequest
         {
@@ -189,6 +195,19 @@ namespace medico_backend.Model
 
             // Everything else gets billed onto the SAME op_id, no separate token
             public List<ComboRegistrationItemRequest> additional_items { get; set; } = new();
+            public int? usercode { get; set; }
+        }
+        // Add services (and/or dressing) to an ALREADY-REGISTERED op visit.
+        // No new op_registration row, no token — purely billing line items
+        // attached to the existing op_id, same as combo's "additional_items".
+        public class AddServicesToOpRequest
+        {
+            public Guid op_id { get; set; }
+            public string? op_no { get; set; }              // optional cross-check against op_id
+            public List<ComboRegistrationItemRequest> items { get; set; } = new();
+            public int? enteredbhcode { get; set; }
+            public int? cntcode { get; set; }
+            public int? usercode { get; set; }               // who added it — logged in notes only
         }
     }
 }

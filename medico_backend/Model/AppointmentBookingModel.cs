@@ -60,6 +60,7 @@ namespace Medico_Backend.Model
         public TimeOnly new_slot_end_time { get; set; }
         public int new_dcode { get; set; }
         public string? notes { get; set; }
+        public int usercode { get; set; }
     }
 
     // ✅ NEW — used by reschedule-whole-slot endpoint
@@ -73,6 +74,7 @@ namespace Medico_Backend.Model
         public TimeOnly new_slot_end_time { get; set; }
         public int new_dcode { get; set; }
         public string? reschedule_reason { get; set; }
+        public int usercode { get; set; }
     }
     public class AppointmentBookingViewModel
     {

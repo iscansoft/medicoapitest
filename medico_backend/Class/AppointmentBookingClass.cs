@@ -250,6 +250,7 @@ VALUES
                         reg_type = data.booking_type,
                         visit_date = data.appointment_date,
                         notes = data.notes,
+                        usercode = data.usercode > 0 ? data.usercode : (int?)null,
                         tenant_code = data.tenant_code!
                     });
                     Console.WriteLine($"[BOOK-OP-DEBUG] BookingId={data.booking_id} result={opResultNoSlot}");
@@ -377,7 +378,8 @@ VALUES
                     reg_type = data.booking_type,
                     visit_date = data.appointment_date,
                     notes = data.notes,
-                    tenant_code = data.tenant_code!
+                    tenant_code = data.tenant_code!,
+                    usercode = data.usercode > 0 ? data.usercode : (int?)null,
                 });
                 Console.WriteLine($"[BOOK-OP-DEBUG] BookingId={data.booking_id} result={opResult}");
 
@@ -526,7 +528,7 @@ VALUES
                         b.token_no, b.booking_status, b.booking_type, b.notes,
                         b.cancel_reason, b.cancelled_at,
                         b.rescheduled_from, b.reschedule_reason,
-                        b.tenant_code, b.isdeleted,
+                        b.tenant_code, b.isdeleted,b.usercode,
                         b.created_at AT TIME ZONE 'UTC' AS created_at,
                         b.updated_at AT TIME ZONE 'UTC' AS updated_at,
                         c.name AS patient_name,
@@ -556,7 +558,7 @@ VALUES
                                   token_no, booking_status, booking_type, notes,
                                   cancel_reason, cancelled_at,
                                   rescheduled_from, reschedule_reason,
-                                  tenant_code, isdeleted,
+                                  tenant_code, isdeleted,usercode,
                                   created_at AT TIME ZONE 'UTC' AS created_at,
                                   updated_at AT TIME ZONE 'UTC' AS updated_at
                            FROM   appointment_booking
@@ -587,7 +589,7 @@ VALUES
                                   token_no, booking_status, booking_type, notes,
                                   cancel_reason, cancelled_at,
                                   rescheduled_from, reschedule_reason,
-                                  tenant_code, isdeleted,
+                                  tenant_code, isdeleted,usercode,
                                   created_at AT TIME ZONE 'UTC' AS created_at,
                                   updated_at AT TIME ZONE 'UTC' AS updated_at
                            FROM   appointment_booking
@@ -616,7 +618,7 @@ VALUES
                                   token_no, booking_status, booking_type, notes,
                                   cancel_reason, cancelled_at,
                                   rescheduled_from, reschedule_reason,
-                                  tenant_code, isdeleted,
+                                  tenant_code, isdeleted,usercode,
                                   created_at AT TIME ZONE 'UTC' AS created_at,
                                   updated_at AT TIME ZONE 'UTC' AS updated_at
                            FROM   appointment_booking
@@ -703,6 +705,7 @@ VALUES
                     rescheduled_from = request.old_booking_id,
                     reschedule_reason = request.reschedule_reason,
                     notes = request.notes,
+                    usercode = request.usercode,
                     tenant_code = tenant_code
                 };
 
@@ -837,7 +840,8 @@ VALUES
                             new_dcode = request.new_dcode > 0
                                                       ? request.new_dcode
                                                       : (int)booking.dcode,
-                            notes = booking.notes
+                            notes = booking.notes,
+                            usercode = request.usercode,
                         };
 
                         var result = await RescheduleSlotItem(itemRequest, tenant_code);

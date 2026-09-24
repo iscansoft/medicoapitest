@@ -239,5 +239,34 @@ namespace medico_backend.Controllers
                 IsSlotRequired = flags.slotRequired
             });
         }
+        // POST api/OpRegistration/add-services
+        // Attach extra SERVICE/DRESSING charges to an ALREADY-REGISTERED op visit.
+        // No token generated, no new op_registration row — pure billing add-on
+        // against the existing op_id. Requires op_id; op_no optional cross-check.
+        [HttpPost("add-services")]
+        public async Task<IActionResult> AddServicesToOp([FromBody] AddServicesToOpRequest req)
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            var res = await cls.AddServicesToOp(req, tenant);
+
+            if (res.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+            {
+                var parts = res.Split('|');
+                string GetVal(string prefix) =>
+                    parts.FirstOrDefault(p => p.StartsWith(prefix + ":"))?.Substring(prefix.Length + 1) ?? "";
+
+                return Ok(new
+                {
+                    Status = res.StartsWith("Success-Partial") ? "Partial" : "Success",
+                    OpId = GetVal("OpId"),
+                    OpNo = GetVal("OpNo"),
+                    Items = GetVal("Items"),
+                    RouteToBilling = GetVal("RouteToBilling") == "True",
+                    Error = GetVal("Error")
+                });
+            }
+
+            return Ok(new { Status = "Error", Message = res });
+        }
     }
 }

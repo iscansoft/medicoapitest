@@ -378,6 +378,7 @@ namespace medico_backend.Class
                 dose = req.dose,
                 unit = req.unit,
                 route = req.route,
+                quantity = req.quantity,
                 status = string.IsNullOrWhiteSpace(req.status) ? "GIVEN" : req.status.ToUpper(),
                 remarks = req.remarks,
                 usercode = usercode,
@@ -387,10 +388,10 @@ namespace medico_backend.Class
             await db.ExecuteAsync(@"
                 INSERT INTO ip_nurse_note_medicine
                 (med_id, ip_id, custid, entry_date, entry_time, shift, medicine_name, dose, unit,
-                 route, status, remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
+                 route,quantity, status, remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
                 VALUES
                 (@med_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @medicine_name, @dose, @unit,
-                 @route, @status, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
+                 @route,@quantity, @status, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
      new
      {
          data.med_id,
@@ -403,6 +404,7 @@ namespace medico_backend.Class
          data.dose,
          data.unit,
          data.route,
+         data.quantity,
          data.status,
          data.remarks,
          data.usercode,
@@ -432,7 +434,7 @@ namespace medico_backend.Class
                 {
                     pr_det_id = data.med_id.ToString(),   // links queue row back to the nurse note
                     drug_name = data.medicine_name,
-                    qty       = 1,
+                    qty = data.quantity,
                     route     = data.route,
                     notes     = string.IsNullOrWhiteSpace(data.remarks)
                                     ? (data.dose.HasValue ? $"Dose: {data.dose} {data.unit}" : null)
@@ -462,7 +464,7 @@ namespace medico_backend.Class
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_medicine
                 SET shift = @shift, medicine_name = @medicine_name, dose = @dose, unit = @unit,
-                    route = @route, status = @status, remarks = @remarks, updated_at = now()
+                    route = @route,quantity = @quantity, status = @status, remarks = @remarks, updated_at = now()
                 WHERE med_id = @med_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
@@ -472,6 +474,7 @@ namespace medico_backend.Class
                     req.dose,
                     req.unit,
                     req.route,
+                    req.quantity,
                     status = string.IsNullOrWhiteSpace(req.status) ? "GIVEN" : req.status.ToUpper(),
                     req.remarks,
                     tenant_code
