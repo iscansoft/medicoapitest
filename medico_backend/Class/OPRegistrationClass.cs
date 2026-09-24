@@ -2211,13 +2211,50 @@ AND b.tenant_code = @tenant_code
                 {
                     try
                     {
-                        var (tokenStr, s) = await GenerateNextTokenNo(
-                            db, tx, req.dcode, slot?.slot_detail_id, "WALKIN",
-                            data.visit_date, tenant_code,
-                            service_id: primaryType == "CONSULTATION" ? null : req.primary_service_id);
+                        if (primaryType == "DRESSING")
+                        {
+                            // ✅ FIX — dressing must always token as D1, D2... regardless of
+                            // which service_id represents "Dressing" in service_type_master.
+                            // Mirrors DressingRegistration's own logic exactly, just run
+                            // inside combo's existing transaction/lock for safety.
+                            if (slot != null)
+                            {
+                                seq = slot.booked_count + 1;
+                            }
+                            else
+                            {
+                                string lockKey = $"DRESSING:{tenant_code}:{req.dcode}:{data.visit_date:yyyyMMdd}";
+                                await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))",
+                                    new { lockKey }, tx);
 
-                        token = tokenStr;
-                        seq = s;
+                                seq = await db.ExecuteScalarAsync<int>(
+                                    @"SELECT COALESCE(MAX(
+                        NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
+                    ), 0) + 1
+                    FROM   op_registration
+                    WHERE  tenant_code = @tenant_code AND isdeleted = false
+                    AND    is_dressing = true
+                    AND    visit_date  = @visit_date",
+                                    new
+                                    {
+                                        tenant_code,
+                                        visit_date = data.visit_date.ToDateTime(TimeOnly.MinValue)
+                                    }, tx);
+                            }
+
+                            token = $"D{seq}";
+                        }
+                        else
+                        {
+                            var (tokenStr, s) = await GenerateNextTokenNo(
+                                db, tx, req.dcode, slot?.slot_detail_id, "WALKIN",
+                                data.visit_date, tenant_code,
+                                service_id: primaryType == "CONSULTATION" ? null : req.primary_service_id);
+
+                            token = tokenStr;
+                            seq = s;
+                        }
+
                         data.token_no = token;
                         data.queue_no = seq;
 
