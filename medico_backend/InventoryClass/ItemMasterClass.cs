@@ -270,249 +270,253 @@ namespace medico_backend.InventoryClass
             return maxCode.HasValue ? maxCode.Value + 1 : prefix + 1;
         }
 
-        public async Task<long> InsertPurchase(purchase_request request)
-        {
-            using (IDbConnection db = new NpgsqlConnection(con))
-            {
-                db.Open();
+              public async Task<long> InsertPurchase(purchase_request request)
+       {
+           using (IDbConnection db = new NpgsqlConnection(con))
+           {
+               db.Open();
 
-                using (var transaction = db.BeginTransaction())
-                {
-                    try
-                    {
-                        // Generate year-reset billno (e.g. 20260001, 20260002, resets each year)
-                        long billno = await GetNextGrnCode(db, transaction, request.master.tenantcode);
-                        request.master.billno = billno.ToString();
+               using (var transaction = db.BeginTransaction())
+               {
+                   try
+                   {
+                       long billno = await GetNextGrnCode(
+    db,
+    transaction,
+    request.master.tenantcode
+);
 
-                        // Purchase Master Insert
-                        string masterQuery = @"
-     INSERT INTO purchase_master
-     (
-         billno,
-         billdate,
-         invoiceno,
-         invoicedate,
-         vendorcode,
-         grossamount,
-         overalldiscount,
-         discountamount,
-         totalamount,
-         taxamount,
-         netamount,
-         paymentmode,
-         paymentstatus,
-         currencycode,
-         remarks,
-         isactive,
-         deleted,
-         createddate,
-         usercode,
-         tenantcode,
-         branchcode,
-         companycode,
-         grncode
-     )
-     VALUES
-     (
-         @billno,
-         @billdate,
-         @invoiceno,
-         @invoicedate,
-         @vendorcode,
-         @grossamount,
-         @overalldiscount,
-         @discountamount,
-         @totalamount,
-         @taxamount,
-         @netamount,
-         @paymentmode,
-         @paymentstatus,
-         @currencycode,
-         @remarks,
-         @isactive,
-         @deleted,
-         CURRENT_TIMESTAMP,
-         @usercode,
-         @tenantcode,
-         @branchcode,
-         @companycode,
-         @grncode
-     )
-     RETURNING purchasecode;";
-
-                        long purchasecode = await db.ExecuteScalarAsync<long>(
-                            masterQuery,
-                            request.master,
-                            transaction);
-
-
-                        // Purchase Detail Insert
-                        string detailQuery = @"
-             INSERT INTO purchase_detail
+                       // Numeric characters only
+                       request.master.billno = billno.ToString();
+                       // Purchase Master Insert
+                       string masterQuery = @"
+    INSERT INTO purchase_master
     (
-        purchasecode, itemcode, quantity, freequantity, uomcode, rate,
-        discountpercentage, discountamount, taxpercentage, taxamount,
-        amount, totalamount, batchno, manufacturingdate, expirydate,
-        orderedqty, receivedqty, rejectedqty, warehousecode,
-        packsize, packg, mrp,
-        tenantcode
-    )
-    VALUES
-    (
-        @purchasecode, @itemcode, @quantity, @freequantity, @uomcode, @rate,
-        @discountpercentage, @discountamount, @taxpercentage, @taxamount,
-        @amount, @totalamount, @batchno, @manufacturingdate, @expirydate,
-        @orderedqty, @receivedqty, @rejectedqty, @warehousecode,
-        @packsize, @packg, @mrp,
-        @tenantcode
-    );";
-
-                        foreach (var item in request.details)
-                        {
-                            item.purchasecode = purchasecode;
-                            item.packg = item.quantity * item.packsize;   // total strips/units = qty * packsize
-
-                            await db.ExecuteAsync(
-                                detailQuery,
-                                item,
-                                transaction);
-
-                            // Guard against divide-by-zero
-                            if (item.packsize <= 0)
-                                throw new Exception($"Invalid packsize for item {item.itemcode}: packsize must be greater than 0");
-
-                            decimal unitPrice = item.rate / item.packsize;   // strip/unit price
-                            decimal mrpUnit = item.mrp / item.packsize;
-
-                            // Check stock exists
-                            string checkStockQuery = @"
-        SELECT stockcode
-        FROM stock_master
-        WHERE itemcode = @itemcode
-        AND warehousecode = @warehousecode
-        AND batchno = @batchno;";
-
-                            var stockcode = await db.ExecuteScalarAsync<long?>(
-                                checkStockQuery,
-                                new
-                                {
-                                    item.itemcode,
-                                    item.warehousecode,
-                                    item.batchno
-                                },
-                                transaction);
-
-                            // Update Existing Stock
-                            if (stockcode.HasValue)
-                            {
-                                string updateStockQuery = @"
-    UPDATE stock_master
-    SET
-        purchasedqty = purchasedqty + @packg,
-        closingstock = closingstock + @packg,
-        unitcost = @unitPrice,
-        mrpunit = @mrpUnit,
-        stockvalue =
-            (closingstock + @packg) * @unitPrice,
-        modifieddate = CURRENT_TIMESTAMP
-    WHERE stockcode = @stockcode;";
-
-                                await db.ExecuteAsync(
-                                    updateStockQuery,
-                                    new
-                                    {
-                                        stockcode = stockcode.Value,
-                                        item.packg,
-                                        unitPrice,
-                                        mrpUnit
-                                    },
-                                    transaction);
-                            }
-                            else
-                            {
-                                string insertStockQuery = @"
-    INSERT INTO stock_master
-    (
-        itemcode,
-        warehousecode,
-        branchcode,
-        openingstock,
-        purchasedqty,
-        soldqty,
-        damagedqty,
-        returnqty,
-        closingstock,
-        unitcost,
-        mrpunit,
-        stockvalue,
-        batchno,
-        manufacturingdate,
-        expirydate,
+        billno,
+        billdate,
+        invoiceno,
+        invoicedate,
+        vendorcode,
+        grossamount,
+        overalldiscount,
+        discountamount,
+        totalamount,
+        taxamount,
+        netamount,
+        paymentmode,
+        paymentstatus,
+        currencycode,
+        remarks,
         isactive,
         deleted,
         createddate,
         usercode,
         tenantcode,
-        companycode
+        branchcode,
+        companycode,
+        grncode
     )
     VALUES
     (
-        @itemcode,
-        @warehousecode,
-        @branchcode,
-        0,
-        @packg,
-        0,
-        0,
-        0,
-        @packg,
-        @unitPrice,
-        @mrpUnit,
-        (@packg * @unitPrice),
-        @batchno,
-        @manufacturingdate,
-        @expirydate,
-        true,
-        false,
+        @billno,
+        @billdate,
+        @invoiceno,
+        @invoicedate,
+        @vendorcode,
+        @grossamount,
+        @overalldiscount,
+        @discountamount,
+        @totalamount,
+        @taxamount,
+        @netamount,
+        @paymentmode,
+        @paymentstatus,
+        @currencycode,
+        @remarks,
+        @isactive,
+        @deleted,
         CURRENT_TIMESTAMP,
         @usercode,
         @tenantcode,
-        @companycode
-    );";
+        @branchcode,
+        @companycode,
+        @grncode
+    )
+    RETURNING purchasecode;";
 
-                                await db.ExecuteAsync(
-                                    insertStockQuery,
-                                    new
-                                    {
-                                        item.itemcode,
-                                        item.warehousecode,
-                                        branchcode = request.master.branchcode,
-                                        item.packg,
-                                        unitPrice,
-                                        mrpUnit,
-                                        item.batchno,
-                                        item.manufacturingdate,
-                                        item.expirydate,
-                                        usercode = request.master.usercode,
-                                        tenantcode = request.master.tenantcode,
-                                        companycode = request.master.companycode
-                                    },
-                                    transaction);
-                            }
-                        }
+                       long purchasecode = await db.ExecuteScalarAsync<long>(
+                           masterQuery,
+                           request.master,
+                           transaction);
 
-                        transaction.Commit();
 
-                        return purchasecode;
-                    }
-                    catch (Exception ex)
-                    {
-                        transaction.Rollback();
-                        throw new Exception("Purchase Insert Failed : " + ex.Message);
-                    }
-                }
-            }
-        }
+                       // Purchase Detail Insert
+                       string detailQuery = @"
+            INSERT INTO purchase_detail
+   (
+       purchasecode, itemcode, quantity, freequantity, uomcode, rate,
+       discountpercentage, discountamount, taxpercentage, taxamount,
+       amount, totalamount, batchno, manufacturingdate, expirydate,
+       orderedqty, receivedqty, rejectedqty, warehousecode,
+       packsize, packg, mrp,
+       tenantcode
+   )
+   VALUES
+   (
+       @purchasecode, @itemcode, @quantity, @freequantity, @uomcode, @rate,
+       @discountpercentage, @discountamount, @taxpercentage, @taxamount,
+       @amount, @totalamount, @batchno, @manufacturingdate, @expirydate,
+       @orderedqty, @receivedqty, @rejectedqty, @warehousecode,
+       @packsize, @packg, @mrp,
+       @tenantcode
+   );";
+
+                       foreach (var item in request.details)
+                       {
+                           item.purchasecode = purchasecode;
+                           item.packg = item.quantity * item.packsize;   // total strips/units = qty * packsize
+
+                           await db.ExecuteAsync(
+                               detailQuery,
+                               item,
+                               transaction);
+
+                           // Guard against divide-by-zero
+                           if (item.packsize <= 0)
+                               throw new Exception($"Invalid packsize for item {item.itemcode}: packsize must be greater than 0");
+
+                           decimal unitPrice = item.rate / item.packsize;   // strip/unit price
+                           decimal mrpUnit = item.mrp / item.packsize;
+
+                           // Check stock exists
+                           string checkStockQuery = @"
+       SELECT stockcode
+       FROM stock_master
+       WHERE itemcode = @itemcode
+       AND warehousecode = @warehousecode
+       AND batchno = @batchno;";
+
+                           var stockcode = await db.ExecuteScalarAsync<long?>(
+                               checkStockQuery,
+                               new
+                               {
+                                   item.itemcode,
+                                   item.warehousecode,
+                                   item.batchno
+                               },
+                               transaction);
+
+                           // Update Existing Stock
+                           if (stockcode.HasValue)
+                           {
+                               string updateStockQuery = @"
+   UPDATE stock_master
+   SET
+       purchasedqty = purchasedqty + @packg,
+       closingstock = closingstock + @packg,
+       unitcost = @unitPrice,
+       mrpunit = @mrpUnit,
+       stockvalue =
+           (closingstock + @packg) * @unitPrice,
+       modifieddate = CURRENT_TIMESTAMP
+   WHERE stockcode = @stockcode;";
+
+                               await db.ExecuteAsync(
+                                   updateStockQuery,
+                                   new
+                                   {
+                                       stockcode = stockcode.Value,
+                                       item.packg,
+                                       unitPrice,
+                                       mrpUnit
+                                   },
+                                   transaction);
+                           }
+                           else
+                           {
+                               string insertStockQuery = @"
+   INSERT INTO stock_master
+   (
+       itemcode,
+       warehousecode,
+       branchcode,
+       openingstock,
+       purchasedqty,
+       soldqty,
+       damagedqty,
+       returnqty,
+       closingstock,
+       unitcost,
+       mrpunit,
+       stockvalue,
+       batchno,
+       manufacturingdate,
+       expirydate,
+       isactive,
+       deleted,
+       createddate,
+       usercode,
+       tenantcode,
+       companycode
+   )
+   VALUES
+   (
+       @itemcode,
+       @warehousecode,
+       @branchcode,
+       0,
+       @packg,
+       0,
+       0,
+       0,
+       @packg,
+       @unitPrice,
+       @mrpUnit,
+       (@packg * @unitPrice),
+       @batchno,
+       @manufacturingdate,
+       @expirydate,
+       true,
+       false,
+       CURRENT_TIMESTAMP,
+       @usercode,
+       @tenantcode,
+       @companycode
+   );";
+
+                               await db.ExecuteAsync(
+                                   insertStockQuery,
+                                   new
+                                   {
+                                       item.itemcode,
+                                       item.warehousecode,
+                                       branchcode = request.master.branchcode,
+                                       item.packg,
+                                       unitPrice,
+                                       mrpUnit,
+                                       item.batchno,
+                                       item.manufacturingdate,
+                                       item.expirydate,
+                                       usercode = request.master.usercode,
+                                       tenantcode = request.master.tenantcode,
+                                       companycode = request.master.companycode
+                                   },
+                                   transaction);
+                           }
+                       }
+
+                       transaction.Commit();
+
+                       return purchasecode;
+                   }
+                   catch (Exception ex)
+                   {
+                       transaction.Rollback();
+                       throw new Exception("Purchase Insert Failed : " + ex.Message);
+                   }
+               }
+           }
+       }
 
         public async Task<long> UpdatePurchase(purchase_request request)
         {
@@ -2806,7 +2810,7 @@ string tenantcode)
 
             return yearPrefix + nextSeq.ToString("D4");   // e.g. BILL20260001
         }
-        public async Task<string> InsertSales(sales_request request)
+               public async Task<string> InsertSales(sales_request request)
         {
             using (var conn = new NpgsqlConnection(con))
             {
@@ -2816,13 +2820,30 @@ string tenantcode)
                 {
                     try
                     {
-                        // Generate year-reset billno (e.g. BILL20260001, resets each year)
-                        string billno = await GetNextSalesBillNo(conn, trans, request.master.tenantcode);
+                        //========================================
+                        // Generate Bill Number
+                        //========================================
+
+                        string generatedBillNo = await GetNextSalesBillNo(
+                            conn,
+                            trans,
+                            request.master.tenantcode);
+
+                        // Remove BILL prefix
+                        // Example:
+                        // BILL202602 -> 202602
+                        string billno = generatedBillNo.StartsWith(
+                            "BILL",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? generatedBillNo.Substring(4)
+                            : generatedBillNo;
+
                         request.master.billno = billno;
 
-                        //==========================
+
+                        //========================================
                         // Insert Sales Master
-                        //==========================
+                        //========================================
 
                         string masterQuery = @"
 INSERT INTO sales_master
@@ -2839,10 +2860,7 @@ INSERT INTO sales_master
     mobileno,
     address,
     consultant,
-    prescribeddays,    
-    converteddays,
     grossamount,
-    discountpercentage,
     discountamount,
     taxamount,
     roundoff,
@@ -2872,13 +2890,10 @@ VALUES
     @warehousefield,
     @patientid,
     @patientname,
-    @mobileno, 
+    @mobileno,
     @address,
     @consultant,
-    @prescribeddays,   
-    @converteddays,
     @grossamount,
-    @discountpercentage,
     @discountamount,
     @taxamount,
     @roundoff,
@@ -2904,9 +2919,6 @@ RETURNING salescode;";
                             request.master,
                             trans);
 
-                        //==========================
-                        // Insert Sales Details
-                        //==========================
 
                         string detailQuery = @"
 INSERT INTO sales_detail
@@ -2927,7 +2939,6 @@ INSERT INTO sales_detail
     manufacturingdate,
     expirydate,
     soldqty,
-    days,
     warehousecode,
     tenantcode
 )
@@ -2949,7 +2960,6 @@ VALUES
     @manufacturingdate,
     @expirydate,
     @soldqty,
-    @days,
     @warehousecode,
     @tenantcode
 );";
