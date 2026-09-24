@@ -176,7 +176,9 @@ namespace medico_backend.Class
                 model.lsid = existing.lsid;
                 model.tenant_code = tenant_code;
                 model.deleted = false;
-               // model.op_age_wise_split ??= existing.op_age_wise_split;
+                // model.op_age_wise_split ??= existing.op_age_wise_split;
+                //model.enable_combo_registration ??= existing.enable_combo_registration;
+                //model.auto_route_billing_after_register ??= existing.auto_route_billing_after_register;
                 bool success = await db.UpdateAsync(model);
                 return (success, success ? null : "Update failed");
             }

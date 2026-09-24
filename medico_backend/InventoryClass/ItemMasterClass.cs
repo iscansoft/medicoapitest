@@ -7261,6 +7261,17 @@ AND deleted = false;";
                 throw;
             }
         }
+        public async Task<string> CancelPharmacyQueueByPrDetId(Guid pr_det_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            int rows = await db.ExecuteAsync(
+                @"UPDATE pharmacy_prescription_queue
+          SET status = 'CANCELLED', updated_at = NOW()
+          WHERE pr_det_id = @pr_det_id AND tenant_code = @tenant_code
+          AND status <> 'DISPENSED'",
+                new { pr_det_id, tenant_code });
+            return rows > 0 ? "Success" : "Queue item not found";
+        }
     }
 }
 

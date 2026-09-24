@@ -2,6 +2,8 @@
 using medico_backend.Model;
 using Npgsql;
 using System.Data;
+using medico_backend.InventoryClass;
+using medico_backend.InventoryModel;   // ReceivePrescriptionRequest, PrescriptionQueueItem
 
 namespace medico_backend.Class
 {
@@ -32,11 +34,15 @@ namespace medico_backend.Class
     {
         private readonly string _db_conn;
         private readonly UnbilledChargesClass _unbilledCls;
+        private readonly ItemMasterClass _itemMasterCls;   
 
-        public OTClass(IConfiguration configuration, UnbilledChargesClass unbilledCls)
+        public OTClass(IConfiguration configuration,
+                       UnbilledChargesClass unbilledCls,
+                       ItemMasterClass itemMasterCls)      
         {
             _db_conn = configuration.GetConnectionString("conn")!;
             _unbilledCls = unbilledCls;
+            _itemMasterCls = itemMasterCls;                
         }
 
         private IDbConnection GetConnection() => new NpgsqlConnection(_db_conn);
@@ -2061,7 +2067,48 @@ namespace medico_backend.Class
                 }
 
                 tx.Commit();
-                return $"Success|Id:{data.note_id}";
+
+                // ── NEW: MEDICINE items go to the pharmacy queue (best-effort, after commit) ──
+                string pharmacyTag = "";
+                if (string.Equals(data.item_type, "MEDICINE", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var pharmacyReq = new ReceivePrescriptionRequest
+                        {
+                            custid = surgeryReq.custid,
+                            op_id = surgeryReq.op_id,                    // string? already
+                            ip_id = surgeryReq.ip_id?.ToString(),
+                            sheet_id = null,
+                            // one group per surgery per day, so pharmacy sees one list
+                            pr_code = $"OTMED/{DateTime.UtcNow:yyyyMMdd}/{req.request_id.ToString()[..8]}",
+                            items = new List<PrescriptionQueueItem>
+                {
+                    new PrescriptionQueueItem
+                    {
+                        pr_det_id = data.note_id.ToString(),    // links queue row back to the staff note
+                        drug_name = data.item_name,
+                        qty       = data.quantity,              // cast if qty is int: (int)Math.Ceiling(data.quantity)
+                        notes     = string.IsNullOrWhiteSpace(data.remarks)
+                                        ? $"OT medicine{(string.IsNullOrWhiteSpace(data.used_by) ? "" : $" - used by {data.used_by}")}"
+                                        : data.remarks
+                    }
+                }
+                        };
+
+                        var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
+                        pharmacyTag = pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase)
+                            ? "|Pharmacy:Sent"
+                            : $"|Pharmacy:Failed({pharmRes})";
+                    }
+                    catch (Exception ex)
+                    {
+                        // Staff note is already saved and committed. Don't fail the OT user over a pharmacy hiccup.
+                        pharmacyTag = $"|Pharmacy:Failed({ex.Message})";
+                    }
+                }
+
+                return $"Success|Id:{data.note_id}{pharmacyTag}";   // was: return $"Success|Id:{data.note_id}";
             }
             catch (Exception ex)
             {

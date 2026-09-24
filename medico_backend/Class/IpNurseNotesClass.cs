@@ -3,6 +3,8 @@ using medico_backend.Model;
 using Npgsql;
 using System.Data;
 using static medico_backend.Model.IpBedsideChartModel;
+using medico_backend.InventoryClass;
+using medico_backend.InventoryModel;   // ReceivePrescriptionRequest, PrescriptionQueueItem
 
 namespace medico_backend.Class
 {
@@ -16,12 +18,16 @@ namespace medico_backend.Class
     public class IpBedsideChartClass
     {
         private readonly string _db_conn;
-        private readonly UnbilledChargesClass _unbilledCls;   // NEW
+        private readonly UnbilledChargesClass _unbilledCls;   
+        private readonly ItemMasterClass _itemMasterCls;   
 
-        public IpBedsideChartClass(IConfiguration configuration, UnbilledChargesClass unbilledCls)
+        public IpBedsideChartClass(IConfiguration configuration,
+                                   UnbilledChargesClass unbilledCls,
+                                   ItemMasterClass itemMasterCls)      
         {
             _db_conn = configuration.GetConnectionString("conn")!;
             _unbilledCls = unbilledCls;
+            _itemMasterCls = itemMasterCls;                            
         }
 
         private async Task<bool> IpExists(IDbConnection db, Guid ip_id, string tenant_code)
@@ -406,8 +412,49 @@ namespace medico_backend.Class
          data.updated_at
      });
 
-            return $"Success|Id:{data.med_id}";
+            // ... existing INSERT INTO ip_nurse_note_medicine stays exactly as is ...
+
+            // ── NEW: push to pharmacy queue (best-effort, same as FinalizeCaseSheet) ──
+            string pharmacyTag;
+            try
+            {
+                var pharmacyReq = new ReceivePrescriptionRequest
+                {
+                    custid = req.custid,
+                    op_id = null,
+                    ip_id = req.ip_id.ToString(),
+                    sheet_id = null,
+                    // one group per patient per day, so the pharmacist sees one list
+                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{req.ip_id.ToString()[..8]}",
+                    items = new List<PrescriptionQueueItem>
+            {
+                new PrescriptionQueueItem
+                {
+                    pr_det_id = data.med_id.ToString(),   // links queue row back to the nurse note
+                    drug_name = data.medicine_name,
+                    qty       = 1,
+                    route     = data.route,
+                    notes     = string.IsNullOrWhiteSpace(data.remarks)
+                                    ? (data.dose.HasValue ? $"Dose: {data.dose} {data.unit}" : null)
+                                    : data.remarks
+                }
+            }
+                };
+
+                var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
+                pharmacyTag = pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase)
+                    ? "|Pharmacy:Sent"
+                    : $"|Pharmacy:Failed({pharmRes})";
+            }
+            catch (Exception ex)
+            {
+                // Nurse note is already saved. Don't block the nurse on a pharmacy hiccup.
+                pharmacyTag = $"|Pharmacy:Failed({ex.Message})";
+            }
+
+            return $"Success|Id:{data.med_id}{pharmacyTag}";   // was: return $"Success|Id:{data.med_id}";
         }
+        
 
         public async Task<string> UpdateMedicine(UpdateMedicineRequest req, string tenant_code)
         {
