@@ -5291,24 +5291,13 @@ string tenantcode)
 
                 else
                 {
-                    long stockcode =
-                        await conn.ExecuteScalarAsync<long>(
-                            @"
-                    SELECT COALESCE(MAX(stockcode), 0) + 1
-                    FROM stock_master
-                    WHERE tenantcode = @tenantcode
-                    ",
-                            new
-                            {
-                                tenantcode
-                            },
-                            transaction);
+                        
 
-                    await conn.ExecuteAsync(
+                        await conn.ExecuteAsync(
                         @"
                 INSERT INTO stock_master
                 (
-                    stockcode,
+                    
                     itemcode,
                     warehousecode,
                     branchcode,
@@ -5339,7 +5328,6 @@ string tenantcode)
                 )
                 VALUES
                 (
-                    @stockcode,
                     @itemcode,
                     @warehousecode,
                     @branchcode,
@@ -5371,7 +5359,7 @@ string tenantcode)
                 ",
                         new
                         {
-                            stockcode,
+                            
 
                             itemcode = detail.itemcode,
 
@@ -5893,19 +5881,7 @@ stock_transfer_partial_reject_request request)
 
                     else
                     {
-                        long stockcode =
-                            await conn.ExecuteScalarAsync<long>(
-                                @"
-                        SELECT
-                            COALESCE(MAX(stockcode), 0) + 1
-                        FROM stock_master
-                        WHERE tenantcode = @tenantcode
-                        ",
-                                new
-                                {
-                                    tenantcode
-                                },
-                                transaction);
+                        
 
                         decimal stockValue =
                             action.acceptedqty *
@@ -5915,7 +5891,7 @@ stock_transfer_partial_reject_request request)
                             @"
                     INSERT INTO stock_master
                     (
-                        stockcode,
+                        
                         itemcode,
                         warehousecode,
                         branchcode,
@@ -5941,7 +5917,7 @@ stock_transfer_partial_reject_request request)
                     )
                     VALUES
                     (
-                        @stockcode,
+                        
                         @itemcode,
                         @warehousecode,
                         @branchcode,
@@ -5968,7 +5944,7 @@ stock_transfer_partial_reject_request request)
                     ",
                             new
                             {
-                                stockcode,
+                                
 
                                 itemcode =
                                     detail.itemcode,
