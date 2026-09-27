@@ -7258,6 +7258,322 @@ AND deleted = false;";
                 new { pr_det_id, tenant_code });
             return rows > 0 ? "Success" : "Queue item not found";
         }
+        // ═══════════════════════════════════════════════════════════════════════════
+        //  PASTE THESE METHODS INTO YOUR EXISTING  ItemMasterClass  (InventoryClass namespace)
+        //  Add "using medico_backend.InventoryModel;" if not already present (it already is).
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        // ─── PURCHASE ORDER — number generator (same pattern as GetNextGrnCode / GetNextSalesBillNo) ──
+        private async Task<string> GetNextPurchaseOrderNo(IDbConnection db, IDbTransaction transaction, string tenantcode)
+        {
+            int year = DateTime.Now.Year;
+            string yearPrefix = "PO" + year;   // e.g. PO2026
+
+            await db.ExecuteAsync(
+                "SELECT pg_advisory_xact_lock(hashtext(@lockkey));",
+                new { lockkey = "PURCHASEORDER_" + tenantcode + "_" + year },
+                transaction);
+
+            string query = @"
+        SELECT MAX(
+            CAST(SUBSTRING(orderno FROM LENGTH(@yearPrefix) + 1) AS bigint)
+        )
+        FROM public.purchase_order_master
+        WHERE tenantcode = @tenantcode
+          AND orderno LIKE @yearPrefix || '%'
+          AND SUBSTRING(orderno FROM LENGTH(@yearPrefix) + 1) ~ '^[0-9]+$';";
+
+            long? maxSeq = await db.ExecuteScalarAsync<long?>(
+                query, new { tenantcode, yearPrefix }, transaction);
+
+            long nextSeq = maxSeq.HasValue ? maxSeq.Value + 1 : 1;
+
+            return yearPrefix + nextSeq.ToString("D4");   // e.g. PO20260001
+        }
+
+        // ─── INSERT ─────────────────────────────────────────────────────────────────
+        public async Task<long> InsertPurchaseOrder(purchase_order_request request)
+        {
+            using (IDbConnection db = new NpgsqlConnection(con))
+            {
+                db.Open();
+
+                using (var transaction = db.BeginTransaction())
+                {
+                    try
+                    {
+                        if (request.details == null || !request.details.Any())
+                            throw new Exception("At least one item is required.");
+
+                        request.master.orderno = await GetNextPurchaseOrderNo(
+                            db, transaction, request.master.tenantcode);
+
+                        request.master.status = string.IsNullOrWhiteSpace(request.master.status)
+                            ? "PENDING"
+                            : request.master.status;
+
+                        string masterQuery = @"
+                    INSERT INTO public.purchase_order_master
+                    (
+                        orderno, orderdate, llrcode, vendorcode,
+                        overalltax, taxpercentage,
+                        grossamount, discountamount, taxamount, roundoff, grandtotal,
+                        status, remarks,
+                        isactive, deleted, createddate,
+                        usercode, tenantcode, branchcode, companycode
+                    )
+                    VALUES
+                    (
+                        @orderno, @orderdate, @llrcode, @vendorcode,
+                        @overalltax, @taxpercentage,
+                        @grossamount, @discountamount, @taxamount, @roundoff, @grandtotal,
+                        @status, @remarks,
+                        @isactive, @deleted, CURRENT_TIMESTAMP,
+                        @usercode, @tenantcode, @branchcode, @companycode
+                    )
+                    RETURNING ordercode;";
+
+                        long ordercode = await db.ExecuteScalarAsync<long>(masterQuery, request.master, transaction);
+
+                        string detailQuery = @"
+                    INSERT INTO public.purchase_order_detail
+                    (
+                        ordercode, itemcode, itemgroupcode,
+                        quantity, packing, freeqty, mrp, orderrate,
+                        discountpercentage, discountamount, amount,
+                        tenantcode
+                    )
+                    VALUES
+                    (
+                        @ordercode, @itemcode, @itemgroupcode,
+                        @quantity, @packing, @freeqty, @mrp, @orderrate,
+                        @discountpercentage, @discountamount, @amount,
+                        @tenantcode
+                    );";
+
+                        foreach (var item in request.details)
+                        {
+                            item.ordercode = ordercode;
+                            item.tenantcode = request.master.tenantcode;
+
+                            // amount = (qty * rate) - discountamount, guard against unset values
+                            item.amount = (item.quantity * item.orderrate) - item.discountamount;
+
+                            await db.ExecuteAsync(detailQuery, item, transaction);
+                        }
+
+                        if (request.terms != null && request.terms.Any())
+                        {
+                            string termQuery = @"
+                        INSERT INTO public.purchase_order_terms
+                        (ordercode, slno, termcondition, value, tenantcode)
+                        VALUES
+                        (@ordercode, @slno, @termcondition, @value, @tenantcode);";
+
+                            foreach (var term in request.terms)
+                            {
+                                term.ordercode = ordercode;
+                                term.tenantcode = request.master.tenantcode;
+                                await db.ExecuteAsync(termQuery, term, transaction);
+                            }
+                        }
+
+                        transaction.Commit();
+                        return ordercode;
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        throw new Exception("Purchase Order insert failed: " + ex.Message);
+                    }
+                }
+            }
+        }
+
+        // ─── UPDATE ─────────────────────────────────────────────────────────────────
+        public async Task<long> UpdatePurchaseOrder(purchase_order_request request)
+        {
+            using (IDbConnection db = new NpgsqlConnection(con))
+            {
+                db.Open();
+
+                using (var transaction = db.BeginTransaction())
+                {
+                    try
+                    {
+                        if (request.master.ordercode <= 0)
+                            throw new Exception("Valid ordercode is required.");
+
+                        string masterQuery = @"
+                    UPDATE public.purchase_order_master
+                    SET
+                        orderdate       = @orderdate,
+                        llrcode         = @llrcode,
+                        vendorcode      = @vendorcode,
+                        overalltax      = @overalltax,
+                        taxpercentage   = @taxpercentage,
+                        grossamount     = @grossamount,
+                        discountamount  = @discountamount,
+                        taxamount       = @taxamount,
+                        roundoff        = @roundoff,
+                        grandtotal      = @grandtotal,
+                        status          = @status,
+                        remarks         = @remarks,
+                        isactive        = @isactive,
+                        deleted         = @deleted,
+                        modifieddate    = CURRENT_TIMESTAMP,
+                        usercode        = @usercode,
+                        branchcode      = @branchcode,
+                        companycode     = @companycode
+                    WHERE ordercode = @ordercode
+                      AND tenantcode = @tenantcode;";
+
+                        int masterRows = await db.ExecuteAsync(masterQuery, request.master, transaction);
+
+                        if (masterRows == 0)
+                            throw new Exception("Purchase order not found.");
+
+                        await db.ExecuteAsync(
+                            "DELETE FROM public.purchase_order_detail WHERE ordercode = @ordercode;",
+                            new { ordercode = request.master.ordercode }, transaction);
+
+                        await db.ExecuteAsync(
+                            "DELETE FROM public.purchase_order_terms WHERE ordercode = @ordercode;",
+                            new { ordercode = request.master.ordercode }, transaction);
+
+                        string detailQuery = @"
+                    INSERT INTO public.purchase_order_detail
+                    (
+                        ordercode, itemcode, itemgroupcode,
+                        quantity, packing, freeqty, mrp, orderrate,
+                        discountpercentage, discountamount, amount,
+                        tenantcode
+                    )
+                    VALUES
+                    (
+                        @ordercode, @itemcode, @itemgroupcode,
+                        @quantity, @packing, @freeqty, @mrp, @orderrate,
+                        @discountpercentage, @discountamount, @amount,
+                        @tenantcode
+                    );";
+
+                        foreach (var item in request.details)
+                        {
+                            item.ordercode = request.master.ordercode;
+                            item.tenantcode = request.master.tenantcode;
+                            item.amount = (item.quantity * item.orderrate) - item.discountamount;
+
+                            await db.ExecuteAsync(detailQuery, item, transaction);
+                        }
+
+                        if (request.terms != null && request.terms.Any())
+                        {
+                            string termQuery = @"
+                        INSERT INTO public.purchase_order_terms
+                        (ordercode, slno, termcondition, value, tenantcode)
+                        VALUES
+                        (@ordercode, @slno, @termcondition, @value, @tenantcode);";
+
+                            foreach (var term in request.terms)
+                            {
+                                term.ordercode = request.master.ordercode;
+                                term.tenantcode = request.master.tenantcode;
+                                await db.ExecuteAsync(termQuery, term, transaction);
+                            }
+                        }
+
+                        transaction.Commit();
+                        return request.master.ordercode;
+                    }
+                    catch (Exception ex)
+                    {
+                        transaction.Rollback();
+                        throw new Exception("Purchase Order update failed: " + ex.Message);
+                    }
+                }
+            }
+        }
+
+        // ─── DELETE (soft delete) ─────────────────────────────────────────────────
+        public async Task<string> DeletePurchaseOrder(long ordercode, string tenantcode)
+        {
+            using (IDbConnection db = new NpgsqlConnection(con))
+            {
+                db.Open();
+
+                string query = @"
+            UPDATE public.purchase_order_master
+            SET deleted = true, isactive = false, modifieddate = CURRENT_TIMESTAMP
+            WHERE ordercode = @ordercode
+              AND tenantcode = @tenantcode;";
+
+                int rows = await db.ExecuteAsync(query, new { ordercode, tenantcode });
+                return rows > 0 ? "Success" : "Failed";
+            }
+        }
+
+        // ─── GET ALL ────────────────────────────────────────────────────────────────
+        public async Task<IEnumerable<purchase_order_request>> GetAllPurchaseOrders(string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            var masters = (await db.QueryAsync<purchase_order_master>(@"
+        SELECT * FROM public.purchase_order_master
+        WHERE deleted = false
+          AND tenantcode = @tenantcode
+        ORDER BY ordercode DESC;",
+                new { tenantcode })).ToList();
+
+            var details = (await db.QueryAsync<purchase_order_detail>(@"
+        SELECT * FROM public.purchase_order_detail
+        WHERE tenantcode = @tenantcode;",
+                new { tenantcode })).ToList();
+
+            var terms = (await db.QueryAsync<purchase_order_terms>(@"
+        SELECT * FROM public.purchase_order_terms
+        WHERE tenantcode = @tenantcode;",
+                new { tenantcode })).ToList();
+
+            return masters.Select(m => new purchase_order_request
+            {
+                master = m,
+                details = details.Where(d => d.ordercode == m.ordercode).ToList(),
+                terms = terms.Where(t => t.ordercode == m.ordercode).ToList()
+            });
+        }
+
+        // ─── GET BY CODE ─────────────────────────────────────────────────────────────
+        public async Task<purchase_order_request?> GetPurchaseOrderByCode(long ordercode, string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+
+            var master = await db.QueryFirstOrDefaultAsync<purchase_order_master>(@"
+        SELECT * FROM public.purchase_order_master
+        WHERE ordercode = @ordercode
+          AND tenantcode = @tenantcode
+          AND deleted = false;",
+                new { ordercode, tenantcode });
+
+            if (master == null) return null;
+
+            var details = await db.QueryAsync<purchase_order_detail>(@"
+        SELECT * FROM public.purchase_order_detail
+        WHERE ordercode = @ordercode;",
+                new { ordercode });
+
+            var terms = await db.QueryAsync<purchase_order_terms>(@"
+        SELECT * FROM public.purchase_order_terms
+        WHERE ordercode = @ordercode
+        ORDER BY slno;",
+                new { ordercode });
+
+            return new purchase_order_request
+            {
+                master = master,
+                details = details.ToList(),
+                terms = terms.ToList()
+            };
+        }
     }
 }
 

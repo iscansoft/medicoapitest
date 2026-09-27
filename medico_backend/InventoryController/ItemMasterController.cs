@@ -2731,6 +2731,135 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        // ═══════════════════════════════════════════════════════════════════════════
+        //  PASTE THESE ACTIONS INTO YOUR EXISTING  ItemMasterController
+        //  (uses the controller's existing GetTenantCode() / MissingTenantCode() helpers)
+        // ═══════════════════════════════════════════════════════════════════════════
+
+        // ─── PURCHASE ORDER ───────────────────────────────────────────────────────────
+
+        [HttpPost("insertpurchaseorder")]
+        public async Task<IActionResult> InsertPurchaseOrder([FromBody] purchase_order_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null)
+                    return BadRequest(new { Status = "Failed", Message = "Purchase order request is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one item is required." });
+
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+                if (request.terms != null)
+                    foreach (var t in request.terms) t.tenantcode = tenantcode;
+
+                var result = await itemclass.InsertPurchaseOrder(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Purchase order inserted successfully",
+                    OrderCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpPost("updatepurchaseorder")]
+        public async Task<IActionResult> UpdatePurchaseOrder([FromBody] purchase_order_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.master.ordercode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid ordercode is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one item is required." });
+
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+                if (request.terms != null)
+                    foreach (var t in request.terms) t.tenantcode = tenantcode;
+
+                var result = await itemclass.UpdatePurchaseOrder(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Purchase order updated successfully",
+                    OrderCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("deletepurchaseorder")]
+        public async Task<IActionResult> DeletePurchaseOrder(long ordercode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.DeletePurchaseOrder(ordercode, tenantcode);
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Purchase order deleted successfully" })
+                    : BadRequest(new { Status = "Failed", Message = "Purchase order not found" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getallpurchaseorders")]
+        public async Task<IActionResult> GetAllPurchaseOrders()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllPurchaseOrders(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getpurchaseorderbycode")]
+        public async Task<IActionResult> GetPurchaseOrderByCode(long ordercode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetPurchaseOrderByCode(ordercode, tenantcode);
+                return result == null
+                    ? NotFound(new { Status = "Failed", Message = "Purchase order not found" })
+                    : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     
