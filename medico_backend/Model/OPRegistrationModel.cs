@@ -176,6 +176,8 @@ namespace medico_backend.Model
         {
             public string item_type { get; set; } = "SERVICE"; // "SERVICE" | "DRESSING"
             public int? service_id { get; set; }                // required when item_type = SERVICE
+            public double? amount { get; set; }
+
         }
 
         public class ComboRegistrationRequest
@@ -188,7 +190,6 @@ namespace medico_backend.Model
             // What the single op_registration row itself represents
             public string primary_type { get; set; } = "CONSULTATION"; // "CONSULTATION" | "SERVICE" | "DRESSING"
             public int? primary_service_id { get; set; }               // required when primary_type = SERVICE/DRESSING
-
             public string? notes { get; set; }
             public int? enteredbhcode { get; set; }
             public int? cntcode { get; set; }

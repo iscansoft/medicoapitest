@@ -2357,6 +2357,11 @@ AND b.tenant_code = @tenant_code
                     }
 
                     var (itemTcode, itemRate, itemAmount) = await GetServiceCharge(db, serviceName, tenant_code);
+                    if (item.amount.HasValue)                    // ← ADD
+                    {                                            // ← ADD
+                        itemRate = item.amount.Value;          // ← ADD
+                        itemAmount = item.amount.Value;          // ← ADD
+                    }
 
                     // ✅ CHANGED — was AddConsultationCharge (blocked by the CONSULTATION guard).
                     var addRes = await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
@@ -2500,6 +2505,11 @@ AND b.tenant_code = @tenant_code
                     }
 
                     var (itemTcode, itemRate, itemAmount) = await GetServiceCharge(db, serviceName, tenant_code);
+                    if (item.amount.HasValue)
+                    {
+                        itemRate = item.amount.Value;
+                        itemAmount = item.amount.Value;
+                    }
 
                     var addRes = await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
                     {
