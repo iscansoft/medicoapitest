@@ -2788,7 +2788,7 @@ string tenantcode)
         private async Task<string> GetNextSalesBillNo(IDbConnection db, IDbTransaction transaction, string tenantcode)
         {
             int year = DateTime.Now.Year;
-            string yearPrefix = "BILL" + year;   // e.g. BILL2026
+            string yearPrefix = year.ToString();   // e.g. 2026 (stored format has no "BILL" prefix)
 
             // Serialize concurrent inserts for the same tenant+year (released automatically at tx end)
             await db.ExecuteAsync(
@@ -2797,28 +2797,26 @@ string tenantcode)
                 transaction);
 
             string query = @"
-        SELECT MAX(
-            CAST(SUBSTRING(billno FROM LENGTH(@yearPrefix) + 1) AS bigint)
-        )
-        FROM public.sales_master
-        WHERE tenantcode = @tenantcode
-          AND billno LIKE @yearPrefix || '%'
-          AND SUBSTRING(billno FROM LENGTH(@yearPrefix) + 1) ~ '^[0-9]+$';";
+        SELECT MAX(CAST(SUBSTRING(t.b FROM LENGTH(@yearPrefix::text) + 1) AS bigint))
+        FROM (
+            SELECT REGEXP_REPLACE(billno, '^BILL', '') AS b
+            FROM public.sales_master
+            WHERE tenantcode = @tenantcode
+              AND billno IS NOT NULL
+        ) t
+        WHERE t.b LIKE @yearPrefix::text || '%'
+          AND SUBSTRING(t.b FROM LENGTH(@yearPrefix::text) + 1) ~ '^[0-9]+$';";
 
             long? maxSeq = await db.ExecuteScalarAsync<long?>(
                 query,
-                new
-                {
-                    tenantcode,
-                    yearPrefix
-                },
+                new { tenantcode, yearPrefix },
                 transaction);
 
             long nextSeq = maxSeq.HasValue ? maxSeq.Value + 1 : 1;
 
-            return yearPrefix + nextSeq.ToString("D4");   // e.g. BILL20260001
+            return yearPrefix + nextSeq.ToString("D4");   // e.g. 20260001, 20260002 ...
         }
-               public async Task<string> InsertSales(sales_request request)
+        public async Task<string> InsertSales(sales_request request)
         {
             using (var conn = new NpgsqlConnection(con))
             {
