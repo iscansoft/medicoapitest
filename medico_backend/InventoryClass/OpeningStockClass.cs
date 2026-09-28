@@ -1,7 +1,7 @@
-﻿using Dapper;
+﻿using ClosedXML.Excel;
+using Dapper;
 using medico_backend.InventoryModel;
 using Npgsql;
-using OfficeOpenXml;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
@@ -267,20 +267,23 @@ namespace medico_backend.InventoryClass
         // ═════════════════════════════════════════════════════════════════════
         public byte[] BuildTemplate()
         {
-            using var package = new ExcelPackage();
-            var ws = package.Workbook.Worksheets.Add("OpeningStock");
+            using var workbook = new XLWorkbook();
+            var ws = workbook.Worksheets.Add("OpeningStock");
 
             string[] headers = { "Item Name", "Batch No", "Exp Date", "Opening Strip", "Opening Loose" };
             for (int i = 0; i < headers.Length; i++)
             {
-                ws.Cells[1, i + 1].Value = headers[i];
-                ws.Cells[1, i + 1].Style.Font.Bold = true;
+                var cell = ws.Cell(1, i + 1);
+                cell.Value = headers[i];
+                cell.Style.Font.Bold = true;
             }
 
-            ws.Column(3).Style.Numberformat.Format = "dd-mm-yyyy";
-            ws.Cells.AutoFitColumns();
+            ws.Column(3).Style.DateFormat.Format = "dd-mm-yyyy";
+            ws.Columns().AdjustToContents();
 
-            return package.GetAsByteArray();
+            using var ms = new MemoryStream();
+            workbook.SaveAs(ms);
+            return ms.ToArray();
         }
 
         // ═════════════════════════════════════════════════════════════════════
@@ -295,20 +298,23 @@ namespace medico_backend.InventoryClass
             var list = new List<opening_stock_excel_row>();
 
             using var stream = file.OpenReadStream();
-            using var package = new ExcelPackage(stream);
+            using var workbook = new XLWorkbook(stream);
 
-            var ws = package.Workbook.Worksheets.FirstOrDefault();
-            if (ws == null || ws.Dimension == null)
+            var ws = workbook.Worksheets.FirstOrDefault();
+            var lastRowUsed = ws?.LastRowUsed();
+            var lastColUsed = ws?.LastColumnUsed();
+
+            if (ws == null || lastRowUsed == null || lastColUsed == null)
                 throw new Exception("The Excel sheet is empty.");
 
-            int lastRow = ws.Dimension.End.Row;
-            int lastCol = ws.Dimension.End.Column;
+            int lastRow = lastRowUsed.RowNumber();
+            int lastCol = lastColUsed.ColumnNumber();
 
             // Map header names -> column numbers (row 1)
             var headerMap = new Dictionary<string, int>();
             for (int c = 1; c <= lastCol; c++)
             {
-                string key = Norm(ws.Cells[1, c].Text);
+                string key = Norm(ws.Cell(1, c).GetFormattedString());
                 if (key.Length > 0 && !headerMap.ContainsKey(key))
                     headerMap[key] = c;
             }
@@ -331,14 +337,14 @@ namespace medico_backend.InventoryClass
 
             for (int r = 2; r <= lastRow; r++)
             {
-                string itemname = ws.Cells[r, colItem].Text?.Trim() ?? "";
-                string batchno = ws.Cells[r, colBatch].Text?.Trim() ?? "";
+                string itemname = CellText(ws.Cell(r, colItem));
+                string batchno = CellText(ws.Cell(r, colBatch));
 
                 // Skip fully blank rows
                 if (itemname.Length == 0 && batchno.Length == 0 &&
-                    string.IsNullOrWhiteSpace(ws.Cells[r, colExp].Text) &&
-                    string.IsNullOrWhiteSpace(ws.Cells[r, colStrip].Text) &&
-                    string.IsNullOrWhiteSpace(ws.Cells[r, colLoose].Text))
+                    CellText(ws.Cell(r, colExp)).Length == 0 &&
+                    CellText(ws.Cell(r, colStrip)).Length == 0 &&
+                    CellText(ws.Cell(r, colLoose)).Length == 0)
                     continue;
 
                 totalRows++;
@@ -359,40 +365,40 @@ namespace medico_backend.InventoryClass
 
                 bool ok = true;
 
-                if (!TryParseExpiry(ws.Cells[r, colExp], out DateTime? exp))
+                if (!TryParseExpiry(ws.Cell(r, colExp), out DateTime? exp))
                 {
                     errors.Add(new opening_stock_upload_error
                     {
                         rownumber = r,
                         itemname = itemname,
                         batchno = batchno,
-                        message = $"Invalid Exp Date '{ws.Cells[r, colExp].Text}'."
+                        message = $"Invalid Exp Date '{CellText(ws.Cell(r, colExp))}'."
                     });
                     ok = false;
                 }
                 row.expirydate = exp;
 
-                if (!TryParseQty(ws.Cells[r, colStrip], out decimal strip) || strip < 0)
+                if (!TryParseQty(ws.Cell(r, colStrip), out decimal strip) || strip < 0)
                 {
                     errors.Add(new opening_stock_upload_error
                     {
                         rownumber = r,
                         itemname = itemname,
                         batchno = batchno,
-                        message = $"Invalid Opening Strip '{ws.Cells[r, colStrip].Text}'."
+                        message = $"Invalid Opening Strip '{CellText(ws.Cell(r, colStrip))}'."
                     });
                     ok = false;
                 }
                 row.openingstrip = strip;
 
-                if (!TryParseQty(ws.Cells[r, colLoose], out decimal loose) || loose < 0)
+                if (!TryParseQty(ws.Cell(r, colLoose), out decimal loose) || loose < 0)
                 {
                     errors.Add(new opening_stock_upload_error
                     {
                         rownumber = r,
                         itemname = itemname,
                         batchno = batchno,
-                        message = $"Invalid Opening Loose '{ws.Cells[r, colLoose].Text}'."
+                        message = $"Invalid Opening Loose '{CellText(ws.Cell(r, colLoose))}'."
                     });
                     ok = false;
                 }
@@ -432,41 +438,46 @@ namespace medico_backend.InventoryClass
             });
         }
 
+        private static string CellText(IXLCell cell) =>
+            cell.GetFormattedString()?.Trim() ?? "";
+
         // Blank quantity = 0
-        private static bool TryParseQty(ExcelRange cell, out decimal qty)
+        private static bool TryParseQty(IXLCell cell, out decimal qty)
         {
             qty = 0;
-            var v = cell.Value;
 
-            if (v == null || string.IsNullOrWhiteSpace(cell.Text)) return true;
+            if (cell.IsEmpty() || CellText(cell).Length == 0) return true;
 
-            if (v is double || v is float || v is decimal || v is int || v is long)
+            if (cell.Value.IsNumber)
             {
-                qty = Convert.ToDecimal(v);
+                qty = Convert.ToDecimal(cell.Value.GetNumber());
                 return true;
             }
 
-            return decimal.TryParse(cell.Text.Trim(), NumberStyles.Number,
+            return decimal.TryParse(CellText(cell), NumberStyles.Number,
                 CultureInfo.InvariantCulture, out qty);
         }
 
         // Handles real Excel dates, dd-MM-yyyy text, and month/year expiries (MM/yy -> end of month)
-        private static bool TryParseExpiry(ExcelRange cell, out DateTime? date)
+        private static bool TryParseExpiry(IXLCell cell, out DateTime? date)
         {
             date = null;
-            var v = cell.Value;
 
-            if (v == null || string.IsNullOrWhiteSpace(cell.Text)) return true;
+            if (cell.IsEmpty() || CellText(cell).Length == 0) return true;
 
-            if (v is DateTime dt) { date = dt.Date; return true; }
-
-            if (v is double d)
+            if (cell.Value.IsDateTime)
             {
-                try { date = DateTime.FromOADate(d).Date; return true; }
+                date = cell.Value.GetDateTime().Date;
+                return true;
+            }
+
+            if (cell.Value.IsNumber)
+            {
+                try { date = DateTime.FromOADate(cell.Value.GetNumber()).Date; return true; }
                 catch { return false; }
             }
 
-            string text = cell.Text.Trim();
+            string text = CellText(cell);
 
             // Placeholders such as "  -   -", "NA", "NIL" mean "no expiry date"
             if (Regex.IsMatch(text, @"^[-/._\s]*$") ||
