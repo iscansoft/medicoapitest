@@ -1327,6 +1327,6 @@ public long? customercode { get; set; }
             public List<purchase_order_detail> details { get; set; } = new();
             public List<purchase_order_terms>? terms { get; set; }
         }
-    
+        
 }
 

@@ -200,6 +200,8 @@ builder.Services.AddScoped<OTClass>();
 builder.Services.AddScoped<OTController>();
 builder.Services.AddScoped<BillingSummaryClass>();
 builder.Services.AddScoped<BillingSummaryController>();
+builder.Services.AddScoped<OpeningStockUploadClass>();
+builder.Services.AddScoped<OpeningStockController>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
