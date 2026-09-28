@@ -2885,7 +2885,9 @@ INSERT INTO sales_master
     tenantcode,
     branchcode,
     companycode,
-    ordercode
+    ordercode,
+    cntcode,
+    bh_code
 )
 VALUES
 (
@@ -2918,7 +2920,9 @@ VALUES
     @tenantcode,
     @branchcode,
     @companycode,
-    @ordercode
+    @ordercode,
+    @cntcode,
+    @bh_code
 )
 RETURNING salescode;";
 
@@ -3076,7 +3080,8 @@ WHERE stockcode=@stockcode;";
                         currencycode=@currencycode, remarks=@remarks,
                         modifieddate=NOW(), usercode=@usercode,
                         branchcode=@branchcode, companycode=@companycode,
-                        ordercode=@ordercode
+                        ordercode=@ordercode,cntcode=@cntcode,
+                        bh_code=@bh_code
                     WHERE salescode = @salescode
                       AND tenantcode = @tenantcode
                       AND deleted = false";

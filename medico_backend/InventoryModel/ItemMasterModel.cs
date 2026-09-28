@@ -645,8 +645,10 @@ namespace medico_backend.InventoryModel
      public string? companycode { get; set; }
 
      public long? ordercode { get; set; }
- }
- public class sales_detail
+     public decimal? cntcode { get; set; }
+     public int? bh_code { get; set; }
+    }
+    public class sales_detail
  {
      public long salesdetailcode { get; set; }
 
