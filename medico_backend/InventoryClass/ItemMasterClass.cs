@@ -880,7 +880,7 @@ namespace medico_backend.InventoryClass
                         INSERT INTO public.stock_master
                         (
                             itemcode, warehousecode, branchcode, locationcode,
-                            openingstock, purchasedqty, soldqty, damagedqty, returnqty, closingstock,
+                            openingstock,openingstrip, openingloose, purchasedqty, soldqty, damagedqty, returnqty, closingstock,
                             unitcost, stockvalue,
                             batchno, manufacturingdate, expirydate,
                             isactive, deleted, createddate,
@@ -889,7 +889,7 @@ namespace medico_backend.InventoryClass
                         VALUES
                         (
                             @itemcode, @warehousecode, @branchcode, @locationcode,
-                            @openingstock, @purchasedqty, @soldqty, @damagedqty, @returnqty, @closingstock,
+                            @openingstock, @openingstrip, @openingloose,@purchasedqty, @soldqty, @damagedqty, @returnqty, @closingstock,
                             @unitcost, @stockvalue,
                             @batchno, @manufacturingdate, @expirydate,
                             @isactive, @deleted, CURRENT_TIMESTAMP,
@@ -922,6 +922,8 @@ namespace medico_backend.InventoryClass
                             branchcode        = @branchcode,
                             locationcode      = @locationcode,
                             openingstock      = @openingstock,
+                            openingstrip      = @openingstrip,
+                            openingloose      = @openingloose,
                             purchasedqty      = @purchasedqty,
                             soldqty           = @soldqty,
                             damagedqty        = @damagedqty,
@@ -987,6 +989,8 @@ namespace medico_backend.InventoryClass
             branchcode,
             locationcode,
             openingstock,
+            openingstrip,
+            openingloose,
             purchasedqty,
             soldqty,
             damagedqty,
@@ -1026,6 +1030,8 @@ namespace medico_backend.InventoryClass
             branchcode,
             locationcode,
             openingstock,
+            openingstrip,
+            openingloose,
             purchasedqty,
             soldqty,
             damagedqty,
@@ -1065,6 +1071,8 @@ namespace medico_backend.InventoryClass
             branchcode,
             locationcode,
             openingstock,
+            openingstrip,
+            openingloose,
             purchasedqty,
             soldqty,
             damagedqty,

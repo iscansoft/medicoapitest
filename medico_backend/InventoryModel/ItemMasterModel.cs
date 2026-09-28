@@ -297,6 +297,8 @@ namespace medico_backend.InventoryModel
     public string? locationcode { get; set; }
 
     public decimal openingstock { get; set; }
+    public decimal openingstrip { get; set; }     // NEW
+    public decimal openingloose { get; set; }
     public decimal purchasedqty { get; set; }
     public decimal soldqty { get; set; }
     public decimal damagedqty { get; set; }
@@ -1246,10 +1248,7 @@ public long? customercode { get; set; }
         public consumption_master master { get; set; } = new();
         public List<consumption_detail> details { get; set; } = new();
     }
-    // ═══════════════════════════════════════════════════════════════════════════
-//  PASTE THESE CLASSES INTO:  medico_backend.InventoryModel  (existing model file)
-// ═══════════════════════════════════════════════════════════════════════════
-
+    
 
     
         // ─── PURCHASE ORDER MASTER ─────────────────────────────────────────────
