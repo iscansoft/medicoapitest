@@ -2318,10 +2318,12 @@ AND b.tenant_code = @tenant_code
                 int? primaryTcode; double primaryRate; double primaryAmount;
                 if (primaryType == "CONSULTATION")
                     (primaryTcode, primaryRate, primaryAmount) = await GetDoctorConsultationFee(db, req.dcode, tenant_code, req.custid);
+                else if (primaryType == "DRESSING")
+                    (primaryTcode, primaryRate, primaryAmount) = await GetServiceCharge(db, "Dressing", tenant_code);   // test_master, same as DressingRegistration
                 else
                     (primaryTcode, primaryRate, primaryAmount) = await GetServiceCharge(db, primarySvc!.service_name, tenant_code);
 
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                var primaryReq = new AddUnbilledConsultationRequest
                 {
                     op_id = data.op_id.ToString(),
                     custid = data.custid,
@@ -2329,11 +2331,37 @@ AND b.tenant_code = @tenant_code
                     rate = primaryRate,
                     amount = primaryAmount,
                     quantity = 1
-                }, tenant_code);
+                };
 
-                var billedItems = new List<string> { primaryType == "CONSULTATION" ? "CONSULTATION" : primarySvc!.service_name };
+                bool primaryDressingDeferred = primaryType == "DRESSING";
+                var deferredDressing = new List<AddUnbilledConsultationRequest>();
+                int billableCount = 0;
 
-                // ── Additional items — billed onto the SAME op_id, no separate token ──
+                async Task FlushDressing()
+                {
+                    if (primaryDressingDeferred)
+                    {
+                        await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                        primaryDressingDeferred = false;
+                    }
+                    foreach (var d in deferredDressing)
+                        await _unbilledCls.AddVisitAdditionalCharge(d, "DRESSING", tenant_code);
+                    deferredDressing.Clear();
+                }
+
+                if (!primaryDressingDeferred)
+                {
+                    await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                    billableCount++;
+                }
+
+                var billedItems = new List<string>
+{
+    primaryType == "CONSULTATION" ? "CONSULTATION"
+    : primaryType == "DRESSING"   ? "Dressing"
+    : primarySvc!.service_name
+}; 
+
                 foreach (var item in req.additional_items ?? new())
                 {
                     string itemType = item.item_type.ToUpper();
@@ -2347,24 +2375,21 @@ AND b.tenant_code = @tenant_code
                     {
                         var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
                             @"SELECT * FROM service_type_master
-                              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
                             new { item.service_id, tenant_code });
 
                         if (svc == null)
+                        {
+                            await FlushDressing();
                             return $"Success-Partial|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Error:Service id {item.service_id} not configured, remaining items skipped";
-
+                        }
                         serviceName = svc.service_name;
                     }
 
                     var (itemTcode, itemRate, itemAmount) = await GetServiceCharge(db, serviceName, tenant_code);
-                    if (item.amount.HasValue)                    // ← ADD
-                    {                                            // ← ADD
-                        itemRate = item.amount.Value;          // ← ADD
-                        itemAmount = item.amount.Value;          // ← ADD
-                    }
+                    if (item.amount.HasValue) { itemRate = item.amount.Value; itemAmount = item.amount.Value; }
 
-                    // ✅ CHANGED — was AddConsultationCharge (blocked by the CONSULTATION guard).
-                    var addRes = await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                    var itemReq = new AddUnbilledConsultationRequest
                     {
                         op_id = data.op_id.ToString(),
                         custid = data.custid,
@@ -2372,22 +2397,34 @@ AND b.tenant_code = @tenant_code
                         rate = itemRate,
                         amount = itemAmount,
                         quantity = 1
-                    }, itemType, tenant_code);   // itemType = "SERVICE" or "DRESSING"
+                    };
 
+                    if (itemType == "DRESSING")
+                    {
+                        deferredDressing.Add(itemReq);   // held back, stays unbilled
+                        billedItems.Add(serviceName);
+                        continue;
+                    }
+
+                    var addRes = await _unbilledCls.AddVisitAdditionalCharge(itemReq, itemType, tenant_code);
                     if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await FlushDressing();
                         return $"Success-Partial|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Error:{serviceName}: {addRes}";
+                    }
 
+                    billableCount++;
                     billedItems.Add(serviceName);
                 }
 
                 bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
-     @"SELECT auto_route_billing_after_register FROM lab_settings
-                      WHERE tenant_code = @tenant_code AND deleted = false
-                      ORDER BY (bh_code IS NULL) LIMIT 1",
-     new { tenant_code }) ?? false;
+                    @"SELECT auto_route_billing_after_register FROM lab_settings
+      WHERE tenant_code = @tenant_code AND deleted = false
+      ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? false;
 
                 string autoBillTag = "";
-                if (routeToBilling)
+                if (routeToBilling && billableCount > 0)
                 {
                     var (billStatus, billData) = await _billingCls.AutoBillOpVisit(
                         data.op_id.ToString(), data.custid, data.dcode,
@@ -2397,8 +2434,16 @@ AND b.tenant_code = @tenant_code
                         ? $"|AutoBilled:true|BillNo:{billData?.bill_no}|BillGuid:{billData?.requestguid}|Balance:{billData?.balance_amount}"
                         : $"|AutoBilled:false|AutoBillError:{billStatus}";
                 }
+                else if (routeToBilling)
+                {
+                    autoBillTag = "|AutoBilled:false|AutoBillSkipped:DressingOnly";
+                }
 
-                return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling}{autoBillTag}";
+                // Dressing is inserted AFTER auto-bill so it isn't picked up
+                bool hadDressing = primaryDressingDeferred || deferredDressing.Count > 0;
+                await FlushDressing();
+
+                return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{token}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling && billableCount > 0}|DressingUnbilled:{hadDressing}{autoBillTag}";
             }
             catch (Exception ex)
             {
@@ -2476,6 +2521,15 @@ AND b.tenant_code = @tenant_code
                     return "Cannot add services to a cancelled visit";
 
                 var billedItems = new List<string>();
+                var deferredDressing = new List<AddUnbilledConsultationRequest>();
+                int billableCount = 0;
+
+                async Task FlushDressing()
+                {
+                    foreach (var d in deferredDressing)
+                        await _unbilledCls.AddVisitAdditionalCharge(d, "DRESSING", tenant_code);
+                    deferredDressing.Clear();
+                }
 
                 foreach (var item in req.items)
                 {
@@ -2490,28 +2544,21 @@ AND b.tenant_code = @tenant_code
                     {
                         var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
                             @"SELECT * FROM service_type_master
-                      WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
                             new { item.service_id, tenant_code });
 
                         if (svc == null)
                         {
-                            string partial = billedItems.Count > 0
-                                ? $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}"
-                                : "Success-Partial|OpId:" + op.op_id + "|OpNo:" + op.op_no + "|Items:";
-                            return $"{partial}|Error:Service id {item.service_id} not configured, remaining items skipped";
+                            await FlushDressing();
+                            return $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|Error:Service id {item.service_id} not configured, remaining items skipped";
                         }
-
                         serviceName = svc.service_name;
                     }
 
                     var (itemTcode, itemRate, itemAmount) = await GetServiceCharge(db, serviceName, tenant_code);
-                    if (item.amount.HasValue)
-                    {
-                        itemRate = item.amount.Value;
-                        itemAmount = item.amount.Value;
-                    }
+                    if (item.amount.HasValue) { itemRate = item.amount.Value; itemAmount = item.amount.Value; }
 
-                    var addRes = await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                    var itemReq = new AddUnbilledConsultationRequest
                     {
                         op_id = op.op_id.ToString(),
                         custid = op.custid,
@@ -2519,41 +2566,43 @@ AND b.tenant_code = @tenant_code
                         rate = itemRate,
                         amount = itemAmount,
                         quantity = 1
-                    }, itemType, tenant_code);
+                    };
 
-                    if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                    if (itemType == "DRESSING")
                     {
-                        string partial = billedItems.Count > 0
-                            ? $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}"
-                            : "Success-Partial|OpId:" + op.op_id + "|OpNo:" + op.op_no + "|Items:";
-                        return $"{partial}|Error:{serviceName}: {addRes}";
+                        deferredDressing.Add(itemReq);
+                        billedItems.Add(serviceName);
+                        continue;
                     }
 
+                    var addRes = await _unbilledCls.AddVisitAdditionalCharge(itemReq, itemType, tenant_code);
+                    if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                    {
+                        await FlushDressing();
+                        return $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|Error:{serviceName}: {addRes}";
+                    }
+
+                    billableCount++;
                     billedItems.Add(serviceName);
                 }
 
-                // Optional trail — who added these extra items and when, without
-                // touching visit_status/token/queue_no
                 string addedNote = $"[+Services by {req.usercode?.ToString() ?? "system"} @ {DateTime.UtcNow:u}]: {string.Join(", ", billedItems)}";
                 string newNotes = string.IsNullOrWhiteSpace(op.notes) ? addedNote : $"{op.notes} | {addedNote}";
 
                 await db.ExecuteAsync(
                     @"UPDATE op_registration
-              SET notes      = @newNotes,
-                  updated_at = now()
-              WHERE op_id      = @op_id
-              AND   tenant_code = @tenant_code",
+      SET notes = @newNotes, updated_at = now()
+      WHERE op_id = @op_id AND tenant_code = @tenant_code",
                     new { newNotes, req.op_id, tenant_code });
 
-                // Same auto-route-to-billing switch combo uses
                 bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
                     @"SELECT auto_route_billing_after_register FROM lab_settings
-              WHERE tenant_code = @tenant_code AND deleted = false
-              ORDER BY (bh_code IS NULL) LIMIT 1",
+      WHERE tenant_code = @tenant_code AND deleted = false
+      ORDER BY (bh_code IS NULL) LIMIT 1",
                     new { tenant_code }) ?? false;
 
                 string autoBillTag = "";
-                if (routeToBilling)
+                if (routeToBilling && billableCount > 0)
                 {
                     var (billStatus, billData) = await _billingCls.AutoBillOpVisit(
                         op.op_id.ToString(), op.custid, op.dcode,
@@ -2563,8 +2612,15 @@ AND b.tenant_code = @tenant_code
                         ? $"|AutoBilled:true|BillNo:{billData?.bill_no}|BillGuid:{billData?.requestguid}|Balance:{billData?.balance_amount}"
                         : $"|AutoBilled:false|AutoBillError:{billStatus}";
                 }
+                else if (routeToBilling)
+                {
+                    autoBillTag = "|AutoBilled:false|AutoBillSkipped:DressingOnly";
+                }
 
-                return $"Success|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling}{autoBillTag}";
+                bool hadDressing = deferredDressing.Count > 0;
+                await FlushDressing();
+
+                return $"Success|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling && billableCount > 0}|DressingUnbilled:{hadDressing}{autoBillTag}";
             }
             catch (Exception ex)
             {
