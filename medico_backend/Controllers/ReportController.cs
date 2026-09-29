@@ -213,8 +213,8 @@ namespace medico_backend.Controllers
 
         [HttpGet("getconsolidatedbill")]
         public async Task<IActionResult> GetConsolidatedBill(
-            [FromQuery] Guid requestguid, 
-            [FromQuery] bool includeMedicines = true, 
+            [FromQuery] Guid requestguid,
+            [FromQuery] bool includeMedicines = true,
             [FromQuery] bool? isletterhead = false,
             [FromQuery] Guid? op_id = null)
         {
@@ -294,10 +294,10 @@ namespace medico_backend.Controllers
                 return BadRequest(new { success = false, message = "BillNo is required." });
 
             var res = await _reportClass.GetPharmacyBillAsync(billNo, T, orientation ?? "portrait");
-            
+
             if (res == null)
                 return NotFound(new { success = false, message = "Pharmacy bill not found." });
-                
+
             return Ok(res);
         }
 
@@ -323,10 +323,10 @@ namespace medico_backend.Controllers
 
         [HttpGet("getconsolidatedlists")]
         public async Task<IActionResult> GetConsolidatedLists(
-            [FromQuery] DateTime fromdate, 
-            [FromQuery] DateTime todate, 
-            [FromQuery] string? type = "ALL", 
-            [FromQuery] string? search = null, 
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] string? type = "ALL",
+            [FromQuery] string? search = null,
             [FromQuery] bool? isletterhead = false)
         {
             if (string.IsNullOrWhiteSpace(T))
@@ -338,9 +338,9 @@ namespace medico_backend.Controllers
 
         [HttpGet("getconsolidatedlistsdata")]
         public async Task<IActionResult> GetConsolidatedListsData(
-            [FromQuery] DateTime fromdate, 
-            [FromQuery] DateTime todate, 
-            [FromQuery] string? type = "ALL", 
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] string? type = "ALL",
             [FromQuery] string? search = null)
         {
             if (string.IsNullOrWhiteSpace(T))

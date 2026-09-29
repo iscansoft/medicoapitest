@@ -1595,7 +1595,7 @@ namespace medico_backend.Class
             }
         }
 
-        public async Task<string>   BillPDF(Guid requestguid, string tenant_code, bool? isletterhead = false)
+        public async Task<string> BillPDF(Guid requestguid, string tenant_code, bool? isletterhead = false)
         {
             try
             {
@@ -1604,13 +1604,13 @@ namespace medico_backend.Class
                 // ─── Step 1: Bill data ────────────────────────────────────────────
                 string billSql = @"
             SELECT 
-                -- ✅ PatientId: custcode from customer_master (mirrors statement JOIN)
-                COALESCE(cm.custcode, '')                                    AS PatientId,
+                -- ✅ PatientId: custcode from customer_registration_master (referring custid & tenant_code)
+                COALESCE(crm.custcode, cm.custcode, '')                      AS PatientId,
 
                 -- ✅ BillNo: prefer formatted print version, fall back to int::text
                 COALESCE(lrm.requestsno::text)     AS BillNo,
                 lrm.requestsnoprint::text AS RequestSnoPrint,
-                (lrm.requestdatetime AT TIME ZONE 'Asia/Kolkata') AS BillDate,
+                lrm.requestdatetime                                          AS BillDate,
                 COALESCE(lrm.name,    '')                                    AS PatientName,
                 CONCAT(
                     COALESCE(lrm.ageyears,  '0'), ' Y ',
@@ -1626,7 +1626,7 @@ namespace medico_backend.Class
                 COALESCE(lrm.onlinepassword, '')                             AS Password,
 
                 COALESCE(um.name, '')                                        AS CreatedBy,
-                (COALESCE(lrm.entereddate, lrm.requestdatetime) AT TIME ZONE 'Asia/Kolkata') AS CreatedTime,
+                COALESCE(lrm.entereddate, lrm.requestdatetime)               AS CreatedTime,
                 -- TotalAmount: gross before discount (requestamount)
                 COALESCE(lrm.requestamount, 0)::numeric                      AS TotalAmount,
 
@@ -1663,13 +1663,16 @@ namespace medico_backend.Class
 
             FROM lab_request_master lrm
 
-            -- ✅ custcode for PatientId — mirrors the statement query JOIN
-            LEFT JOIN customerdb.customer_master cm ON cm.custid     = lrm.custid
+            -- ✅ custcode for PatientId — refers custid and tenant_code in customer_registration_master
+            LEFT JOIN customerdb.customer_master cm ON cm.custid = lrm.custid
+            LEFT JOIN customerdb.customer_registration_master crm
+                   ON crm.custid = lrm.custid
+                  AND (LOWER(crm.tenant_code) = LOWER(lrm.tenant_code) OR LOWER(crm.tenant_code) = LOWER(@tenant_code) OR crm.tenant_code IS NULL OR crm.tenant_code = '')
             LEFT JOIN doctor_master              dm ON dm.dcode       = lrm.dcode
-            LEFT JOIN mastertenant.user_master                um ON um.user_code   = lrm.usercode
+            LEFT JOIN mastertenant.user_master   um ON um.user_code   = lrm.usercode
 
             WHERE lrm.requestguid = @requestguid
-              AND lrm.tenant_code = @tenant_code;
+              AND (LOWER(lrm.tenant_code) = LOWER(@tenant_code) OR lrm.tenant_code IS NULL);
         ";
 
                 var bill = await db.QueryFirstOrDefaultAsync<CashBillModel>(
@@ -1679,6 +1682,24 @@ namespace medico_backend.Class
 
                 if (bill == null)
                     throw new Exception($"Bill not found for requestguid={requestguid}");
+
+                // ✅ Convert UTC timestamps to system local timezone
+                var localZone = TimeZoneInfo.Local;
+                if (bill.BillDate != default)
+                {
+                    var utcBillDate = bill.BillDate.Kind == DateTimeKind.Utc
+                        ? bill.BillDate
+                        : DateTime.SpecifyKind(bill.BillDate, DateTimeKind.Utc);
+                    bill.BillDate = TimeZoneInfo.ConvertTimeFromUtc(utcBillDate, localZone);
+                }
+
+                if (bill.CreatedTime != default)
+                {
+                    var utcCreatedTime = bill.CreatedTime.Kind == DateTimeKind.Utc
+                        ? bill.CreatedTime
+                        : DateTime.SpecifyKind(bill.CreatedTime, DateTimeKind.Utc);
+                    bill.CreatedTime = TimeZoneInfo.ConvertTimeFromUtc(utcCreatedTime, localZone);
+                }
 
                 // ─── Step 2: Company info ─────────────────────────────────────────
                 string sql1 = @"
@@ -1708,17 +1729,70 @@ namespace medico_backend.Class
 
                 // Line items (part of payload build — same block as step 3)
                 string itemSql = @"
-                        SELECT
-                ROW_NUMBER() OVER (ORDER BY lrd.testsno) AS SNo,
-                COALESCE(tm.name, '') AS TestName,
-                COALESCE(lrd.testamount, 0)::numeric AS Amount
-            FROM lab_request_details lrd
-            LEFT JOIN test_master tm
-                ON tm.tcode = lrd.tcode
-            WHERE lrd.requestguid = @requestguid
-              AND lrd.tenant_code = @tenant_code
-            ORDER BY lrd.testsno;
-                    ";
+                    SELECT
+                        ROW_NUMBER() OVER (
+                            ORDER BY 
+                                MIN(COALESCE(NULLIF(gm.orderno, 0), 9999)) ASC, 
+                                MIN(COALESCE(NULLIF(tm.orderno, 0), 9999)) ASC, 
+                                MIN(COALESCE(lrd.testsno, 0)) ASC
+                        ) AS SNo,
+                        CASE 
+                            WHEN COALESCE(MAX(lrd.packcode), 0) > 0 THEN
+                                COALESCE(
+                                    NULLIF(MAX(pm.name), ''),
+                                    NULLIF(MAX(pm.shortname), ''),
+                                    NULLIF(MAX(tm_pack.name), ''),
+                                    MAX(tm.name),
+                                    'PACKAGE'
+                                )
+                            ELSE
+                                COALESCE(MAX(lrd.item_name), MAX(tm.name), '')
+                        END AS TestName,
+                        GREATEST(
+                            SUM(COALESCE(lrd.testamount, 0)),
+                            MAX(COALESCE(pm.packageamount, 0))
+                        )::numeric AS Amount,
+                        COALESCE(
+                            NULLIF(SUM(COALESCE(lrd.qty, 1)), 0),
+                            1
+                        )::numeric AS Unit,
+                        COALESCE(
+                            NULLIF(MAX(COALESCE(lrd.standardprice, lrd.testrate, 0)), 0),
+                            GREATEST(
+                                SUM(COALESCE(lrd.testamount, 0)),
+                                MAX(COALESCE(pm.packageamount, 0))
+                            )
+                        )::numeric AS Rate
+                    FROM lab_request_details lrd
+                    LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                    LEFT JOIN group_master gm ON gm.gcode = tm.gcode
+                    LEFT JOIN package_master pm 
+                        ON pm.packcode = lrd.packcode 
+                       AND COALESCE(pm.deleted, false) = false
+                    LEFT JOIN test_master tm_pack 
+                        ON tm_pack.tcode = lrd.packcode 
+                       AND (LOWER(tm_pack.tenant_code) = LOWER(lrd.tenant_code) OR tm_pack.tenant_code IS NULL OR tm_pack.tenant_code = '')
+                    WHERE lrd.requestguid = @requestguid
+                      AND (LOWER(lrd.tenant_code) = LOWER(@tenant_code) OR lrd.tenant_code IS NULL)
+                      AND COALESCE(lrd.isdeleted, false) = false
+                    GROUP BY 
+                        CASE 
+                            WHEN COALESCE(lrd.packcode, 0) > 0 THEN COALESCE(lrd.packcode, 0)
+                            ELSE lrd.tcode
+                        END,
+                        CASE 
+                            WHEN COALESCE(lrd.packcode, 0) > 0 THEN ''
+                            ELSE COALESCE(lrd.item_name, tm.name, '')
+                        END,
+                        CASE 
+                            WHEN COALESCE(lrd.packcode, 0) > 0 THEN 0
+                            ELSE lrd.testsno
+                        END
+                    ORDER BY 
+                        MIN(COALESCE(NULLIF(gm.orderno, 0), 9999)) ASC, 
+                        MIN(COALESCE(NULLIF(tm.orderno, 0), 9999)) ASC, 
+                        MIN(COALESCE(lrd.testsno, 0)) ASC;
+                ";
 
                 bill.Items = (
                     await db.QueryAsync<CashBillItemModel>(
@@ -2622,104 +2696,104 @@ namespace medico_backend.Class
             return val;
         }
 
-                                private static RoutineReportModel MapRow(
-            RawReportRow r, Dictionary<string, byte[]> cache) => new()
-            {
-                TenantId = r.TenantId ?? "",
-                RequestSno = r.RequestSno,
-                RequestBarCode = string.IsNullOrWhiteSpace(r.RequestBarCode)
-                    ? GenerateBlankPng()
-                    : GenerateBarcodePng(r.RequestBarCode),
-                RequestDateTime = ToLocalReportTime(r.RequestDateTime, DateTime.MinValue) ?? r.RequestDateTime,
-                RequestedDateTime = ToLocalReportTime(r.RequestedDateTime, DateTime.MinValue) ?? r.RequestedDateTime,
-                Name = r.Name ?? "",
-                Gender = r.Gender ?? "",
-                DateofBirth = r.DateofBirth ?? "",
-                AgeYears = r.AgeYears,
-                AgeMonths = r.AgeMonths,
-                AgeDays = r.AgeDays,
-                Address = r.Address ?? "",
-                MobileNo = r.MobileNo ?? "",
-                RequestAmount = r.RequestAmount,
-                Description = r.Description ?? "",
-                CustCode = r.CustCode ?? "",
-                Sample = r.Sample ?? "",
-                TestName = r.TestName ?? "",
-                GroupName = r.GroupName ?? "",
-                Doctor = r.Doctor ?? "",
-                Initial = r.Initial ?? "",
-                NameTitle = r.NameTitle ?? "",
-                Reference = r.Reference ?? "",
-                DoctorCode = r.DoctorCode ?? "",
-                EnteredResult = r.EnteredResult ?? "",
-                Reporting = r.Reporting ?? "",
-                CityName = r.CityName ?? "",
-                AreaPinCode = r.AreaPinCode ?? "",
-                AreaName = r.AreaName ?? "",
-                RequestGUID = r.RequestGUID ?? "",
-                TestSno = r.TestSno,
-                Col2 = r.Col2 ?? "",
-                Units = (!string.IsNullOrWhiteSpace(r.Units) ? r.Units : r.TRPUName) ?? "",
-                ResultSno = r.ResultSno,
-                CustomerImage = GetImage(r.CustomerImage, cache),
-                SignatureImage = GetImage(r.SignatureImage, cache),
-                ResultGUID = r.ResultGUID ?? "",
-                ValueType = r.ValueType ?? "",
-                TCode = r.TCode,
-                ResultDateTime = ToLocalReportTime(r.ResultDateTime, r.RequestDateTime),
-                ResultType = r.ResultType ?? "",
-                PrintInSeparatePage = r.PrintInSeparatePage,
-                TestOrderNo = r.TestOrderNo,
-                GroupOrderNo = r.GroupOrderNo,
-                RoomNo = r.RoomNo ?? "",
-                OPID = r.OPID ?? "",
-                IPID = r.IPID ?? "",
-                HospitalID = r.HospitalID ?? "",
-                Email = r.Email ?? "",
-                AlteredBHCode = r.AlteredBHCode ?? "",
-                CollectedDateTime = ToLocalReportTime(r.CollectedDateTime, r.RequestDateTime),
-                OnlineCode = r.OnlineCode ?? "",
-                ResultValueType = r.ResultValueType ?? "",
-                DefaultValue = r.DefaultValue ?? "",
-                SimpleNormalValues = r.SimpleNormalValues,
-                DetailedNormalValues = r.DetailedNormalValues,
-                RangeType = r.RangeType ?? "",
-                FromNormalValue = r.FromNormalValue,
-                ToNormalValue = r.ToNormalValue,
-                ConclusionForHigher = r.ConclusionForHigher ?? "",
-                ConclusionForLower = r.ConclusionForLower ?? "",
-                ConclusionForFixedText = r.ConclusionForFixedText ?? "",
-                PrintFixedTextConclusionInReport = r.PrintFixedTextConclusionInReport,
-                ShowAgedBased = r.ShowAgedBased,
-                ShowAlertOnHigherLower = r.ShowAlertOnHigherLower,
-                FooterMessage = r.FooterMessage ?? "",
-                TRPUName = r.TRPUName ?? "",
-                FixedValues = r.FixedValues ?? "",
-                DecimalPlaces = r.DecimalPlaces,
-                ReportingMethod = r.ReportingMethod ?? "",
-                TestResultID = r.TestResultID,
-                RequestSnoPrint = r.RequestSnoPrint ?? "",
-                PrintResultOnly = r.PrintResultOnly,
-                ResultNormal = r.ResultNormal,
-                ResultHigh = r.ResultHigh,
-                ResultLow = r.ResultLow,
-                IsInvestigationPartial = r.IsInvestigationPartial,
-                ResultSample = r.ResultSample ?? "",
-                DoctorFullName = r.DoctorFullName ?? "",
-                DCode = r.DCode,
-                FrontHospitalID = r.FrontHospitalID ?? "",
-                FrontHospitalPatientID = r.FrontHospitalPatientID ?? "",
-                IsAuthorized1 = r.IsAuthorized1,
-                DoctorTitle = r.DoctorTitle ?? "",
-                SecondDoctorName = r.SecondDoctorName ?? "",
-                SecondDCode = r.SecondDCode,
-                DefaultAuthorizeImage = GetImage(r.DefaultAuthorizeImage, cache),
-                DefaultAuthorizeName = r.DefaultAuthorizeName ?? "",
-                DefaultAuthorizeDesignation = r.DefaultAuthorizeDesignation ?? "",
-                NormalValues = r.NormalValues ?? "",
-                RowNum = r.RowNum,
-                MCCode = r.MCCode,
-            };
+        private static RoutineReportModel MapRow(
+RawReportRow r, Dictionary<string, byte[]> cache) => new()
+{
+TenantId = r.TenantId ?? "",
+RequestSno = r.RequestSno,
+RequestBarCode = string.IsNullOrWhiteSpace(r.RequestBarCode)
+? GenerateBlankPng()
+: GenerateBarcodePng(r.RequestBarCode),
+RequestDateTime = ToLocalReportTime(r.RequestDateTime, DateTime.MinValue) ?? r.RequestDateTime,
+RequestedDateTime = ToLocalReportTime(r.RequestedDateTime, DateTime.MinValue) ?? r.RequestedDateTime,
+Name = r.Name ?? "",
+Gender = r.Gender ?? "",
+DateofBirth = r.DateofBirth ?? "",
+AgeYears = r.AgeYears,
+AgeMonths = r.AgeMonths,
+AgeDays = r.AgeDays,
+Address = r.Address ?? "",
+MobileNo = r.MobileNo ?? "",
+RequestAmount = r.RequestAmount,
+Description = r.Description ?? "",
+CustCode = r.CustCode ?? "",
+Sample = r.Sample ?? "",
+TestName = r.TestName ?? "",
+GroupName = r.GroupName ?? "",
+Doctor = r.Doctor ?? "",
+Initial = r.Initial ?? "",
+NameTitle = r.NameTitle ?? "",
+Reference = r.Reference ?? "",
+DoctorCode = r.DoctorCode ?? "",
+EnteredResult = r.EnteredResult ?? "",
+Reporting = r.Reporting ?? "",
+CityName = r.CityName ?? "",
+AreaPinCode = r.AreaPinCode ?? "",
+AreaName = r.AreaName ?? "",
+RequestGUID = r.RequestGUID ?? "",
+TestSno = r.TestSno,
+Col2 = r.Col2 ?? "",
+Units = (!string.IsNullOrWhiteSpace(r.Units) ? r.Units : r.TRPUName) ?? "",
+ResultSno = r.ResultSno,
+CustomerImage = GetImage(r.CustomerImage, cache),
+SignatureImage = GetImage(r.SignatureImage, cache),
+ResultGUID = r.ResultGUID ?? "",
+ValueType = r.ValueType ?? "",
+TCode = r.TCode,
+ResultDateTime = ToLocalReportTime(r.ResultDateTime, r.RequestDateTime),
+ResultType = r.ResultType ?? "",
+PrintInSeparatePage = r.PrintInSeparatePage,
+TestOrderNo = r.TestOrderNo,
+GroupOrderNo = r.GroupOrderNo,
+RoomNo = r.RoomNo ?? "",
+OPID = r.OPID ?? "",
+IPID = r.IPID ?? "",
+HospitalID = r.HospitalID ?? "",
+Email = r.Email ?? "",
+AlteredBHCode = r.AlteredBHCode ?? "",
+CollectedDateTime = ToLocalReportTime(r.CollectedDateTime, r.RequestDateTime),
+OnlineCode = r.OnlineCode ?? "",
+ResultValueType = r.ResultValueType ?? "",
+DefaultValue = r.DefaultValue ?? "",
+SimpleNormalValues = r.SimpleNormalValues,
+DetailedNormalValues = r.DetailedNormalValues,
+RangeType = r.RangeType ?? "",
+FromNormalValue = r.FromNormalValue,
+ToNormalValue = r.ToNormalValue,
+ConclusionForHigher = r.ConclusionForHigher ?? "",
+ConclusionForLower = r.ConclusionForLower ?? "",
+ConclusionForFixedText = r.ConclusionForFixedText ?? "",
+PrintFixedTextConclusionInReport = r.PrintFixedTextConclusionInReport,
+ShowAgedBased = r.ShowAgedBased,
+ShowAlertOnHigherLower = r.ShowAlertOnHigherLower,
+FooterMessage = r.FooterMessage ?? "",
+TRPUName = r.TRPUName ?? "",
+FixedValues = r.FixedValues ?? "",
+DecimalPlaces = r.DecimalPlaces,
+ReportingMethod = r.ReportingMethod ?? "",
+TestResultID = r.TestResultID,
+RequestSnoPrint = r.RequestSnoPrint ?? "",
+PrintResultOnly = r.PrintResultOnly,
+ResultNormal = r.ResultNormal,
+ResultHigh = r.ResultHigh,
+ResultLow = r.ResultLow,
+IsInvestigationPartial = r.IsInvestigationPartial,
+ResultSample = r.ResultSample ?? "",
+DoctorFullName = r.DoctorFullName ?? "",
+DCode = r.DCode,
+FrontHospitalID = r.FrontHospitalID ?? "",
+FrontHospitalPatientID = r.FrontHospitalPatientID ?? "",
+IsAuthorized1 = r.IsAuthorized1,
+DoctorTitle = r.DoctorTitle ?? "",
+SecondDoctorName = r.SecondDoctorName ?? "",
+SecondDCode = r.SecondDCode,
+DefaultAuthorizeImage = GetImage(r.DefaultAuthorizeImage, cache),
+DefaultAuthorizeName = r.DefaultAuthorizeName ?? "",
+DefaultAuthorizeDesignation = r.DefaultAuthorizeDesignation ?? "",
+NormalValues = r.NormalValues ?? "",
+RowNum = r.RowNum,
+MCCode = r.MCCode,
+};
 
         private static AuthorizedUser MapAuth(
             RawAuthUser a, Dictionary<string, byte[]> cache) => new()
@@ -3025,8 +3099,8 @@ WHERE (lrm.requestguid::text = @requestguid OR LOWER(lrm.requestguid::text) = LO
 ORDER BY COALESCE(gm.orderno, 9999),
          COALESCE(tm.orderno, 9999),
          COALESCE(lrd.testsno, 0),
-         COALESCE(lrdd.testsno, 0);"; 
-                
+         COALESCE(lrdd.testsno, 0);";
+
                 var rawRows = (await db.QueryAsync<RawReportRow>(
                     resultSql, new { requestguid = requestguid.ToString(), tenant_code }
                 )).ToList();
@@ -4616,8 +4690,8 @@ WHERE lrd.requestguid::text = @requestguid::text
         /// Fetches consolidated bill data from database for a given RequestGuid
         /// </summary>
         public async Task<ConsolidatedBillData?> GetConsolidatedBillDataAsync(
-            string requestGuid, 
-            bool includeMedicines, 
+            string requestGuid,
+            bool includeMedicines,
             string tenant_code)
         {
             try
@@ -4680,7 +4754,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         LIMIT 1";
 
                 var header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-                    headerSql, 
+                    headerSql,
                     new { requestGuid, tenant_code = tenant_code ?? "" },
                     commandTimeout: 120);
 
@@ -4744,7 +4818,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         LIMIT 1";
 
                     header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-                        lrmAltHeaderSql, 
+                        lrmAltHeaderSql,
                         new { requestGuid, tenant_code = tenant_code ?? "" },
                         commandTimeout: 120);
                 }
@@ -4790,7 +4864,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         LIMIT 1";
 
                     header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-                        ipHeaderSql, 
+                        ipHeaderSql,
                         new { requestGuid, tenant_code = tenant_code ?? "" },
                         commandTimeout: 120);
                 }
@@ -4835,7 +4909,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         LIMIT 1";
 
                     header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-                        opHeaderSql, 
+                        opHeaderSql,
                         new { requestGuid, tenant_code = tenant_code ?? "" },
                         commandTimeout: 120);
                 }
@@ -4873,7 +4947,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         LIMIT 1";
 
                     header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-                        cmHeaderSql, 
+                        cmHeaderSql,
                         new { requestGuid, tenant_code = tenant_code ?? "" },
                         commandTimeout: 120);
                 }
@@ -4922,7 +4996,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     LIMIT 1";
 
                 var company = await db.QueryFirstOrDefaultAsync<dynamic>(
-                    companySql, 
+                    companySql,
                     new { tenant_code });
 
                 string rGuid = header.RequestGuid?.ToString() ?? requestGuid;
@@ -5030,7 +5104,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ORDER BY T.ServiceDate";
 
                 var labBillItems = (await db.QueryAsync<ConsolidatedBillItem>(
-                    labBillsSql, 
+                    labBillsSql,
                     new { rGuid, requestGuid, custId, ipIdStr, opIdStr, tenant_code },
                     commandTimeout: 120)).ToList();
 
@@ -5066,7 +5140,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ORDER BY uc.chargedate";
 
                 var consultationItems = (await db.QueryAsync<ConsolidatedBillItem>(
-                    consultationSql, 
+                    consultationSql,
                     new { opIdStr, ipIdStr, requestGuid, custId, tenant_code },
                     commandTimeout: 120)).ToList();
 
@@ -5102,7 +5176,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ORDER BY uc.chargedate";
 
                 var investigationItems = (await db.QueryAsync<ConsolidatedBillItem>(
-                    nurseChargesSql, 
+                    nurseChargesSql,
                     new { opIdStr, ipIdStr, requestGuid, custId, tenant_code },
                     commandTimeout: 120)).ToList();
 
@@ -5149,12 +5223,12 @@ WHERE lrd.requestguid::text = @requestguid::text
                     WHERE (COALESCE(@tenant_code, '') = '' OR tgr.tenant_code = @tenant_code)";
 
                 var testGroupRates = (await db.QueryAsync<dynamic>(
-                    testGroupRatesSql, 
+                    testGroupRatesSql,
                     new { tenant_code },
                     commandTimeout: 120)).ToList();
 
                 var bedChargeItemsRaw = (await db.QueryAsync<ConsolidatedBillItem>(
-                    bedChargesSql, 
+                    bedChargesSql,
                     new { ipIdStr, requestGuid, custId, tenant_code },
                     commandTimeout: 120)).ToList();
 
@@ -5270,7 +5344,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         ORDER BY opd.sno";
 
                     var medicineItems = (await db.QueryAsync<ConsolidatedBillItem>(
-                        medicinesSql, 
+                        medicinesSql,
                         new { opIdStr, ipIdStr, requestGuid, custId, tenant_code })).ToList();
 
                     medicines = medicineItems.Any() ? new ConsolidatedBillCategory
@@ -5537,7 +5611,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         var advRows = await db.QueryAsync<ConsolidatedBillAdvanceRow>(
                             advancesSql,
                             new { custId = (int)custId, tenant_code, rGuid, requestGuid, ipIdStr, opIdStr });
-                        
+
                         if (advRows != null)
                         {
                             advancesList = advRows.ToList();
@@ -5627,9 +5701,9 @@ WHERE lrd.requestguid::text = @requestguid::text
         /// Generates a consolidated bill PDF by calling the ReportingServer
         /// </summary>
         public async Task<string> ConsolidatedBillPDF(
-            Guid requestguid, 
-            bool includeMedicines, 
-            string tenant_code, 
+            Guid requestguid,
+            bool includeMedicines,
+            string tenant_code,
             bool? isletterhead = false,
             Guid? op_id = null)
         {
@@ -5713,8 +5787,8 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 // Verify bill data exists
                 var billData = await GetConsolidatedBillDataAsync(
-                    resolvedIpId.ToString(), 
-                    includeMedicines, 
+                    resolvedIpId.ToString(),
+                    includeMedicines,
                     tenant_code);
 
                 if (billData == null)
@@ -5735,31 +5809,31 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 if (lsConfig != null)
                 {
-                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.header_path) 
-                        ? lsConfig.header_path 
+                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.header_path)
+                        ? lsConfig.header_path
                         : lsConfig.header_image_path;
-                    
-                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.footer_path) 
-                        ? lsConfig.footer_path 
+
+                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.footer_path)
+                        ? lsConfig.footer_path
                         : lsConfig.footer_image_path;
 
                     if (!string.IsNullOrWhiteSpace(hKey))
                     {
-                        try 
-                        { 
-                            var hRes = await _s3Service.DownloadAsync(hKey); 
-                            if (hRes.HasValue) headerImage = hRes.Value.Data; 
-                        } 
+                        try
+                        {
+                            var hRes = await _s3Service.DownloadAsync(hKey);
+                            if (hRes.HasValue) headerImage = hRes.Value.Data;
+                        }
                         catch { }
                     }
-                    
+
                     if (!string.IsNullOrWhiteSpace(fKey))
                     {
-                        try 
-                        { 
-                            var fRes = await _s3Service.DownloadAsync(fKey); 
-                            if (fRes.HasValue) footerImage = fRes.Value.Data; 
-                        } 
+                        try
+                        {
+                            var fRes = await _s3Service.DownloadAsync(fKey);
+                            if (fRes.HasValue) footerImage = fRes.Value.Data;
+                        }
                         catch { }
                     }
                 }
@@ -6098,9 +6172,9 @@ WHERE lrd.requestguid::text = @requestguid::text
         }
 
         public async Task<List<OpAndIpPatientDto>> GetOpPatientsAsync(
-            string tenant_code, 
-            DateTime? fromDate = null, 
-            DateTime? toDate = null, 
+            string tenant_code,
+            DateTime? fromDate = null,
+            DateTime? toDate = null,
             string? search = null)
         {
             try
@@ -6136,8 +6210,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ORDER BY op.visit_date DESC";
 
                 var list = (await db.QueryAsync<OpAndIpPatientDto>(
-                    sql, 
-                    new { tenant_code, fromDate, toDate, search }, 
+                    sql,
+                    new { tenant_code, fromDate, toDate, search },
                     commandTimeout: 120)).ToList();
 
                 return list;
@@ -6150,9 +6224,9 @@ WHERE lrd.requestguid::text = @requestguid::text
         }
 
         public async Task<List<OpAndIpPatientDto>> GetIpPatientsAsync(
-            string tenant_code, 
-            DateTime? fromDate = null, 
-            DateTime? toDate = null, 
+            string tenant_code,
+            DateTime? fromDate = null,
+            DateTime? toDate = null,
             string? search = null)
         {
             try
@@ -6189,8 +6263,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ORDER BY ip.admitdate DESC";
 
                 var list = (await db.QueryAsync<OpAndIpPatientDto>(
-                    sql, 
-                    new { tenant_code, fromDate, toDate, search }, 
+                    sql,
+                    new { tenant_code, fromDate, toDate, search },
                     commandTimeout: 120)).ToList();
 
                 return list;
@@ -6213,88 +6287,97 @@ WHERE lrd.requestguid::text = @requestguid::text
                         COALESCE(op.visit_date, NOW()) AS date,
                         COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(op.custid::text, ''), '') AS custcode,
                         COALESCE(NULLIF(cm.name, ''), 'Patient') AS patientname,
-                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS referral,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), NULLIF(dm_lrm.doctorfullname, ''), NULLIF(dm_lrm.name, ''), 'SELF') AS referral,
                         COALESCE(
                             NULLIF(
-                                CONCAT_WS(', ',
-                                    (
-                                        SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(dm_uc.doctorfullname, ''), NULLIF(dm_uc.name, ''), uc.tcode::text), ', ')
-                                        FROM unbilledcharges uc
-                                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
-                                        LEFT JOIN doctor_master dm_uc ON dm_uc.dcode::text = uc.tcode::text
-                                        WHERE uc.opvisitid = op.op_id::text
-                                          AND COALESCE(uc.billedstatus, false) = false
-                                    ),
-                                    (
-                                        SELECT STRING_AGG(DISTINCT tm.name, ', ')
-                                        FROM lab_request_master lrm
-                                        JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid
-                                        JOIN test_master tm ON tm.tcode = lrd.tcode
-                                        WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text)
-                                          AND COALESCE(lrm.deleted, false) = false
-                                          AND COALESCE(lrd.isdeleted, false) = false
-                                    )
-                                ), ''
+                                CONCAT_WS(', ', uc_agg.testnames_uc, lrm_agg.testnames_lrm), ''
                             ),
                             'OP Consultation & Services'
                         ) AS testnames,
+                        COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) AS totalamount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
                         COALESCE(
-                            NULLIF((
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                    FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                ) t
-                            ), 0),
-                            COALESCE(NULLIF(dm.opcharge, 0), 250)
-                        ) AS totalamount,
-                        COALESCE(
-                            (
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                    FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
-                                    FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
-                                ) t
-                            ), 0
-                        ) AS paidamount,
-                        GREATEST(0,
-                            COALESCE(
-                                NULLIF((
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                        FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                    ) t
-                                ), 0),
-                                COALESCE(NULLIF(dm.opcharge, 0), 250)
-                            ) - 
-                            COALESCE(
-                                (
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                        FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
-                                        FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
-                                    ) t
-                                ), 0
-                            )
-                        ) AS balanceamount
+                            NULLIF(uc_agg.consult_uc + lrm_agg.consult_lrm, 0),
+                            COALESCE(NULLIF(dm.opcharge, 0), 0)
+                        ) AS consultation_amount,
+                        COALESCE(uc_agg.dressing_uc + lrm_agg.dressing_lrm, 0) AS dressing_amount,
+                        COALESCE(uc_agg.service_uc + lrm_agg.service_lrm, 0) AS service_amount,
+                        COALESCE(uc_agg.observe_uc + lrm_agg.observe_lrm, 0) AS observation_amount,
+                        COALESCE(uc_agg.other_uc + lrm_agg.other_lrm, 0) AS other_amount,
+                        COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb, 0) AS paidamount,
+                        GREATEST(0, COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) - COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb, 0)) AS balanceamount
                     FROM op_registration op
                     LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
                     LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
+                    LEFT JOIN LATERAL (
+                        SELECT dm_sub.doctorfullname, dm_sub.name
+                        FROM lab_request_master lrm_doc
+                        JOIN doctor_master dm_sub ON dm_sub.dcode = lrm_doc.dcode
+                        WHERE (lrm_doc.opvisitid = op.op_id::text OR lrm_doc.sheet_id = op.op_id::text OR lrm_doc.opvisitid = op.op_no OR lrm_doc.sheet_id = op.op_no)
+                          AND COALESCE(lrm_doc.deleted, false) = false
+                        LIMIT 1
+                    ) dm_lrm ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT COALESCE(NULLIF(uc.particulars, ''), NULLIF(tm.name, ''), NULLIF(dm_uc.doctorfullname, ''), NULLIF(dm_uc.name, ''), uc.entrytype, uc.tcode::text), ', ') AS testnames_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'TOKEN' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%token%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS token_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'CONSULTATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%consult%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS consult_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'DRESSING' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%dressing%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS dressing_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'SERVICE' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%service%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS service_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'OBSERVATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%observ%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS observe_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND UPPER(COALESCE(uc.entrytype, '')) NOT IN ('TOKEN', 'CONSULTATION', 'DRESSING', 'SERVICE', 'OBSERVATION') AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%token%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%service%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%observ%' THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS other_uc
+                        FROM unbilledcharges uc
+                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
+                        LEFT JOIN doctor_master dm_uc ON dm_uc.dcode::text = uc.tcode::text
+                        WHERE (uc.opvisitid = op.op_id::text OR uc.opvisitid = op.op_no OR LOWER(uc.opvisitid) = LOWER(op.op_id::text) OR LOWER(uc.opvisitid) = LOWER(op.op_no))
+                    ) uc_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT tm.name, ', ') AS testnames_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.totalamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.opvisitid = op.op_id::text OR lrm_mst.sheet_id = op.op_id::text OR lrm_mst.opvisitid = op.op_no OR lrm_mst.sheet_id = op.op_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS total_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.paidamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.opvisitid = op.op_id::text OR lrm_mst.sheet_id = op.op_id::text OR lrm_mst.opvisitid = op.op_no OR lrm_mst.sheet_id = op.op_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS paid_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%token%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS token_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%consult%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS consult_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%dressing%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS dressing_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%service%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS service_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%observ%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS observe_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%token%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%service%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%observ%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS other_lrm
+                        FROM lab_request_master lrm
+                        LEFT JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid AND COALESCE(lrd.isdeleted, false) = false
+                        LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                        WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text OR lrm.opvisitid = op.op_no OR lrm.sheet_id = op.op_no)
+                          AND COALESCE(lrm.deleted, false) = false
+                    ) lrm_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                FROM balancecollectionby bcb
+                                WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text))
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND bcb.request_guid NOT IN (
+                                      SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                  )
+                            ), 0) AS paid_bcb
+                        FROM receipt_master rm
+                        WHERE (rm.opvisitid = op.op_id::text OR rm.opvisitid = op.op_no)
+                          AND COALESCE(rm.deleted, false) = false
+                          AND rm.receiptguid NOT IN (
+                              SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                          )
+                    ) paid_agg ON true
                     WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
                       AND op.visit_date >= @fromdate
                       AND op.visit_date < @todate + INTERVAL '1 day'
@@ -6310,9 +6393,18 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 foreach (var row in rows)
                 {
-                    if (row.paidamount == 0 && row.totalamount > 0)
+                    row.service_amount += row.other_amount;
+                    row.other_amount = 0;
+
+                    var sumCats = row.token_amount + row.consultation_amount + row.dressing_amount + row.service_amount + row.observation_amount;
+                    if (sumCats > row.totalamount)
                     {
-                        row.paidamount = row.totalamount;
+                        row.totalamount = sumCats;
+                    }
+                    decimal unallocated = row.totalamount - sumCats;
+                    if (unallocated > 0)
+                    {
+                        row.service_amount += unallocated;
                     }
                     row.balanceamount = Math.Max(0, row.totalamount - row.paidamount);
                 }
@@ -6365,88 +6457,102 @@ WHERE lrd.requestguid::text = @requestguid::text
                         COALESCE(ip.admitdate, NOW()) AS date,
                         COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(ip.custid::text, ''), '') AS custcode,
                         COALESCE(NULLIF(cm.name, ''), 'Patient') AS patientname,
-                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS referral,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), NULLIF(dm_lrm.doctorfullname, ''), NULLIF(dm_lrm.name, ''), 'SELF') AS referral,
                         COALESCE(
                             NULLIF(
-                                CONCAT_WS(', ',
-                                    (
-                                        SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(rm.name, ''), NULLIF(bm_uc.bedname, ''), uc.tcode::text), ', ')
-                                        FROM unbilledcharges uc
-                                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
-                                        LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND rm.tenant_code = uc.tenant_code
-                                        LEFT JOIN public.bed_master bm_uc ON bm_uc.bedcode = uc.bedcode AND bm_uc.tenant_code = uc.tenant_code
-                                        WHERE uc.ip_id::text = ip.ip_id::text
-                                          AND COALESCE(uc.billedstatus, false) = false
-                                    ),
-                                    (
-                                        SELECT STRING_AGG(DISTINCT tm.name, ', ')
-                                        FROM lab_request_master lrm
-                                        JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid
-                                        JOIN test_master tm ON tm.tcode = lrd.tcode
-                                        WHERE lrm.ip_id::text = ip.ip_id::text
-                                          AND COALESCE(lrm.deleted, false) = false
-                                          AND COALESCE(lrd.isdeleted, false) = false
-                                    )
-                                ), ''
+                                CONCAT_WS(', ', uc_agg.testnames_uc, lrm_agg.testnames_lrm), ''
                             ),
-                            CONCAT_WS(' - ', 'IP Services & Room', NULLIF(bm.bedname, ''))
+                            CONCAT_WS(' - ', 'IP Stay & Services', NULLIF(bm.bedname, ''))
                         ) AS testnames,
-                        COALESCE(
-                            NULLIF((
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                    FROM unbilledcharges uc WHERE uc.ip_id::text = ip.ip_id::text
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                ) t
-                            ), 0),
-                            COALESCE(ip.insurance_approved_amount, 1000)
-                        ) AS totalamount,
-                        COALESCE(
-                            (
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
-                                    FROM receipt_advances ra
-                                    INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
-                                    WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
-                                ) t
-                            ), 0
-                        ) AS paidamount,
-                        GREATEST(0,
-                            COALESCE(
-                                NULLIF((
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                        FROM unbilledcharges uc WHERE uc.ip_id::text = ip.ip_id::text
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                    ) t
-                                ), 0),
-                                COALESCE(ip.insurance_approved_amount, 1000)
-                            ) - 
-                            COALESCE(
-                                (
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
-                                        FROM receipt_advances ra
-                                        INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
-                                        WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
-                                    ) t
-                                ), 0
-                            )
-                        ) AS balanceamount
+                        COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
+                        COALESCE(uc_agg.dressing_uc + lrm_agg.dressing_lrm, 0) AS dressing_amount,
+                        COALESCE(uc_agg.service_uc + lrm_agg.service_lrm, 0) AS service_amount,
+                        COALESCE(uc_agg.observe_uc + lrm_agg.observe_lrm, 0) AS observation_amount,
+                        COALESCE(uc_agg.other_uc + lrm_agg.other_lrm, 0) AS other_amount,
+                        COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb + paid_agg.paid_adv, 0) AS paidamount,
+                        GREATEST(0, COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) - COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb + paid_agg.paid_adv, 0)) AS balanceamount
                     FROM ip_registration ip
                     LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
                     LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
-                    LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
+                    LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR ip.tenant_code IS NULL)
+                    LEFT JOIN LATERAL (
+                        SELECT dm_sub.doctorfullname, dm_sub.name
+                        FROM lab_request_master lrm_doc
+                        JOIN doctor_master dm_sub ON dm_sub.dcode = lrm_doc.dcode
+                        WHERE (lrm_doc.ip_id::text = ip.ip_id::text OR lrm_doc.sheet_id = ip.ip_id::text OR lrm_doc.ip_id::text = ip.ip_no OR lrm_doc.sheet_id = ip.ip_no)
+                          AND COALESCE(lrm_doc.deleted, false) = false
+                        LIMIT 1
+                    ) dm_lrm ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(rm.name, ''), NULLIF(bm_uc.bedname, ''), uc.particulars, uc.entrytype, uc.tcode::text), ', ') AS testnames_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) IN ('TOKEN', 'REGISTRATION', 'ADMISSION') OR LOWER(COALESCE(uc.particulars, '')) LIKE '%token%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%admit%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%registration%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS token_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'CONSULTATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%consult%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%doctor%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS consult_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'DRESSING' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%dressing%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%nursing%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS dressing_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'SERVICE' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%service%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%lab%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%scan%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%x-ray%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%pharmacy%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS service_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) IN ('OBSERVATION', 'ROOM', 'BED', 'ROOMRENT') OR LOWER(COALESCE(uc.particulars, '')) LIKE '%observ%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%room%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%bed%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS observe_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND UPPER(COALESCE(uc.entrytype, '')) NOT IN ('TOKEN', 'REGISTRATION', 'ADMISSION', 'CONSULTATION', 'DRESSING', 'SERVICE', 'OBSERVATION', 'ROOM', 'BED', 'ROOMRENT') AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%token%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%admit%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%registration%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%doctor%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%nursing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%service%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%lab%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%scan%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%x-ray%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%pharmacy%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%observ%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%room%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%bed%' THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS other_uc
+                        FROM unbilledcharges uc
+                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
+                        LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND (rm.tenant_code = uc.tenant_code OR uc.tenant_code IS NULL)
+                        LEFT JOIN public.bed_master bm_uc ON bm_uc.bedcode = uc.bedcode AND (bm_uc.tenant_code = uc.tenant_code OR uc.tenant_code IS NULL)
+                        WHERE (TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_id::text)) OR TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_no)))
+                    ) uc_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT tm.name, ', ') AS testnames_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.totalamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.ip_id::text = ip.ip_id::text OR lrm_mst.sheet_id = ip.ip_id::text OR lrm_mst.ip_id::text = ip.ip_no OR lrm_mst.sheet_id = ip.ip_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS total_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.paidamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.ip_id::text = ip.ip_id::text OR lrm_mst.sheet_id = ip.ip_id::text OR lrm_mst.ip_id::text = ip.ip_no OR lrm_mst.sheet_id = ip.ip_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS paid_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%token%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%admit%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%registration%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS token_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%consult%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%doctor%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS consult_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%dressing%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%nursing%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS dressing_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%service%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%lab%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%scan%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%x-ray%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%pharmacy%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS service_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%observ%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%room%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%bed%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS observe_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%token%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%admit%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%registration%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%doctor%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%nursing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%service%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%lab%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%scan%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%x-ray%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%pharmacy%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%observ%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%room%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%bed%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS other_lrm
+                        FROM lab_request_master lrm
+                        LEFT JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid AND COALESCE(lrd.isdeleted, false) = false
+                        LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                        WHERE (lrm.ip_id::text = ip.ip_id::text OR lrm.sheet_id = ip.ip_id::text OR lrm.ip_id::text = ip.ip_no OR lrm.sheet_id = ip.ip_no)
+                          AND COALESCE(lrm.deleted, false) = false
+                    ) lrm_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                FROM balancecollectionby bcb
+                                WHERE (LOWER(bcb.request_guid) = LOWER(ip.ip_id::text) OR LOWER(bcb.requestguid) = LOWER(ip.ip_id::text))
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND bcb.request_guid NOT IN (
+                                      SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                  )
+                            ), 0) AS paid_bcb,
+                            COALESCE((
+                                SELECT SUM(COALESCE(ra.receiptamount, 0))
+                                FROM receipt_advances ra
+                                INNER JOIN receipt_master rm_adv ON ra.receiptguid = rm_adv.receiptguid AND COALESCE(rm_adv.isdeleted, false) = false AND COALESCE(rm_adv.deleted, false) = false
+                                WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
+                            ), 0) AS paid_adv
+                        FROM receipt_master rm
+                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                          AND COALESCE(rm.deleted, false) = false
+                          AND rm.receiptguid NOT IN (
+                              SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                          )
+                    ) paid_agg ON true
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
                       AND ip.admitdate >= @fromdate
                       AND ip.admitdate < @todate + INTERVAL '1 day'
@@ -6459,6 +6565,24 @@ WHERE lrd.requestguid::text = @requestguid::text
                     new { fromdate, todate, tenant_code },
                     commandTimeout: 120))
                     .ToList();
+
+                foreach (var row in rows)
+                {
+                    row.service_amount += row.other_amount;
+                    row.other_amount = 0;
+
+                    var sumCats = row.token_amount + row.consultation_amount + row.dressing_amount + row.service_amount + row.observation_amount;
+                    if (sumCats > row.totalamount)
+                    {
+                        row.totalamount = sumCats;
+                    }
+                    decimal unallocated = row.totalamount - sumCats;
+                    if (unallocated > 0)
+                    {
+                        row.service_amount += unallocated;
+                    }
+                    row.balanceamount = Math.Max(0, row.totalamount - row.paidamount);
+                }
 
                 var companyInfo = await db.QueryFirstOrDefaultAsync<Tenant>(
                     @"SELECT legal_name, address_line1, contact_number, contact_email
@@ -6508,82 +6632,97 @@ WHERE lrd.requestguid::text = @requestguid::text
                         COALESCE(op.visit_date, NOW()) AS date,
                         COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(op.custid::text, ''), '') AS custcode,
                         COALESCE(NULLIF(cm.name, ''), 'Patient') AS patientname,
-                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS referral,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), NULLIF(dm_lrm.doctorfullname, ''), NULLIF(dm_lrm.name, ''), 'SELF') AS referral,
                         COALESCE(
                             NULLIF(
-                                CONCAT_WS(', ',
-                                    (
-                                        SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(dm_uc.doctorfullname, ''), NULLIF(dm_uc.name, ''), uc.tcode::text), ', ')
-                                        FROM unbilledcharges uc
-                                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
-                                        LEFT JOIN doctor_master dm_uc ON dm_uc.dcode::text = uc.tcode::text
-                                        WHERE uc.opvisitid = op.op_id::text
-                                          AND COALESCE(uc.billedstatus, false) = false
-                                    ),
-                                    (
-                                        SELECT STRING_AGG(DISTINCT tm.name, ', ')
-                                        FROM lab_request_master lrm
-                                        JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid
-                                        JOIN test_master tm ON tm.tcode = lrd.tcode
-                                        WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text)
-                                          AND COALESCE(lrm.deleted, false) = false
-                                          AND COALESCE(lrd.isdeleted, false) = false
-                                    )
-                                ), ''
+                                CONCAT_WS(', ', uc_agg.testnames_uc, lrm_agg.testnames_lrm), ''
                             ),
                             'OP Consultation & Services'
                         ) AS testnames,
+                        COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) AS totalamount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
                         COALESCE(
-                            NULLIF((
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                    FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                ) t
-                            ), 0),
-                            COALESCE(NULLIF(dm.opcharge, 0), 250)
-                        ) AS totalamount,
-                        COALESCE(
-                            (
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                    FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
-                                ) t
-                            ), 0
-                        ) AS paidamount,
-                        GREATEST(0,
-                            COALESCE(
-                                NULLIF((
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                        FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                    ) t
-                                ), 0),
-                                COALESCE(NULLIF(dm.opcharge, 0), 250)
-                            ) - 
-                            COALESCE(
-                                (
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                        FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
-                                    ) t
-                                ), 0
-                            )
-                        ) AS balanceamount
+                            NULLIF(uc_agg.consult_uc + lrm_agg.consult_lrm, 0),
+                            COALESCE(NULLIF(dm.opcharge, 0), 0)
+                        ) AS consultation_amount,
+                        COALESCE(uc_agg.dressing_uc + lrm_agg.dressing_lrm, 0) AS dressing_amount,
+                        COALESCE(uc_agg.service_uc + lrm_agg.service_lrm, 0) AS service_amount,
+                        COALESCE(uc_agg.observe_uc + lrm_agg.observe_lrm, 0) AS observation_amount,
+                        COALESCE(uc_agg.other_uc + lrm_agg.other_lrm, 0) AS other_amount,
+                        COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb, 0) AS paidamount,
+                        GREATEST(0, COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) - COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb, 0)) AS balanceamount
                     FROM op_registration op
                     LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
                     LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
+                    LEFT JOIN LATERAL (
+                        SELECT dm_sub.doctorfullname, dm_sub.name
+                        FROM lab_request_master lrm_doc
+                        JOIN doctor_master dm_sub ON dm_sub.dcode = lrm_doc.dcode
+                        WHERE (lrm_doc.opvisitid = op.op_id::text OR lrm_doc.sheet_id = op.op_id::text OR lrm_doc.opvisitid = op.op_no OR lrm_doc.sheet_id = op.op_no)
+                          AND COALESCE(lrm_doc.deleted, false) = false
+                        LIMIT 1
+                    ) dm_lrm ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT COALESCE(NULLIF(uc.particulars, ''), NULLIF(tm.name, ''), NULLIF(dm_uc.doctorfullname, ''), NULLIF(dm_uc.name, ''), uc.entrytype, uc.tcode::text), ', ') AS testnames_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'TOKEN' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%token%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS token_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'CONSULTATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%consult%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS consult_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'DRESSING' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%dressing%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS dressing_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'SERVICE' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%service%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS service_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'OBSERVATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%observ%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS observe_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND UPPER(COALESCE(uc.entrytype, '')) NOT IN ('TOKEN', 'CONSULTATION', 'DRESSING', 'SERVICE', 'OBSERVATION') AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%token%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%service%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%observ%' THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS other_uc
+                        FROM unbilledcharges uc
+                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
+                        LEFT JOIN doctor_master dm_uc ON dm_uc.dcode::text = uc.tcode::text
+                        WHERE (uc.opvisitid = op.op_id::text OR uc.opvisitid = op.op_no OR LOWER(uc.opvisitid) = LOWER(op.op_id::text) OR LOWER(uc.opvisitid) = LOWER(op.op_no))
+                    ) uc_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT tm.name, ', ') AS testnames_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.totalamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.opvisitid = op.op_id::text OR lrm_mst.sheet_id = op.op_id::text OR lrm_mst.opvisitid = op.op_no OR lrm_mst.sheet_id = op.op_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS total_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.paidamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.opvisitid = op.op_id::text OR lrm_mst.sheet_id = op.op_id::text OR lrm_mst.opvisitid = op.op_no OR lrm_mst.sheet_id = op.op_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS paid_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%token%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS token_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%consult%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS consult_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%dressing%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS dressing_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%service%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS service_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%observ%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS observe_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%token%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%service%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%observ%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS other_lrm
+                        FROM lab_request_master lrm
+                        LEFT JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid AND COALESCE(lrd.isdeleted, false) = false
+                        LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                        WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text OR lrm.opvisitid = op.op_no OR lrm.sheet_id = op.op_no)
+                          AND COALESCE(lrm.deleted, false) = false
+                    ) lrm_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                FROM balancecollectionby bcb
+                                WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text))
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND bcb.request_guid NOT IN (
+                                      SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                  )
+                            ), 0) AS paid_bcb
+                        FROM receipt_master rm
+                        WHERE (rm.opvisitid = op.op_id::text OR rm.opvisitid = op.op_no)
+                          AND COALESCE(rm.deleted, false) = false
+                          AND rm.receiptguid NOT IN (
+                              SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                          )
+                    ) paid_agg ON true
                     WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
                       AND op.visit_date >= @fromdate
                       AND op.visit_date < @todate + INTERVAL '1 day'
@@ -6596,6 +6735,24 @@ WHERE lrd.requestguid::text = @requestguid::text
                     new { fromdate, todate, tenant_code },
                     commandTimeout: 120))
                     .ToList();
+
+                foreach (var row in rows)
+                {
+                    row.service_amount += row.other_amount;
+                    row.other_amount = 0;
+
+                    var sumCats = row.token_amount + row.consultation_amount + row.dressing_amount + row.service_amount + row.observation_amount;
+                    if (sumCats > row.totalamount)
+                    {
+                        row.totalamount = sumCats;
+                    }
+                    decimal unallocated = row.totalamount - sumCats;
+                    if (unallocated > 0)
+                    {
+                        row.service_amount += unallocated;
+                    }
+                    row.balanceamount = Math.Max(0, row.totalamount - row.paidamount);
+                }
 
                 var companyInfo = await db.QueryFirstOrDefaultAsync<Tenant>(
                     @"SELECT legal_name, address_line1, contact_number, contact_email
@@ -6645,88 +6802,102 @@ WHERE lrd.requestguid::text = @requestguid::text
                         COALESCE(ip.admitdate, NOW()) AS date,
                         COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(ip.custid::text, ''), '') AS custcode,
                         COALESCE(NULLIF(cm.name, ''), 'Patient') AS patientname,
-                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS referral,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), NULLIF(dm_lrm.doctorfullname, ''), NULLIF(dm_lrm.name, ''), 'SELF') AS referral,
                         COALESCE(
                             NULLIF(
-                                CONCAT_WS(', ',
-                                    (
-                                        SELECT STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(rm.name, ''), NULLIF(bm_uc.bedname, ''), uc.tcode::text), ', ')
-                                        FROM unbilledcharges uc
-                                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
-                                        LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND rm.tenant_code = uc.tenant_code
-                                        LEFT JOIN public.bed_master bm_uc ON bm_uc.bedcode = uc.bedcode AND bm_uc.tenant_code = uc.tenant_code
-                                        WHERE uc.ip_id::text = ip.ip_id::text
-                                          AND COALESCE(uc.billedstatus, false) = false
-                                    ),
-                                    (
-                                        SELECT STRING_AGG(DISTINCT tm.name, ', ')
-                                        FROM lab_request_master lrm
-                                        JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid
-                                        JOIN test_master tm ON tm.tcode = lrd.tcode
-                                        WHERE lrm.ip_id::text = ip.ip_id::text
-                                          AND COALESCE(lrm.deleted, false) = false
-                                          AND COALESCE(lrd.isdeleted, false) = false
-                                    )
-                                ), ''
+                                CONCAT_WS(', ', uc_agg.testnames_uc, lrm_agg.testnames_lrm), ''
                             ),
-                            CONCAT_WS(' - ', 'IP Services & Room', NULLIF(bm.bedname, ''))
+                            CONCAT_WS(' - ', 'IP Stay & Services', NULLIF(bm.bedname, ''))
                         ) AS testnames,
-                        COALESCE(
-                            NULLIF((
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                    FROM unbilledcharges uc WHERE uc.ip_id::text = ip.ip_id::text
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                ) t
-                            ), 0),
-                            COALESCE(ip.insurance_approved_amount, 1000)
-                        ) AS totalamount,
-                        COALESCE(
-                            (
-                                SELECT SUM(amt) FROM (
-                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
-                                    FROM receipt_advances ra
-                                    INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
-                                    WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
-                                ) t
-                            ), 0
-                        ) AS paidamount,
-                        GREATEST(0,
-                            COALESCE(
-                                NULLIF((
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) AS amt
-                                        FROM unbilledcharges uc WHERE uc.ip_id::text = ip.ip_id::text
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(lrm.totalamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                    ) t
-                                ), 0),
-                                COALESCE(ip.insurance_approved_amount, 1000)
-                            ) - 
-                            COALESCE(
-                                (
-                                    SELECT SUM(amt) FROM (
-                                        SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                        FROM lab_request_master lrm WHERE lrm.ip_id::text = ip.ip_id::text AND COALESCE(lrm.deleted, false) = false
-                                        UNION ALL
-                                        SELECT SUM(COALESCE(ra.receiptamount, 0)) AS amt
-                                        FROM receipt_advances ra
-                                        INNER JOIN receipt_master rm ON ra.receiptguid = rm.receiptguid AND COALESCE(rm.isdeleted, false) = false
-                                        WHERE rm.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
-                                    ) t
-                                ), 0
-                            )
-                        ) AS balanceamount
+                        COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
+                        COALESCE(uc_agg.dressing_uc + lrm_agg.dressing_lrm, 0) AS dressing_amount,
+                        COALESCE(uc_agg.service_uc + lrm_agg.service_lrm, 0) AS service_amount,
+                        COALESCE(uc_agg.observe_uc + lrm_agg.observe_lrm, 0) AS observation_amount,
+                        COALESCE(uc_agg.other_uc + lrm_agg.other_lrm, 0) AS other_amount,
+                        COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb + paid_agg.paid_adv, 0) AS paidamount,
+                        GREATEST(0, COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) - COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb + paid_agg.paid_adv, 0)) AS balanceamount
                     FROM ip_registration ip
                     LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
                     LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
-                    LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
+                    LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR ip.tenant_code IS NULL)
+                    LEFT JOIN LATERAL (
+                        SELECT dm_sub.doctorfullname, dm_sub.name
+                        FROM lab_request_master lrm_doc
+                        JOIN doctor_master dm_sub ON dm_sub.dcode = lrm_doc.dcode
+                        WHERE (lrm_doc.ip_id::text = ip.ip_id::text OR lrm_doc.sheet_id = ip.ip_id::text OR lrm_doc.ip_id::text = ip.ip_no OR lrm_doc.sheet_id = ip.ip_no)
+                          AND COALESCE(lrm_doc.deleted, false) = false
+                        LIMIT 1
+                    ) dm_lrm ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT COALESCE(NULLIF(tm.name, ''), NULLIF(rm.name, ''), NULLIF(bm_uc.bedname, ''), uc.particulars, uc.entrytype, uc.tcode::text), ', ') AS testnames_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) IN ('TOKEN', 'REGISTRATION', 'ADMISSION') OR LOWER(COALESCE(uc.particulars, '')) LIKE '%token%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%admit%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%registration%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS token_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'CONSULTATION' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%consult%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%doctor%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS consult_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'DRESSING' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%dressing%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%nursing%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS dressing_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) = 'SERVICE' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%service%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%lab%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%scan%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%x-ray%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%pharmacy%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS service_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND (UPPER(COALESCE(uc.entrytype, '')) IN ('OBSERVATION', 'ROOM', 'BED', 'ROOMRENT') OR LOWER(COALESCE(uc.particulars, '')) LIKE '%observ%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%room%' OR LOWER(COALESCE(uc.particulars, '')) LIKE '%bed%') THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS observe_uc,
+                            COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) AND UPPER(COALESCE(uc.entrytype, '')) NOT IN ('TOKEN', 'REGISTRATION', 'ADMISSION', 'CONSULTATION', 'DRESSING', 'SERVICE', 'OBSERVATION', 'ROOM', 'BED', 'ROOMRENT') AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%token%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%admit%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%registration%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%doctor%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%nursing%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%service%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%lab%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%scan%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%x-ray%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%pharmacy%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%observ%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%room%' AND LOWER(COALESCE(uc.particulars, '')) NOT LIKE '%bed%' THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS other_uc
+                        FROM unbilledcharges uc
+                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
+                        LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND (rm.tenant_code = uc.tenant_code OR uc.tenant_code IS NULL)
+                        LEFT JOIN public.bed_master bm_uc ON bm_uc.bedcode = uc.bedcode AND (bm_uc.tenant_code = uc.tenant_code OR uc.tenant_code IS NULL)
+                        WHERE (TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_id::text)) OR TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_no)))
+                    ) uc_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            STRING_AGG(DISTINCT tm.name, ', ') AS testnames_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.totalamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.ip_id::text = ip.ip_id::text OR lrm_mst.sheet_id = ip.ip_id::text OR lrm_mst.ip_id::text = ip.ip_no OR lrm_mst.sheet_id = ip.ip_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS total_lrm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(lrm_mst.paidamount, 0))
+                                FROM lab_request_master lrm_mst
+                                WHERE (lrm_mst.ip_id::text = ip.ip_id::text OR lrm_mst.sheet_id = ip.ip_id::text OR lrm_mst.ip_id::text = ip.ip_no OR lrm_mst.sheet_id = ip.ip_no)
+                                  AND COALESCE(lrm_mst.deleted, false) = false
+                            ), 0) AS paid_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%token%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%admit%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%registration%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS token_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%consult%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%doctor%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS consult_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%dressing%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%nursing%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS dressing_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%service%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%lab%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%scan%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%x-ray%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%pharmacy%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS service_lrm,
+                            COALESCE(SUM(CASE WHEN (LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%observ%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%room%' OR LOWER(COALESCE(lrd.item_name, tm.name, '')) LIKE '%bed%') THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS observe_lrm,
+                            COALESCE(SUM(CASE WHEN LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%token%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%admit%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%registration%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%consult%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%doctor%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%dressing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%nursing%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%service%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%lab%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%scan%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%x-ray%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%pharmacy%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%observ%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%room%' AND LOWER(COALESCE(lrd.item_name, tm.name, '')) NOT LIKE '%bed%' THEN COALESCE(lrd.newamount, lrd.testamount, 0) ELSE 0 END), 0) AS other_lrm
+                        FROM lab_request_master lrm
+                        LEFT JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid AND COALESCE(lrd.isdeleted, false) = false
+                        LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                        WHERE (lrm.ip_id::text = ip.ip_id::text OR lrm.sheet_id = ip.ip_id::text OR lrm.ip_id::text = ip.ip_no OR lrm.sheet_id = ip.ip_no)
+                          AND COALESCE(lrm.deleted, false) = false
+                    ) lrm_agg ON true
+                    LEFT JOIN LATERAL (
+                        SELECT 
+                            COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                            COALESCE((
+                                SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                FROM balancecollectionby bcb
+                                WHERE (LOWER(bcb.request_guid) = LOWER(ip.ip_id::text) OR LOWER(bcb.requestguid) = LOWER(ip.ip_id::text))
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND bcb.request_guid NOT IN (
+                                      SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                  )
+                            ), 0) AS paid_bcb,
+                            COALESCE((
+                                SELECT SUM(COALESCE(ra.receiptamount, 0))
+                                FROM receipt_advances ra
+                                INNER JOIN receipt_master rm_adv ON ra.receiptguid = rm_adv.receiptguid AND COALESCE(rm_adv.isdeleted, false) = false AND COALESCE(rm_adv.deleted, false) = false
+                                WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
+                            ), 0) AS paid_adv
+                        FROM receipt_master rm
+                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                          AND COALESCE(rm.deleted, false) = false
+                          AND rm.receiptguid NOT IN (
+                              SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                          )
+                    ) paid_agg ON true
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
                       AND ip.admitdate >= @fromdate
                       AND ip.admitdate < @todate + INTERVAL '1 day'
@@ -6739,6 +6910,24 @@ WHERE lrd.requestguid::text = @requestguid::text
                     new { fromdate, todate, tenant_code },
                     commandTimeout: 120))
                     .ToList();
+
+                foreach (var row in rows)
+                {
+                    row.service_amount += row.other_amount;
+                    row.other_amount = 0;
+
+                    var sumCats = row.token_amount + row.consultation_amount + row.dressing_amount + row.service_amount + row.observation_amount;
+                    if (sumCats > row.totalamount)
+                    {
+                        row.totalamount = sumCats;
+                    }
+                    decimal unallocated = row.totalamount - sumCats;
+                    if (unallocated > 0)
+                    {
+                        row.service_amount += unallocated;
+                    }
+                    row.balanceamount = Math.Max(0, row.totalamount - row.paidamount);
+                }
 
                 var companyInfo = await db.QueryFirstOrDefaultAsync<Tenant>(
                     @"SELECT legal_name, address_line1, contact_number, contact_email
@@ -6785,7 +6974,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     throw new Exception("Inventory connection string is not configured.");
 
                 using IDbConnection db = new NpgsqlConnection(inventoryConn);
-                
+
                 var response = new PharmacyBillResponse();
 
                 // Get Header & Footer preferences from main DB
@@ -6806,7 +6995,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         response.HeaderImagePath = labSettings?.header_path ?? labSettings?.header_image_path ?? tenant?.logo_url;
                         response.FooterImagePath = labSettings?.footer_path ?? labSettings?.footer_image_path;
                     }
-                    
+
                     var companyInfo = await mainDb.QueryFirstOrDefaultAsync<dynamic>(@"
                         SELECT
                             legal_name,
@@ -6815,9 +7004,9 @@ WHERE lrd.requestguid::text = @requestguid::text
                             COALESCE(contact_email,  '') AS contact_email,
                             COALESCE(gst_number,     '') AS gst_number
                         FROM mastertenant.tenants
-                        WHERE tenant_code = @tenantCode", 
+                        WHERE tenant_code = @tenantCode",
                         new { tenantCode });
-                        
+
                     response.LabName = companyInfo?.legal_name ?? string.Empty;
                     response.BranchName = ""; // Or fetch branch name if necessary
                     response.Address = companyInfo?.address_line1 ?? string.Empty;
@@ -6826,7 +7015,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     response.GSTNo = companyInfo?.gst_number ?? string.Empty;
                     response.logo = null;
                     response.isletterhead = response.ShowHeaderFooter;
-                    
+
                     response.billauthorizedby = response.LabName;
                     response.billauthorizesignature = null;
                     response.Orientation = orientation;
@@ -6844,7 +7033,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                     WHERE billno = @billNo AND tenantcode = @tenantCode AND COALESCE(deleted, false) = false";
 
                 var master = await db.QueryFirstOrDefaultAsync<SalesMasterModel>(sqlMaster, new { billNo, tenantCode });
-                
+
                 if (master == null)
                     return null;
 
@@ -6868,7 +7057,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                 var json = JsonSerializer.Serialize(response);
                 var content = new StringContent(json, Encoding.UTF8, "application/json");
                 var apiResponse = await client.PostAsync("/api/Statement/GetPharmacyBill", content);
-                
+
                 apiResponse.EnsureSuccessStatusCode();
                 return await apiResponse.Content.ReadAsStringAsync();
             }
@@ -7517,10 +7706,10 @@ WHERE lrd.requestguid::text = @requestguid::text
         // ========================================================================
 
         public async Task<ConsolidatedListsReportData> GetConsolidatedListsDataAsync(
-            string tenant_code, 
-            DateTime fromDate, 
-            DateTime toDate, 
-            string? type = "ALL", 
+            string tenant_code,
+            DateTime fromDate,
+            DateTime toDate,
+            string? type = "ALL",
             string? search = null)
         {
             try
@@ -7564,31 +7753,44 @@ WHERE lrd.requestguid::text = @requestguid::text
                             COALESCE(op.visit_date, NOW()) AS VisitDate,
                             NULL::timestamp AS DischargeDate,
                             COALESCE(NULLIF(op.visit_status, ''), 'WAITING') AS Status,
-                            COALESCE(
-                                NULLIF(
-                                    (SELECT SUM(CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END)
-                                     FROM unbilledcharges uc WHERE uc.opvisitid = op.op_id::text),
-                                    0
-                                ),
-                                COALESCE(NULLIF(dm.opcharge, 0), 250)
-                            ) AS TotalAmount,
+                            COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) AS TotalAmount,
                             0 AS DiscountAmount,
-                            COALESCE(
-                                (SELECT SUM(amt) FROM (
-                                    SELECT SUM(COALESCE(lrm.paidamount, 0)) AS amt
-                                    FROM lab_request_master lrm WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text) AND COALESCE(lrm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(rm.amountpaid, 0)) AS amt
-                                    FROM receipt_master rm WHERE rm.opvisitid = op.op_id::text AND COALESCE(rm.deleted, false) = false
-                                    UNION ALL
-                                    SELECT SUM(COALESCE(bcb.collectedamount, 0)) AS amt
-                                    FROM balancecollectionby bcb WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text)) AND COALESCE(bcb.deleted, false) = false
-                                ) t),
-                                0
-                            ) AS PaidAmount
+                            COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb, 0) AS PaidAmount
                         FROM op_registration op
                         LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
                         LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
+                        LEFT JOIN LATERAL (
+                            SELECT COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc
+                            FROM unbilledcharges uc
+                            WHERE (uc.opvisitid = op.op_id::text OR uc.opvisitid = op.op_no OR LOWER(uc.opvisitid) = LOWER(op.op_id::text) OR LOWER(uc.opvisitid) = LOWER(op.op_no))
+                        ) uc_agg ON true
+                        LEFT JOIN LATERAL (
+                            SELECT 
+                                COALESCE(SUM(COALESCE(lrm.totalamount, 0)), 0) AS total_lrm,
+                                COALESCE(SUM(COALESCE(lrm.paidamount, 0)), 0) AS paid_lrm
+                            FROM lab_request_master lrm
+                            WHERE (lrm.opvisitid = op.op_id::text OR lrm.sheet_id = op.op_id::text OR lrm.opvisitid = op.op_no OR lrm.sheet_id = op.op_no)
+                              AND COALESCE(lrm.deleted, false) = false
+                        ) lrm_agg ON true
+                        LEFT JOIN LATERAL (
+                            SELECT 
+                                COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                                COALESCE((
+                                    SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                    FROM balancecollectionby bcb
+                                    WHERE (LOWER(bcb.request_guid) = LOWER(op.op_id::text) OR LOWER(bcb.requestguid) = LOWER(op.op_id::text))
+                                      AND COALESCE(bcb.deleted, false) = false
+                                      AND bcb.request_guid NOT IN (
+                                          SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                      )
+                                ), 0) AS paid_bcb
+                            FROM receipt_master rm
+                            WHERE (rm.opvisitid = op.op_id::text OR rm.opvisitid = op.op_no)
+                              AND COALESCE(rm.deleted, false) = false
+                              AND rm.receiptguid NOT IN (
+                                  SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                              )
+                        ) paid_agg ON true
                         WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
                           AND COALESCE(op.isdeleted, false) = false
                           AND op.visit_date >= @fDate AND op.visit_date <= @tDate
@@ -7602,12 +7804,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                     foreach (var row in opRows)
                     {
                         row.NetAmount = row.TotalAmount - row.DiscountAmount;
-                        if (row.PaidAmount == 0 && row.NetAmount > 0)
-                        {
-                            row.PaidAmount = row.NetAmount;
-                        }
                         row.BalanceAmount = Math.Max(0, row.NetAmount - row.PaidAmount);
-                        row.PaymentStatus = row.BalanceAmount <= 0 ? "PAID" : (row.PaidAmount > 0 ? "PARTIAL" : "UNPAID");
+                        row.PaymentStatus = row.BalanceAmount <= 0 && row.NetAmount > 0 ? "PAID" : (row.PaidAmount > 0 ? "PARTIAL" : "UNPAID");
                         row.ServicesOrTests = "OP Consultation & Services";
                     }
                     rows.AddRange(opRows);
@@ -7632,22 +7830,53 @@ WHERE lrd.requestguid::text = @requestguid::text
                             COALESCE(ip.admitdate, NOW()) AS VisitDate,
                             ip.dischargedate AS DischargeDate,
                             CASE WHEN ip.dischargedate IS NOT NULL THEN 'DISCHARGED' ELSE 'ADMITTED' END AS Status,
-                            COALESCE(
-                                (SELECT SUM(COALESCE(lrm.totalamount, 0)) FROM lab_request_master lrm WHERE lrm.ip_id = ip.ip_id AND COALESCE(lrm.deleted, false) = false),
-                                0
-                            ) AS TotalAmount,
+                            COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS TotalAmount,
                             0 AS DiscountAmount,
-                            COALESCE(
-                                (SELECT SUM(COALESCE(bcb.collectedamount, 0)) FROM balancecollectionby bcb
-                                 JOIN lab_request_master lrm2 ON lrm2.requestguid::text = bcb.request_guid
-                                 WHERE lrm2.ip_id = ip.ip_id AND COALESCE(bcb.deleted, false) = false),
-                                0
-                            ) AS PaidAmount
+                            COALESCE(lrm_agg.paid_lrm + paid_agg.paid_rm + paid_agg.paid_bcb + paid_agg.paid_adv, 0) AS PaidAmount
                         FROM ip_registration ip
                         LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
                         LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
-                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
+                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR ip.tenant_code IS NULL)
+                        LEFT JOIN LATERAL (
+                            SELECT COALESCE(SUM(CASE WHEN (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL) THEN CASE WHEN uc.amount = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END ELSE 0 END), 0) AS total_uc
+                            FROM unbilledcharges uc
+                            WHERE (TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_id::text)) OR TRIM(LOWER(uc.ip_id::text)) = TRIM(LOWER(ip.ip_no)))
+                        ) uc_agg ON true
+                        LEFT JOIN LATERAL (
+                            SELECT 
+                                COALESCE(SUM(COALESCE(lrm.totalamount, 0)), 0) AS total_lrm,
+                                COALESCE(SUM(COALESCE(lrm.paidamount, 0)), 0) AS paid_lrm
+                            FROM lab_request_master lrm
+                            WHERE (lrm.ip_id::text = ip.ip_id::text OR lrm.sheet_id = ip.ip_id::text OR lrm.ip_id::text = ip.ip_no OR lrm.sheet_id = ip.ip_no)
+                              AND COALESCE(lrm.deleted, false) = false
+                        ) lrm_agg ON true
+                        LEFT JOIN LATERAL (
+                            SELECT 
+                                COALESCE(SUM(COALESCE(rm.amountpaid, 0)), 0) AS paid_rm,
+                                COALESCE((
+                                    SELECT SUM(COALESCE(bcb.collectedamount, 0))
+                                    FROM balancecollectionby bcb
+                                    WHERE (LOWER(bcb.request_guid) = LOWER(ip.ip_id::text) OR LOWER(bcb.requestguid) = LOWER(ip.ip_id::text))
+                                      AND COALESCE(bcb.deleted, false) = false
+                                      AND bcb.request_guid NOT IN (
+                                          SELECT lrm_b.requestguid::text FROM lab_request_master lrm_b WHERE COALESCE(lrm_b.deleted, false) = false
+                                      )
+                                ), 0) AS paid_bcb,
+                                COALESCE((
+                                    SELECT SUM(COALESCE(ra.receiptamount, 0))
+                                    FROM receipt_advances ra
+                                    INNER JOIN receipt_master rm_adv ON ra.receiptguid = rm_adv.receiptguid AND COALESCE(rm_adv.isdeleted, false) = false AND COALESCE(rm_adv.deleted, false) = false
+                                    WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
+                                ), 0) AS paid_adv
+                            FROM receipt_master rm
+                            WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                              AND COALESCE(rm.deleted, false) = false
+                              AND rm.receiptguid NOT IN (
+                                  SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
+                              )
+                        ) paid_agg ON true
                         WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
+                          AND COALESCE(ip.isdeleted, false) = false
                           AND ip.admitdate >= @fDate AND ip.admitdate <= @tDate
                           AND (@search IS NULL OR @search = '' 
                                OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
@@ -7770,11 +7999,11 @@ WHERE lrd.requestguid::text = @requestguid::text
         }
 
         public async Task<string> ConsolidatedListsReportPDF(
-            DateTime fromDate, 
-            DateTime toDate, 
-            string tenant_code, 
-            string? type = "ALL", 
-            string? search = null, 
+            DateTime fromDate,
+            DateTime toDate,
+            string tenant_code,
+            string? type = "ALL",
+            string? search = null,
             bool? isletterhead = false)
         {
             try

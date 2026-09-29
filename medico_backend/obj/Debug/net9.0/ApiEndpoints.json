@@ -940,6 +940,74 @@
     "ReturnTypes": []
   },
   {
+    "ContainingType": "medico_backend.Controllers.BillingSummaryController",
+    "Method": "GetCombinedBillingSummary",
+    "RelativePath": "api/BillingSummary/combined",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "op_no",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "ip_no",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "custid",
+        "Type": "System.Decimal",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.BillingSummaryController",
+    "Method": "GetIpBillingSummary",
+    "RelativePath": "api/BillingSummary/ip",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_no",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "custid",
+        "Type": "System.Decimal",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.BillingSummaryController",
+    "Method": "GetOpBillingSummary",
+    "RelativePath": "api/BillingSummary/op",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "op_no",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "custid",
+        "Type": "System.Decimal",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
     "ContainingType": "Medico_Backend.Controllers.BlockMasterController",
     "Method": "Delete",
     "RelativePath": "api/BlockMaster/delete",
@@ -3260,6 +3328,11 @@
         "IsRequired": false
       },
       {
+        "Name": "online_payment_charges",
+        "Type": "System.Nullable\u00601[[System.Decimal, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
         "Name": "ContentType",
         "Type": "System.String",
         "IsRequired": false
@@ -3593,6 +3666,11 @@
       {
         "Name": "override_flat_opcharge",
         "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "online_payment_charges",
+        "Type": "System.Nullable\u00601[[System.Decimal, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
         "IsRequired": false
       },
       {
@@ -5367,6 +5445,617 @@
     "ReturnTypes": []
   },
   {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetInputOutput",
+    "RelativePath": "api/IpBedsideChart/input-output/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetInputOutputById",
+    "RelativePath": "api/IpBedsideChart/input-output/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "io_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddInputOutput",
+    "RelativePath": "api/IpBedsideChart/input-output/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddInputOutputRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteInputOutput",
+    "RelativePath": "api/IpBedsideChart/input-output/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "io_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateInputOutput",
+    "RelativePath": "api/IpBedsideChart/input-output/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateInputOutputRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetMedicine",
+    "RelativePath": "api/IpBedsideChart/medicine/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetMedicineById",
+    "RelativePath": "api/IpBedsideChart/medicine/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "med_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddMedicine",
+    "RelativePath": "api/IpBedsideChart/medicine/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddMedicineRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteMedicine",
+    "RelativePath": "api/IpBedsideChart/medicine/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "med_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateMedicine",
+    "RelativePath": "api/IpBedsideChart/medicine/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateMedicineRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetOther",
+    "RelativePath": "api/IpBedsideChart/other/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetOtherById",
+    "RelativePath": "api/IpBedsideChart/other/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "other_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddOther",
+    "RelativePath": "api/IpBedsideChart/other/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddOtherRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteOther",
+    "RelativePath": "api/IpBedsideChart/other/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "other_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateOther",
+    "RelativePath": "api/IpBedsideChart/other/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateOtherRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetSchedule",
+    "RelativePath": "api/IpBedsideChart/schedule/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetScheduleById",
+    "RelativePath": "api/IpBedsideChart/schedule/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "schedule_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddSchedule",
+    "RelativePath": "api/IpBedsideChart/schedule/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddScheduleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteSchedule",
+    "RelativePath": "api/IpBedsideChart/schedule/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "schedule_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateSchedule",
+    "RelativePath": "api/IpBedsideChart/schedule/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateScheduleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetService",
+    "RelativePath": "api/IpBedsideChart/service/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetServiceById",
+    "RelativePath": "api/IpBedsideChart/service/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "service_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddService",
+    "RelativePath": "api/IpBedsideChart/service/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddServiceRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteService",
+    "RelativePath": "api/IpBedsideChart/service/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "service_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateService",
+    "RelativePath": "api/IpBedsideChart/service/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateServiceRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetSummary",
+    "RelativePath": "api/IpBedsideChart/summary/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetTemperature",
+    "RelativePath": "api/IpBedsideChart/temperature/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetTemperatureById",
+    "RelativePath": "api/IpBedsideChart/temperature/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "temp_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddTemperature",
+    "RelativePath": "api/IpBedsideChart/temperature/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddTemperatureRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteTemperature",
+    "RelativePath": "api/IpBedsideChart/temperature/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "temp_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateTemperature",
+    "RelativePath": "api/IpBedsideChart/temperature/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateTemperatureRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetVisitingDoctor",
+    "RelativePath": "api/IpBedsideChart/visiting-doctor/{ip_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "GetVisitingDoctorById",
+    "RelativePath": "api/IpBedsideChart/visiting-doctor/{ip_id}/detail",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ip_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      },
+      {
+        "Name": "visit_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "AddVisitingDoctor",
+    "RelativePath": "api/IpBedsideChart/visiting-doctor/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BAddVisitingDoctorRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "DeleteVisitingDoctor",
+    "RelativePath": "api/IpBedsideChart/visiting-doctor/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "visit_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.IpBedsideChartController",
+    "Method": "UpdateVisitingDoctor",
+    "RelativePath": "api/IpBedsideChart/visiting-doctor/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.IpBedsideChartModel\u002BUpdateVisitingDoctorRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
     "ContainingType": "medico_backend.Controllers.IpRegistrationController",
     "Method": "GetActiveAdmissions",
     "RelativePath": "api/IpRegistration/active-admissions",
@@ -5487,6 +6176,22 @@
     "Parameters": [
       {
         "Name": "id",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "DeleteConsumption",
+    "RelativePath": "api/ItemMaster/deleteconsumption",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "consumptioncode",
         "Type": "System.Int64",
         "IsRequired": false
       }
@@ -5639,6 +6344,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "DeletePurchaseOrder",
+    "RelativePath": "api/ItemMaster/deletepurchaseorder",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ordercode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "DeleteSales",
     "RelativePath": "api/ItemMaster/deletesales",
     "HttpMethod": "DELETE",
@@ -5767,6 +6488,57 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "FilterPurchases",
+    "RelativePath": "api/ItemMaster/filterpurchases",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "vendorname",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "billno",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "invoiceno",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "paymentstatus",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "fromdate",
+        "Type": "System.Nullable\u00601[[System.DateTime, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "todate",
+        "Type": "System.Nullable\u00601[[System.DateTime, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllConsumptions",
+    "RelativePath": "api/ItemMaster/getallconsumption",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "GetAllIndents",
     "RelativePath": "api/ItemMaster/getallindents",
     "HttpMethod": "GET",
@@ -5797,8 +6569,48 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllPurchaseOrders",
+    "RelativePath": "api/ItemMaster/getallpurchaseorders",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllPurchaseReturns",
+    "RelativePath": "api/ItemMaster/getallpurchasereturn",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "GetAllPurchases",
     "RelativePath": "api/ItemMaster/getallpurchases",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllSalesReturns",
+    "RelativePath": "api/ItemMaster/getallsalesreturn",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetAllStockAdjustments",
+    "RelativePath": "api/ItemMaster/getallstockadjustment",
     "HttpMethod": "GET",
     "IsController": true,
     "Order": 0,
@@ -5863,6 +6675,48 @@
     "IsController": true,
     "Order": 0,
     "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetConsumptionByCode",
+    "RelativePath": "api/ItemMaster/getconsumptionbycode",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "consumptioncode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetDoctorRooms",
+    "RelativePath": "api/ItemMaster/getdoctorrooms",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetDoctorRoomStock",
+    "RelativePath": "api/ItemMaster/getdoctorroomstock",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "roomwarehousecode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
     "ReturnTypes": []
   },
   {
@@ -5973,6 +6827,22 @@
     "Parameters": [
       {
         "Name": "purchaseentrycode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "GetPurchaseOrderByCode",
+    "RelativePath": "api/ItemMaster/getpurchaseorderbycode",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ordercode",
         "Type": "System.Int64",
         "IsRequired": false
       }
@@ -6145,6 +7015,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "InsertConsumption",
+    "RelativePath": "api/ItemMaster/insertconsumption",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.consumption_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "InsertIndent",
     "RelativePath": "api/ItemMaster/insertindent",
     "HttpMethod": "POST",
@@ -6266,6 +7152,22 @@
       {
         "Name": "request",
         "Type": "medico_backend.InventoryModel.purchase_entry_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "InsertPurchaseOrder",
+    "RelativePath": "api/ItemMaster/insertpurchaseorder",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.purchase_order_request",
         "IsRequired": true
       }
     ],
@@ -6518,6 +7420,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "UpdateConsumption",
+    "RelativePath": "api/ItemMaster/updateconsumption",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.consumption_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "UpdateIndent",
     "RelativePath": "api/ItemMaster/updateindent",
     "HttpMethod": "POST",
@@ -6598,6 +7516,22 @@
   },
   {
     "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "UpdateMultiplePurchaseStatus",
+    "RelativePath": "api/ItemMaster/updatemultiplepurchasestatus",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.purchase_bulk_status_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
     "Method": "UpdateParentCategory",
     "RelativePath": "api/ItemMaster/updateparentcategory",
     "HttpMethod": "POST",
@@ -6639,6 +7573,22 @@
       {
         "Name": "request",
         "Type": "medico_backend.InventoryModel.purchase_entry_request",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "UpdatePurchaseOrder",
+    "RelativePath": "api/ItemMaster/updatepurchaseorder",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.purchase_order_request",
         "IsRequired": true
       }
     ],
@@ -6767,6 +7717,22 @@
       {
         "Name": "manufacturer",
         "Type": "medico_backend.InventoryModel.manufacturer_master",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.ItemMasterController",
+    "Method": "UpsertStockAdjustment",
+    "RelativePath": "api/ItemMaster/upsertstockadjustment",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "medico_backend.InventoryModel.stock_adjustment_request",
         "IsRequired": true
       }
     ],
@@ -7977,6 +8943,21 @@
         "IsRequired": false
       },
       {
+        "Name": "payment_required_online_reg",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "enable_combo_registration",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "auto_route_billing_after_register",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
         "Name": "ContentType",
         "Type": "System.String",
         "IsRequired": false
@@ -9029,6 +10010,21 @@
         "IsRequired": false
       },
       {
+        "Name": "payment_required_online_reg",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "enable_combo_registration",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "auto_route_billing_after_register",
+        "Type": "System.Nullable\u00601[[System.Boolean, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
         "Name": "ContentType",
         "Type": "System.String",
         "IsRequired": false
@@ -9611,6 +10607,198 @@
       {
         "Name": "data",
         "Type": "Medico_Backend.Model.MachineMasterModel",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "GetIoParticulars",
+    "RelativePath": "api/MasterList/io-particulars",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "AddIoParticular",
+    "RelativePath": "api/MasterList/io-particulars/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddIoParticularRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "DeleteIoParticular",
+    "RelativePath": "api/MasterList/io-particulars/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "particular_id",
+        "Type": "System.Int32",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "UpdateIoParticular",
+    "RelativePath": "api/MasterList/io-particulars/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateIoParticularRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "GetScheduleTypes",
+    "RelativePath": "api/MasterList/schedule-type",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "AddScheduleType",
+    "RelativePath": "api/MasterList/schedule-type/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddScheduleTypeRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "DeleteScheduleType",
+    "RelativePath": "api/MasterList/schedule-type/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "type_id",
+        "Type": "System.Int32",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "UpdateScheduleType",
+    "RelativePath": "api/MasterList/schedule-type/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateScheduleTypeRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "GetServiceNames",
+    "RelativePath": "api/MasterList/service-name",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "AddServiceName",
+    "RelativePath": "api/MasterList/service-name/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddServiceNameRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "DeleteServiceName",
+    "RelativePath": "api/MasterList/service-name/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "service_id",
+        "Type": "System.Int32",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.MasterListController",
+    "Method": "UpdateServiceName",
+    "RelativePath": "api/MasterList/service-name/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateServiceNameRequest",
         "IsRequired": true
       }
     ],
@@ -10254,6 +11442,78 @@
     "ReturnTypes": []
   },
   {
+    "ContainingType": "medico_backend.InventoryController.OpeningStockController",
+    "Method": "DownloadTemplate",
+    "RelativePath": "api/OpeningStock/download-template",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.InventoryController.OpeningStockController",
+    "Method": "UploadOpeningStock",
+    "RelativePath": "api/OpeningStock/upload-opening-stock",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "file",
+        "Type": "Microsoft.AspNetCore.Http.IFormFile",
+        "IsRequired": false
+      },
+      {
+        "Name": "warehousecode",
+        "Type": "System.Int64",
+        "IsRequired": false
+      },
+      {
+        "Name": "branchcode",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "usercode",
+        "Type": "System.Nullable\u00601[[System.Int64, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "companycode",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "skiperrors",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      },
+      {
+        "Name": "defaultbatchno",
+        "Type": "System.String",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OpRegistrationController",
+    "Method": "AddServicesToOp",
+    "RelativePath": "api/OpRegistration/add-services",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.OPRegistrationModel\u002BAddServicesToOpRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
     "ContainingType": "medico_backend.Controllers.OpRegistrationController",
     "Method": "GetAllOpList",
     "RelativePath": "api/OpRegistration/all",
@@ -10295,6 +11555,22 @@
       {
         "Name": "req",
         "Type": "medico_backend.Model.OPRegistrationModel\u002BCancelOpRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OpRegistrationController",
+    "Method": "ComboRegistration",
+    "RelativePath": "api/OpRegistration/combo-registration",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.OPRegistrationModel\u002BComboRegistrationRequest",
         "IsRequired": true
       }
     ],
@@ -10377,6 +11653,16 @@
         "IsRequired": true
       }
     ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OpRegistrationController",
+    "Method": "GetRegistrationSettings",
+    "RelativePath": "api/OpRegistration/registration-settings",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [],
     "ReturnTypes": []
   },
   {
@@ -10516,6 +11802,1171 @@
     "Parameters": [
       {
         "Name": "vital_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtAnesthesia",
+    "RelativePath": "api/OT/anesthesia/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtAnesthesia",
+    "RelativePath": "api/OT/anesthesia/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtAnesthesiaRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetAvailableOts",
+    "RelativePath": "api/OT/availability",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "scheduled_date",
+        "Type": "System.DateOnly",
+        "IsRequired": false
+      },
+      {
+        "Name": "scheduled_time",
+        "Type": "System.TimeOnly",
+        "IsRequired": false
+      },
+      {
+        "Name": "estimated_end_time",
+        "Type": "System.TimeOnly",
+        "IsRequired": false
+      },
+      {
+        "Name": "specialty",
+        "Type": "System.String",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtAvailabilityRange",
+    "RelativePath": "api/OT/availability/range",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ot_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      },
+      {
+        "Name": "from_date",
+        "Type": "System.DateOnly",
+        "IsRequired": false
+      },
+      {
+        "Name": "to_date",
+        "Type": "System.DateOnly",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtAvailabilitySlots",
+    "RelativePath": "api/OT/availability/slots",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ot_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      },
+      {
+        "Name": "date",
+        "Type": "System.DateOnly",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtChecklistMaster",
+    "RelativePath": "api/OT/checklist-master/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtChecklistMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtChecklistMaster",
+    "RelativePath": "api/OT/checklist-master/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "item_master_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtChecklistMasterList",
+    "RelativePath": "api/OT/checklist-master/list",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateOtChecklistMaster",
+    "RelativePath": "api/OT/checklist-master/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateOtChecklistMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtChecklist",
+    "RelativePath": "api/OT/checklist/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtChecklistItemsForRequest",
+    "RelativePath": "api/OT/checklist/item/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtChecklistItem",
+    "RelativePath": "api/OT/checklist/item/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "item_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtChecklistItem",
+    "RelativePath": "api/OT/checklist/item/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtChecklistItemRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtChecklist",
+    "RelativePath": "api/OT/checklist/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtChecklistRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtConsent",
+    "RelativePath": "api/OT/consent/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtConsentRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtConsents",
+    "RelativePath": "api/OT/consent/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtConsumable",
+    "RelativePath": "api/OT/consumable/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtConsumableRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtConsumables",
+    "RelativePath": "api/OT/consumable/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtConsumable",
+    "RelativePath": "api/OT/consumable/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "consumable_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtFeeSplitMaster",
+    "RelativePath": "api/OT/fee-split-master/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtFeeSplitMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtFeeSplitMaster",
+    "RelativePath": "api/OT/fee-split-master/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "fee_type_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtFeeSplitMasterList",
+    "RelativePath": "api/OT/fee-split-master/list",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateOtFeeSplitMaster",
+    "RelativePath": "api/OT/fee-split-master/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateOtFeeSplitMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtFeeSplitItem",
+    "RelativePath": "api/OT/fee-split/item/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtFeeSplitItemRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtFeeSplitItems",
+    "RelativePath": "api/OT/fee-split/item/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtFeeSplitItem",
+    "RelativePath": "api/OT/fee-split/item/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "item_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtFeeSplitSummary",
+    "RelativePath": "api/OT/fee-split/summary/{request_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtImplant",
+    "RelativePath": "api/OT/implant/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtImplantRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtImplants",
+    "RelativePath": "api/OT/implant/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtImplant",
+    "RelativePath": "api/OT/implant/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "implant_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtIntraOp",
+    "RelativePath": "api/OT/intraop/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtIntraOp",
+    "RelativePath": "api/OT/intraop/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtIntraOpRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtMasterById",
+    "RelativePath": "api/OT/master/{ot_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ot_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtMaster",
+    "RelativePath": "api/OT/master/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtMaster",
+    "RelativePath": "api/OT/master/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ot_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtMasterList",
+    "RelativePath": "api/OT/master/list",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "activeOnly",
+        "Type": "System.Boolean",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateOtMaster",
+    "RelativePath": "api/OT/master/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateOtMasterRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtOperationNote",
+    "RelativePath": "api/OT/operation-note/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtOperationNote",
+    "RelativePath": "api/OT/operation-note/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtOperationNoteRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtPostOpOrder",
+    "RelativePath": "api/OT/postop-order/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtPostOpOrderRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtPostOpOrders",
+    "RelativePath": "api/OT/postop-order/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtPostOpOrder",
+    "RelativePath": "api/OT/postop-order/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "order_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateOtPostOpOrderStatus",
+    "RelativePath": "api/OT/postop-order/status",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateOtPostOpOrderStatusRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddPreOpAssessment",
+    "RelativePath": "api/OT/preop/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddPreOpAssessmentRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetPreOpAssessment",
+    "RelativePath": "api/OT/preop/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdatePreOpAssessment",
+    "RelativePath": "api/OT/preop/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdatePreOpAssessmentRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtRecovery",
+    "RelativePath": "api/OT/recovery/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "SaveOtRecovery",
+    "RelativePath": "api/OT/recovery/save",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.SaveOtRecoveryRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "ScheduleSurgery",
+    "RelativePath": "api/OT/schedule/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtScheduleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetScheduleByRequest",
+    "RelativePath": "api/OT/schedule/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtCalendar",
+    "RelativePath": "api/OT/schedule/calendar",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "ot_id",
+        "Type": "System.Nullable\u00601[[System.Guid, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "from_date",
+        "Type": "System.Nullable\u00601[[System.DateOnly, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      },
+      {
+        "Name": "to_date",
+        "Type": "System.Nullable\u00601[[System.DateOnly, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "CancelOtSchedule",
+    "RelativePath": "api/OT/schedule/cancel",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "schedule_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "PostponeOtSchedule",
+    "RelativePath": "api/OT/schedule/postpone",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.PostponeOtScheduleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateOtSchedule",
+    "RelativePath": "api/OT/schedule/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateOtScheduleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtStaffNote",
+    "RelativePath": "api/OT/staff-note/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtStaffNoteRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtStaffNotes",
+    "RelativePath": "api/OT/staff-note/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtStaffNote",
+    "RelativePath": "api/OT/staff-note/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "note_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtSterilization",
+    "RelativePath": "api/OT/sterilization/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtSterilizationRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtSterilization",
+    "RelativePath": "api/OT/sterilization/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "DeleteOtSterilization",
+    "RelativePath": "api/OT/sterilization/delete",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "sterilization_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtSummary",
+    "RelativePath": "api/OT/summary/{request_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetSurgeryRequestById",
+    "RelativePath": "api/OT/surgery-request/{request_id}",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddSurgeryRequest",
+    "RelativePath": "api/OT/surgery-request/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddSurgeryRequestRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "CancelSurgeryRequest",
+    "RelativePath": "api/OT/surgery-request/cancel",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetSurgeryRequestList",
+    "RelativePath": "api/OT/surgery-request/list",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "status",
+        "Type": "System.String",
+        "IsRequired": false
+      },
+      {
+        "Name": "custid",
+        "Type": "System.Nullable\u00601[[System.Decimal, System.Private.CoreLib, Version=9.0.0.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e]]",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateSurgeryStatus",
+    "RelativePath": "api/OT/surgery-request/status",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateSurgeryStatusRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "UpdateSurgeryRequest",
+    "RelativePath": "api/OT/surgery-request/update",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.UpdateSurgeryRequestRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "AddOtTeamMember",
+    "RelativePath": "api/OT/team/add",
+    "HttpMethod": "POST",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "req",
+        "Type": "medico_backend.Model.AddOtTeamMemberRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "GetOtTeam",
+    "RelativePath": "api/OT/team/by-request",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request_id",
+        "Type": "System.Guid",
+        "IsRequired": false
+      }
+    ],
+    "ReturnTypes": []
+  },
+  {
+    "ContainingType": "medico_backend.Controllers.OTController",
+    "Method": "RemoveOtTeamMember",
+    "RelativePath": "api/OT/team/remove",
+    "HttpMethod": "GET",
+    "IsController": true,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "team_id",
         "Type": "System.Guid",
         "IsRequired": false
       }

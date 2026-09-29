@@ -358,6 +358,10 @@ namespace medico_backend.Model
 
         public decimal Amount { get; set; }
 
+        public decimal? Unit { get; set; }
+
+        public decimal? Rate { get; set; }
+
         public string? GroupName { get; set; }
 
         public IList<string>? SubParameters { get; set; }
@@ -1288,6 +1292,14 @@ namespace medico_backend.Model
         public decimal totalamount { get; set; }
         public decimal paidamount { get; set; }
         public decimal balanceamount { get; set; }
+
+        // Category-wise OP amounts
+        public decimal token_amount { get; set; }
+        public decimal consultation_amount { get; set; }
+        public decimal dressing_amount { get; set; }
+        public decimal service_amount { get; set; }
+        public decimal observation_amount { get; set; }
+        public decimal other_amount { get; set; }
     }
 
     public class DailyBillReportRequest
@@ -1328,7 +1340,7 @@ namespace medico_backend.Model
         public string? HeaderImagePath { get; set; }
         public string? FooterImagePath { get; set; }
         public bool ShowHeaderFooter { get; set; }
-        
+
         // Company info
         public string? LabName { get; set; }
         public string? BranchName { get; set; }
@@ -1338,7 +1350,7 @@ namespace medico_backend.Model
         public string? GSTNo { get; set; }
         public byte[]? logo { get; set; }
         public bool isletterhead { get; set; }
-        
+
         // Footer signature
         public string? billauthorizedby { get; set; }
         public byte[]? billauthorizesignature { get; set; }
@@ -1403,7 +1415,7 @@ namespace medico_backend.Model
         public string? tenantcode { get; set; }
         public decimal? soldqty { get; set; }
         public decimal returnedqty { get; set; }
-        
+
         // Joined field from item master
         public string? itemname { get; set; }
     }

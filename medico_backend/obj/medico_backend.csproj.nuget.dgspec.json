@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "D:\\medico_backend\\medico_backend\\medico_backend.csproj": {}
+    "D:\\Medico_backend(current)\\medico_backend\\medico_backend\\medico_backend.csproj": {}
   },
   "projects": {
-    "D:\\medico_backend\\medico_backend\\medico_backend.csproj": {
+    "D:\\Medico_backend(current)\\medico_backend\\medico_backend\\medico_backend.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "D:\\medico_backend\\medico_backend\\medico_backend.csproj",
+        "projectUniqueName": "D:\\Medico_backend(current)\\medico_backend\\medico_backend\\medico_backend.csproj",
         "projectName": "medico_backend",
-        "projectPath": "D:\\medico_backend\\medico_backend\\medico_backend.csproj",
+        "projectPath": "D:\\Medico_backend(current)\\medico_backend\\medico_backend\\medico_backend.csproj",
         "packagesPath": "C:\\Users\\elang\\.nuget\\packages\\",
-        "outputPath": "D:\\medico_backend\\medico_backend\\obj\\",
+        "outputPath": "D:\\Medico_backend(current)\\medico_backend\\medico_backend\\obj\\",
         "projectStyle": "PackageReference",
         "fallbackFolders": [
           "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
@@ -64,6 +64,10 @@
             "BCrypt.Net-Next": {
               "target": "Package",
               "version": "[4.1.0, )"
+            },
+            "ClosedXML": {
+              "target": "Package",
+              "version": "[0.105.1, )"
             },
             "Dapper.Contrib": {
               "target": "Package",
