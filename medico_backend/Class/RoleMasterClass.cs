@@ -183,5 +183,79 @@ namespace Medico_Backend.Class
             var rows = await db.ExecuteAsync(sql, new { roleGuid, tenantCode });
             return rows > 0;
         }
+
+        // ===================== USER ROLE MASTER (ASSIGNED RIGHTS PER USER) =====================
+
+        public async Task<List<long>> GetUserRolesAsync(long usercode, string tenantCode)
+        {
+            try
+            {
+                using IDbConnection db = new NpgsqlConnection(_masterConnStr);
+                string sql = @"
+                    SELECT ""Role_id""
+                    FROM public.""USER_ROLE_MASTER""
+                    WHERE usercode = @usercode AND tenant_code = @tenantCode
+                    ORDER BY ""Role_id"";";
+
+                var res = await db.QueryAsync<long>(sql, new { usercode, tenantCode });
+                return res.ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RoleMasterClass.GetUserRolesAsync] Error: {ex.Message}");
+                return new List<long>();
+            }
+        }
+
+        public async Task<bool> SaveUserRolesAsync(long usercode, IList<long>? roleIds, string tenantCode)
+        {
+            if (usercode <= 0) return false;
+
+            using var conn = new NpgsqlConnection(_masterConnStr);
+            await conn.OpenAsync();
+            using var trans = await conn.BeginTransactionAsync();
+
+            try
+            {
+                string deleteSql = @"DELETE FROM public.""USER_ROLE_MASTER"" WHERE usercode = @usercode AND tenant_code = @tenantCode;";
+                await conn.ExecuteAsync(deleteSql, new { usercode, tenantCode }, trans);
+
+                if (roleIds != null && roleIds.Any())
+                {
+                    string maxIdSql = @"SELECT COALESCE(MAX(""UserRoleID""), 0) FROM public.""USER_ROLE_MASTER"";";
+                    long currentMaxId = await conn.ExecuteScalarAsync<long>(maxIdSql, null, trans);
+
+                    var distinctRoleIds = roleIds.Distinct().ToList();
+                    var entities = new List<object>();
+
+                    for (int i = 0; i < distinctRoleIds.Count; i++)
+                    {
+                        currentMaxId++;
+                        entities.Add(new
+                        {
+                            UserRoleID = currentMaxId,
+                            usercode = usercode,
+                            Role_id = distinctRoleIds[i],
+                            tenant_code = tenantCode
+                        });
+                    }
+
+                    string insertSql = @"
+                        INSERT INTO public.""USER_ROLE_MASTER"" (""UserRoleID"", usercode, ""Role_id"", tenant_code)
+                        VALUES (@UserRoleID, @usercode, @Role_id, @tenant_code);";
+
+                    await conn.ExecuteAsync(insertSql, entities, trans);
+                }
+
+                await trans.CommitAsync();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                await trans.RollbackAsync();
+                Console.WriteLine($"[RoleMasterClass.SaveUserRolesAsync] Error: {ex.Message}");
+                throw;
+            }
+        }
     }
 }

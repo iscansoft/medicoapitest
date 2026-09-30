@@ -1,4 +1,4 @@
-﻿using medico_backend.Class;
+using medico_backend.Class;
 using medico_backend.Model;
 using medico_backend.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -71,7 +71,7 @@ namespace medico_backend.Controller
                 model.tenant_code = tenant_code;
 
                 // Step 1: Create user (unverified)
-                var result = await _userClass.CreateUser(model, profile.Branches, profile.Departments);
+                var result = await _userClass.CreateUser(model, profile.Branches, profile.Departments, profile.RoleIds, profile.RoleTemplateName);
                 if (result != "User Created")
                     return MapInsertError(result);
 
@@ -114,7 +114,7 @@ namespace medico_backend.Controller
                 model.tenant_code = tenant_code;
 
                 // Step 1: Create user (verified)
-                var result = await _userClass.InsertUser(model, profile.Branches, profile.Departments);
+                var result = await _userClass.InsertUser(model, profile.Branches, profile.Departments, profile.RoleIds, profile.RoleTemplateName);
                 if (result != "User Created")
                     return MapInsertError(result);
 
@@ -175,7 +175,7 @@ namespace medico_backend.Controller
                     tenant_code, EntityType, user.user_code, "signature");
 
                 // Step 3: Full profile update (null-safe merge happens inside Update_profile)
-                var res = await _userClass.Update_profile(user, profile.Branches, profile.Departments);
+                var res = await _userClass.Update_profile(user, profile.Branches, profile.Departments, profile.RoleIds, profile.RoleTemplateName);
 
                 return res == "success"
                     ? Ok(new { message = "Updated successfully" })
