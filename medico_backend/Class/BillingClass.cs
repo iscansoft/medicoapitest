@@ -960,6 +960,25 @@ namespace medico_backend.Class
 
             await db.InsertAsync(req);
 
+            var setting = await db.QueryFirstOrDefaultAsync<dynamic>(
+    @"SELECT shift_timing_mode, shift_end_time FROM lab_settings
+      WHERE tenant_code=@tenantCode AND deleted=false
+        AND (bh_code=@bh OR bh_code=0 OR bh_code IS NULL)
+      ORDER BY (bh_code=@bh) DESC NULLS LAST LIMIT 1",
+    new { bh = req.bhcode, tenantCode });
+
+            string mode = (string?)setting?.shift_timing_mode ?? "VARIABLE";
+
+            req.cnttid = Guid.NewGuid().ToString();
+            req.shiftsno = progressiveShiftIndex;
+            req.fromdate = DateTime.UtcNow;
+            req.todate = null;
+            req.tenant_code = tenantCode;
+            req.shift_mode = mode.ToUpper();
+            req.planned_to = ComputePlannedEndUtc(req.fromdate.Value, mode, (string?)setting?.shift_end_time);
+            req.close_type = null;
+            req.counterdate ??= TimeZoneInfo.ConvertTimeFromUtc(req.fromdate.Value, Tz).Date;  // fixes null counterdate
+
             var mappedData = await EvaluateShiftProfiling(req.cnttid, tenantCode);
             return ("SUCCESS", mappedData);
         }
@@ -967,17 +986,30 @@ namespace medico_backend.Class
         public async Task<string> CloseCounterShift(CloseCounterRequest req, string tenantCode)
         {
             using var db = GetConnection();
-            var targetedContext = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
-                "SELECT * FROM counter_timing WHERE cnttid = @cnttid AND tenant_code = @tenantCode",
+            var shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                "SELECT * FROM counter_timing WHERE cnttid=@cnttid AND tenant_code=@tenantCode",
                 new { cnttid = req.cnttid, tenantCode });
 
-            if (targetedContext == null) return "Session configuration timeline reference path target missing context.";
-            if (targetedContext.todate != null) return "Operational state context parameter flag evaluates closed already.";
+            if (shift == null) return "Shift not found.";
+            if (shift.todate != null) return "Shift is already closed.";
 
+            var now = DateTime.UtcNow;
+
+            if (shift.shift_mode == "FIXED" && shift.planned_to != null)
+            {
+                if (now < shift.planned_to)
+                    return "This is a fixed-timing shift. It will close automatically at the scheduled time.";
+                // planned time already passed -> close exactly at the planned time
+                await db.ExecuteAsync(
+                    "UPDATE counter_timing SET todate=@t, close_type='AUTO' WHERE cnttid=@id AND tenant_code=@tenantCode",
+                    new { t = shift.planned_to, id = shift.cnttid, tenantCode });
+                return "SUCCESS";
+            }
+
+            // VARIABLE: take the moment they click End Shift
             await db.ExecuteAsync(
-                "UPDATE counter_timing SET todate = @now WHERE cnttid = @cnttid AND tenant_code = @tenantCode",
-                new { now = DateTime.UtcNow, cnttid = req.cnttid, tenantCode });
-
+                "UPDATE counter_timing SET todate=@now, close_type='MANUAL' WHERE cnttid=@id AND tenant_code=@tenantCode",
+                new { now, id = shift.cnttid, tenantCode });
             return "SUCCESS";
         }
 
@@ -1836,5 +1868,26 @@ namespace medico_backend.Class
                 return ($"AutoBillOpVisit error: {ex.Message}", null);
             }
         }
+        private static readonly TimeZoneInfo Tz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+        private static DateTime? ComputePlannedEndUtc(DateTime startUtc, string? mode, string? endTime)
+        {
+            if (!string.Equals(mode, "FIXED", StringComparison.OrdinalIgnoreCase)) return null;
+
+            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), Tz);
+            var midnight = startLocal.Date.AddDays(1);
+
+            var endLocal = midnight;                                  // default: midnight
+            if (TimeSpan.TryParse(endTime, out var t))
+            {
+                var configured = startLocal.Date + t;
+                if (configured > startLocal) endLocal = configured;   // still ahead today
+            }
+            if (endLocal > midnight) endLocal = midnight;             // never cross 12 AM
+
+            return TimeZoneInfo.ConvertTimeToUtc(endLocal, Tz);
+        }
+
     }
 }
