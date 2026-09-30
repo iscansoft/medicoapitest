@@ -6547,7 +6547,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                 WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                             ), 0) AS paid_adv
                         FROM receipt_master rm
-                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                        WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                           AND COALESCE(rm.deleted, false) = false
                           AND rm.receiptguid NOT IN (
                               SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
@@ -6892,7 +6892,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                 WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                             ), 0) AS paid_adv
                         FROM receipt_master rm
-                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                        WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                           AND COALESCE(rm.deleted, false) = false
                           AND rm.receiptguid NOT IN (
                               SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
@@ -7869,7 +7869,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                 ), 0) AS paid_adv
                             FROM receipt_master rm
-                            WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                            WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                               AND COALESCE(rm.deleted, false) = false
                               AND rm.receiptguid NOT IN (
                                   SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
