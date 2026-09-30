@@ -6547,7 +6547,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                 WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                             ), 0) AS paid_adv
                         FROM receipt_master rm
-                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                        WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                           AND COALESCE(rm.deleted, false) = false
                           AND rm.receiptguid NOT IN (
                               SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
@@ -6892,7 +6892,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                 WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                             ), 0) AS paid_adv
                         FROM receipt_master rm
-                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                        WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                           AND COALESCE(rm.deleted, false) = false
                           AND rm.receiptguid NOT IN (
                               SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
@@ -7869,7 +7869,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                                     WHERE rm_adv.custid = ip.custid AND COALESCE(ra.deleted, false) = false AND ra.requestguid IS NULL
                                 ), 0) AS paid_adv
                             FROM receipt_master rm
-                            WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                            WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
                               AND COALESCE(rm.deleted, false) = false
                               AND rm.receiptguid NOT IN (
                                   SELECT rd_b.receiptguid FROM receipt_details rd_b JOIN lab_request_master lrm_b ON lrm_b.requestguid = rd_b.requestguid WHERE COALESCE(lrm_b.deleted, false) = false AND rd_b.receiptguid IS NOT NULL
@@ -8058,6 +8058,375 @@ WHERE lrd.requestguid::text = @requestguid::text
             catch (Exception ex)
             {
                 Console.WriteLine($"Error in ReportClass.ConsolidatedListsReportPDF: {ex.Message}");
+                throw;
+            }
+        }
+
+        // ========================================================================
+        // DATABASE INDEXING & OPTIMIZATION HELPER FOR REPORTING TABLES
+        // ========================================================================
+        private static bool _reportIndexesChecked = false;
+        private static readonly SemaphoreSlim _reportIndexLock = new SemaphoreSlim(1, 1);
+
+        public async Task EnsureReportIndexesExistAsync()
+        {
+            if (_reportIndexesChecked) return;
+            await _reportIndexLock.WaitAsync();
+            try
+            {
+                if (_reportIndexesChecked) return;
+                using IDbConnection idxDb = new NpgsqlConnection(_conn);
+                string sqlIndexes = @"
+                    CREATE INDEX IF NOT EXISTS idx_lrm_tenant_del_reqdt ON lab_request_master (tenant_code, deleted, requestdatetime);
+                    CREATE INDEX IF NOT EXISTS idx_lrm_reqguid ON lab_request_master (requestguid);
+                    CREATE INDEX IF NOT EXISTS idx_lrm_custid ON lab_request_master (custid);
+                    CREATE INDEX IF NOT EXISTS idx_lrd_reqguid_del ON lab_request_details (requestguid, isdeleted);
+                    CREATE INDEX IF NOT EXISTS idx_tm_tcode_gcode ON test_master (tcode, gcode);
+                    CREATE INDEX IF NOT EXISTS idx_gm_gcode_tenant ON group_master (gcode, tenant_code);
+                    CREATE INDEX IF NOT EXISTS idx_op_tenant_del_visitdt ON op_registration (tenant_code, isdeleted, visit_date);
+                    CREATE INDEX IF NOT EXISTS idx_ip_tenant_del_admitdt ON ip_registration (tenant_code, isdeleted, admitdate);
+                ";
+                await idxDb.ExecuteAsync(sqlIndexes);
+                _reportIndexesChecked = true;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"EnsureReportIndexesExistAsync note: {ex.Message}");
+            }
+            finally
+            {
+                _reportIndexLock.Release();
+            }
+        }
+
+        public class LabReportRawDbRow
+        {
+            public string? requestguid { get; set; }
+            public string? id { get; set; }
+            public long custid { get; set; }
+            public string? patientcode { get; set; }
+            public string? patientname { get; set; }
+            public string? age { get; set; }
+            public string? gender { get; set; }
+            public string? mobileno { get; set; }
+            public string? doctorname { get; set; }
+            public string? bedno { get; set; }
+            public DateTime visitdate { get; set; }
+            public string? status { get; set; }
+            public decimal totalamount { get; set; }
+            public decimal discountamount { get; set; }
+            public decimal netamount { get; set; }
+            public decimal paidamount { get; set; }
+            public decimal balanceamount { get; set; }
+            public int? tcode { get; set; }
+            public string? testname { get; set; }
+            public decimal itemamount { get; set; }
+            public string? groupname { get; set; }
+            public bool isscangroup { get; set; }
+            public bool islabgroup { get; set; }
+        }
+
+        // ========================================================================
+        // LAB REPORT LISTS (LAB, SCAN, XRAY, ECG, ECHO, FISHO) IMPLEMENTATION
+        // ========================================================================
+        public async Task<LabReportListsReportData> GetLabReportListsDataAsync(
+            string tenant_code,
+            DateTime fromDate,
+            DateTime toDate,
+            string? type = "ALL",
+            string? search = null)
+        {
+            try
+            {
+                _ = EnsureReportIndexesExistAsync();
+
+                using IDbConnection db = new NpgsqlConnection(_conn);
+
+                string typeFilter = (type ?? "ALL").Trim().ToUpperInvariant();
+                DateTime fDate = fromDate.Date;
+                DateTime tDate = toDate.Date.AddDays(1).AddTicks(-1);
+
+                string companySql = @"
+                    SELECT legal_name, address_line1, contact_number, contact_email
+                    FROM mastertenant.tenants
+                    WHERE tenant_code = @tenant_code
+                    LIMIT 1";
+
+                var company = await db.QueryFirstOrDefaultAsync<dynamic>(companySql, new { tenant_code });
+
+                var sqlBuilder = new StringBuilder(@"
+                    SELECT 
+                        lrm.requestguid::text AS requestguid,
+                        COALESCE(NULLIF(lrm.requestsno::text, ''), NULLIF(lrm.requestguid::text, ''), 'BILL-001') AS id,
+                        COALESCE(lrm.custid, 0) AS custid,
+                        COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), '') AS patientcode,
+                        COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS patientname,
+                        COALESCE(
+                            NULLIF(CONCAT(NULLIF(lrm.ageyears, '0'), ' Y ', NULLIF(lrm.agemonths, '0'), ' M ', NULLIF(lrm.agedays, '0'), ' D'), ' Y  M  D'),
+                            CONCAT(COALESCE(cm.ageyears, 0), ' Y ', COALESCE(cm.agemonths, 0), ' M ', COALESCE(cm.agedays, 0), ' D')
+                        ) AS age,
+                        COALESCE(NULLIF(lrm.gender, ''), NULLIF(cm.gender, ''), '') AS gender,
+                        COALESCE(NULLIF(lrm.mobileno, ''), NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS mobileno,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS doctorname,
+                        '-' AS bedno,
+                        COALESCE(lrm.requestdatetime, lrm.entereddate, NOW()) AS visitdate,
+                        'COMPLETED' AS status,
+                        COALESCE(lrm.requestamount, 0) AS totalamount,
+                        COALESCE(lrm.discountamount, 0) + COALESCE(lrm.ourdiscount, 0) + COALESCE(lrm.specialdiscount, 0) AS discountamount,
+                        COALESCE(lrm.totalamount, 0) AS netamount,
+                        COALESCE(lrm.paidamount, 0) AS paidamount,
+                        GREATEST(0, COALESCE(lrm.totalamount, 0) - COALESCE(lrm.paidamount, 0)) AS balanceamount,
+                        lrd.tcode,
+                        COALESCE(NULLIF(lrd.item_name, ''), NULLIF(tm.name, ''), 'Test') AS testname,
+                        COALESCE(NULLIF(lrd.testamount, 0), NULLIF(lrd.newamount, 0), 0) AS itemamount,
+                        COALESCE(gm.name, '') AS groupname,
+                        COALESCE(gm.isscan, false) AS isscangroup,
+                        COALESCE(gm.islab, false) AS islabgroup
+                    FROM lab_request_master lrm
+                    LEFT JOIN customerdb.customer_master cm ON cm.custid = lrm.custid
+                    LEFT JOIN doctor_master dm ON dm.dcode = lrm.dcode
+                    LEFT JOIN lab_request_details lrd ON lrd.requestguid = lrm.requestguid AND (lrd.isdeleted IS NULL OR lrd.isdeleted = false)
+                    LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
+                    LEFT JOIN group_master gm ON gm.gcode = tm.gcode AND (gm.tenant_code = lrm.tenant_code OR lrm.tenant_code IS NULL)
+                    WHERE (lrm.deleted IS NULL OR lrm.deleted = false)
+                      AND lrm.requestdatetime >= @fDate AND lrm.requestdatetime <= @tDate");
+
+                var param = new DynamicParameters();
+                param.Add("fDate", fDate);
+                param.Add("tDate", tDate);
+
+                if (!string.IsNullOrWhiteSpace(tenant_code))
+                {
+                    sqlBuilder.Append(" AND (lrm.tenant_code = @tenant_code OR lrm.tenant_code IS NULL OR lrm.tenant_code = '')");
+                    param.Add("tenant_code", tenant_code);
+                }
+
+                if (!string.IsNullOrWhiteSpace(search))
+                {
+                    sqlBuilder.Append(@" AND (
+                        LOWER(lrm.name) LIKE LOWER(@searchPattern)
+                        OR LOWER(cm.name) LIKE LOWER(@searchPattern)
+                        OR LOWER(cm.custcode::text) LIKE LOWER(@searchPattern)
+                        OR LOWER(lrm.requestsno::text) LIKE LOWER(@searchPattern)
+                        OR LOWER(lrm.mobileno) LIKE LOWER(@searchPattern)
+                    )");
+                    param.Add("searchPattern", $"%{search.Trim()}%");
+                }
+
+                var rawList = (await db.QueryAsync<LabReportRawDbRow>(sqlBuilder.ToString(), param)).ToList();
+
+                var groupedRequests = rawList.GroupBy(r => r.requestguid ?? string.Empty);
+                var rows = new List<LabReportListRowDto>();
+
+                foreach (var group in groupedRequests)
+                {
+                    var first = group.First();
+
+                    var itemsByCategory = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["LAB"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        ["SCAN"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        ["XRAY"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        ["ECG"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        ["ECHO"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                        ["FISHO"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                    };
+
+                    foreach (var item in group)
+                    {
+                        string tName = item.testname ?? "";
+                        string gName = item.groupname ?? "";
+                        bool isScanGroup = item.isscangroup;
+
+                        string combined = $"{gName} {tName}".ToLowerInvariant();
+
+                        string category = "LAB";
+                        if (combined.Contains("physio") || combined.Contains("fisho") || combined.Contains("therap"))
+                        {
+                            category = "FISHO";
+                        }
+                        else if (combined.Contains("echo") || combined.Contains("doppler"))
+                        {
+                            category = "ECHO";
+                        }
+                        else if (combined.Contains("ecg") || combined.Contains("electrocardio"))
+                        {
+                            category = "ECG";
+                        }
+                        else if (combined.Contains("xray") || combined.Contains("x-ray") || combined.Contains("radio"))
+                        {
+                            category = "XRAY";
+                        }
+                        else if (isScanGroup || combined.Contains("scan") || combined.Contains("usg") || combined.Contains("ultrasound") || combined.Contains("ct") || combined.Contains("mri"))
+                        {
+                            category = "SCAN";
+                        }
+                        else
+                        {
+                            category = "LAB";
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(tName))
+                        {
+                            itemsByCategory[category].Add(tName);
+                        }
+                    }
+
+                    foreach (var kvp in itemsByCategory)
+                    {
+                        if (kvp.Value.Count == 0) continue;
+
+                        string cat = kvp.Key;
+                        if (typeFilter != "ALL" && typeFilter != cat) continue;
+
+                        decimal totAmt = first.totalamount;
+                        decimal discAmt = first.discountamount;
+                        decimal netAmt = first.netamount;
+                        decimal paidAmt = first.paidamount;
+                        decimal balAmt = first.balanceamount;
+
+                        rows.Add(new LabReportListRowDto
+                        {
+                            Type = cat,
+                            RequestGuid = first.requestguid ?? "",
+                            Id = first.id ?? "BILL-001",
+                            CustId = first.custid,
+                            PatientCode = first.patientcode ?? "",
+                            PatientName = first.patientname ?? "Patient",
+                            Age = FormatPatientAge(first.age),
+                            Gender = first.gender ?? "",
+                            MobileNo = first.mobileno ?? "",
+                            DoctorName = first.doctorname ?? "SELF",
+                            BedNo = first.bedno ?? "-",
+                            VisitDate = first.visitdate,
+                            Status = first.status ?? "COMPLETED",
+                            TotalAmount = totAmt,
+                            DiscountAmount = discAmt,
+                            NetAmount = netAmt,
+                            PaidAmount = paidAmt,
+                            BalanceAmount = balAmt,
+                            PaymentStatus = balAmt <= 0 ? "PAID" : (paidAmt > 0 ? "PARTIAL" : "UNPAID"),
+                            ServicesOrTests = string.Join(", ", kvp.Value)
+                        });
+                    }
+                }
+
+                rows = rows
+                    .OrderBy(r => r.Type switch {
+                        "LAB" => 1,
+                        "SCAN" => 2,
+                        "XRAY" => 3,
+                        "ECG" => 4,
+                        "ECHO" => 5,
+                        "FISHO" => 6,
+                        _ => 7
+                    })
+                    .ThenByDescending(r => r.VisitDate)
+                    .ToList();
+
+                var summary = new LabReportListsSummaryDto
+                {
+                    TotalCount = rows.Count,
+                    LabCount = rows.Count(r => r.Type == "LAB"),
+                    ScanCount = rows.Count(r => r.Type == "SCAN"),
+                    XrayCount = rows.Count(r => r.Type == "XRAY"),
+                    EcgCount = rows.Count(r => r.Type == "ECG"),
+                    EchoCount = rows.Count(r => r.Type == "ECHO"),
+                    FishoCount = rows.Count(r => r.Type == "FISHO"),
+                    LabTotalAmount = rows.Where(r => r.Type == "LAB").Sum(r => r.TotalAmount),
+                    ScanTotalAmount = rows.Where(r => r.Type == "SCAN").Sum(r => r.TotalAmount),
+                    XrayTotalAmount = rows.Where(r => r.Type == "XRAY").Sum(r => r.TotalAmount),
+                    EcgTotalAmount = rows.Where(r => r.Type == "ECG").Sum(r => r.TotalAmount),
+                    EchoTotalAmount = rows.Where(r => r.Type == "ECHO").Sum(r => r.TotalAmount),
+                    FishoTotalAmount = rows.Where(r => r.Type == "FISHO").Sum(r => r.TotalAmount),
+                    GrandTotalAmount = rows.Sum(r => r.TotalAmount),
+                    TotalDiscountAmount = rows.Sum(r => r.DiscountAmount),
+                    TotalNetAmount = rows.Sum(r => r.NetAmount),
+                    TotalPaidAmount = rows.Sum(r => r.PaidAmount),
+                    TotalBalanceAmount = rows.Sum(r => r.BalanceAmount)
+                };
+
+                return new LabReportListsReportData
+                {
+                    CompanyName = (string)(company?.legal_name ?? ""),
+                    BranchName = "",
+                    CompanyAddress = (string)(company?.address_line1 ?? ""),
+                    CompanyContactNo = (string)(company?.contact_number ?? ""),
+                    CompanyEmail = (string)(company?.contact_email ?? ""),
+                    FromDate = fromDate,
+                    ToDate = toDate,
+                    FilterType = typeFilter,
+                    Summary = summary,
+                    Rows = rows
+                };
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ReportClass.GetLabReportListsDataAsync: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async Task<string> LabReportListsReportPDF(
+            DateTime fromDate,
+            DateTime toDate,
+            string tenant_code,
+            string? type = "ALL",
+            string? search = null,
+            bool? isletterhead = false)
+        {
+            try
+            {
+                var reportData = await GetLabReportListsDataAsync(tenant_code, fromDate, toDate, type, search);
+
+                using IDbConnection db = new NpgsqlConnection(_conn);
+
+                var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
+                    @"SELECT * FROM lab_settings WHERE tenant_code = @tenant_code AND COALESCE(deleted, false) = false ORDER BY bh_code LIMIT 1",
+                    new { tenant_code });
+
+                byte[]? headerImage = null;
+                byte[]? footerImage = null;
+                byte[]? logoImage = null;
+
+                if (lsConfig != null)
+                {
+                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.header_path) ? lsConfig.header_path : lsConfig.header_image_path;
+                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.footer_path) ? lsConfig.footer_path : lsConfig.footer_image_path;
+
+                    if (!string.IsNullOrWhiteSpace(hKey))
+                    {
+                        try { var hRes = await _s3Service.DownloadAsync(hKey); if (hRes.HasValue) headerImage = hRes.Value.Data; } catch { }
+                    }
+                    if (!string.IsNullOrWhiteSpace(fKey))
+                    {
+                        try { var fRes = await _s3Service.DownloadAsync(fKey); if (fRes.HasValue) footerImage = fRes.Value.Data; } catch { }
+                    }
+                }
+
+                var payload = new LabReportListsReportRequest
+                {
+                    ReportData = reportData,
+                    IsLetterhead = isletterhead ?? false,
+                    HeaderImage = headerImage,
+                    FooterImage = footerImage,
+                    LogoImage = logoImage,
+                    show_header_footer_image = true,
+                    TenantId = tenant_code
+                };
+
+                var client = _httpClientFactory.CreateClient("ReportServer");
+                var json = JsonSerializer.Serialize(payload);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await client.PostAsync("/api/LabReportListsReport/getlabreportlists", content);
+                response.EnsureSuccessStatusCode();
+
+                return await response.Content.ReadAsStringAsync();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error in ReportClass.LabReportListsReportPDF: {ex.Message}");
                 throw;
             }
         }
