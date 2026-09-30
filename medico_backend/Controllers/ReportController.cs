@@ -349,5 +349,34 @@ namespace medico_backend.Controllers
             var res = await _reportClass.GetConsolidatedListsDataAsync(T, fromdate, todate, type, search);
             return Ok(res);
         }
+
+        [HttpGet("labreportlists")]
+        public async Task<IActionResult> GetLabReportLists(
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] string? type = "ALL",
+            [FromQuery] string? search = null,
+            [FromQuery] bool? isletterhead = false)
+        {
+            if (string.IsNullOrWhiteSpace(T))
+                return BadRequest(new { success = false, message = "tenant_code header required" });
+
+            var res = await _reportClass.LabReportListsReportPDF(fromdate, todate, T, type, search, isletterhead);
+            return Ok(res);
+        }
+
+        [HttpGet("labreportlistsdata")]
+        public async Task<IActionResult> GetLabReportListsData(
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] string? type = "ALL",
+            [FromQuery] string? search = null)
+        {
+            if (string.IsNullOrWhiteSpace(T))
+                return BadRequest(new { success = false, message = "tenant_code header required" });
+
+            var res = await _reportClass.GetLabReportListsDataAsync(T, fromdate, todate, type, search);
+            return Ok(res);
+        }
     }
 }

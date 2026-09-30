@@ -1486,4 +1486,78 @@ namespace medico_backend.Model
         public bool show_header_footer_image { get; set; } = true;
         public string? TenantId { get; set; }
     }
+
+    // ========================================================================
+    // LAB REPORT LISTS MODELS (LAB, SCAN, XRAY, ECG, ECHO, FISHO)
+    // ========================================================================
+    public class LabReportListRowDto
+    {
+        public string Type { get; set; } = "LAB"; // "LAB", "SCAN", "XRAY", "ECG", "ECHO", "FISHO"
+        public string RequestGuid { get; set; } = "";
+        public string Id { get; set; } = ""; // Bill / Request Sno
+        public decimal CustId { get; set; }
+        public string PatientCode { get; set; } = "";
+        public string PatientName { get; set; } = "";
+        public string Age { get; set; } = "";
+        public string Gender { get; set; } = "";
+        public string MobileNo { get; set; } = "";
+        public string DoctorName { get; set; } = "";
+        public string BedNo { get; set; } = "-";
+        public DateTime VisitDate { get; set; }
+        public string Status { get; set; } = "COMPLETED"; // Request / Test status
+        public string PaymentStatus { get; set; } = "UNPAID"; // "PAID", "PARTIAL", "UNPAID"
+        public decimal TotalAmount { get; set; }
+        public decimal DiscountAmount { get; set; }
+        public decimal NetAmount { get; set; }
+        public decimal PaidAmount { get; set; }
+        public decimal BalanceAmount { get; set; }
+        public string? ServicesOrTests { get; set; }
+    }
+
+    public class LabReportListsSummaryDto
+    {
+        public int TotalCount { get; set; }
+        public int LabCount { get; set; }
+        public int ScanCount { get; set; }
+        public int XrayCount { get; set; }
+        public int EcgCount { get; set; }
+        public int EchoCount { get; set; }
+        public int FishoCount { get; set; }
+        public decimal LabTotalAmount { get; set; }
+        public decimal ScanTotalAmount { get; set; }
+        public decimal XrayTotalAmount { get; set; }
+        public decimal EcgTotalAmount { get; set; }
+        public decimal EchoTotalAmount { get; set; }
+        public decimal FishoTotalAmount { get; set; }
+        public decimal GrandTotalAmount { get; set; }
+        public decimal TotalDiscountAmount { get; set; }
+        public decimal TotalNetAmount { get; set; }
+        public decimal TotalPaidAmount { get; set; }
+        public decimal TotalBalanceAmount { get; set; }
+    }
+
+    public class LabReportListsReportData
+    {
+        public string? BranchName { get; set; }
+        public string? CompanyName { get; set; }
+        public string? CompanyAddress { get; set; }
+        public string? CompanyContactNo { get; set; }
+        public string? CompanyEmail { get; set; }
+        public DateTime FromDate { get; set; }
+        public DateTime ToDate { get; set; }
+        public string FilterType { get; set; } = "ALL";
+        public LabReportListsSummaryDto Summary { get; set; } = new();
+        public List<LabReportListRowDto> Rows { get; set; } = new();
+    }
+
+    public class LabReportListsReportRequest
+    {
+        public LabReportListsReportData? ReportData { get; set; }
+        public byte[]? LogoImage { get; set; }
+        public bool IsLetterhead { get; set; } = false;
+        public byte[]? HeaderImage { get; set; }
+        public byte[]? FooterImage { get; set; }
+        public bool show_header_footer_image { get; set; } = true;
+        public string? TenantId { get; set; }
+    }
 }
