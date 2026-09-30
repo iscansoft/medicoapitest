@@ -42,6 +42,8 @@ builder.Services.AddControllers();
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 builder.Services.AddOpenApi();
+builder.Services.AddScoped<RoleMasterClass>();
+builder.Services.AddScoped<RoleMasterController>();
 builder.Services.AddScoped<CustomerMasterClass>();
 builder.Services.AddScoped<CustomerMasterController>();
 builder.Services.AddScoped<DoctorMasterClass>();

@@ -215,6 +215,7 @@ namespace medico_backend.Controllers
                     Token = GetVal("Token"),
                     Items = GetVal("Items"),
                     RouteToBilling = GetVal("RouteToBilling") == "True",
+                    DressingUnbilled = GetVal("DressingUnbilled") == "True",
                     Error = GetVal("Error")
                 });
             }
@@ -262,6 +263,7 @@ namespace medico_backend.Controllers
                     OpNo = GetVal("OpNo"),
                     Items = GetVal("Items"),
                     RouteToBilling = GetVal("RouteToBilling") == "True",
+                    DressingUnbilled = GetVal("DressingUnbilled") == "True",
                     Error = GetVal("Error")
                 });
             }

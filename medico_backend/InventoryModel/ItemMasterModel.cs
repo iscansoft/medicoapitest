@@ -1210,6 +1210,8 @@ public long? customercode { get; set; }
         public DateTime consumptiondate { get; set; }
 
         public long roomwarehousecode { get; set; }   // must be a warehouse_master row with isdoctor_room = true
+        public int? dcode { get; set; }        // NEW – doctor code
+        public decimal? custid { get; set; }
         public string? departmentname { get; set; }
         public string? doctorname { get; set; }
         public string? remarks { get; set; }
