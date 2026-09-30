@@ -57,8 +57,8 @@ namespace medico_backend.Model
         public double? pmc1 { get; set; }
         public double? pmc2 { get; set; }
         public double? pmc3 { get; set; }
-        public double? pmc1_amount { get; set; }   
-        public double? pmc2_amount { get; set; }   
+        public double? pmc1_amount { get; set; }
+        public double? pmc2_amount { get; set; }
         public double? pmc3_amount { get; set; }
         public bool? iscashbill { get; set; }
         public bool? iscreditbill { get; set; }

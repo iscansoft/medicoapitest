@@ -56,6 +56,8 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS payment_required_online_reg BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS enable_combo_registration BOOLEAN DEFAULT false;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS auto_route_billing_after_register BOOLEAN DEFAULT false;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS shift_timing_mode VARCHAR(10) DEFAULT 'VARIABLE';
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS shift_end_time VARCHAR(5);
                     
                 ";
                 await db.ExecuteAsync(sql);
