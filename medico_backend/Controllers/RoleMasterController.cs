@@ -85,5 +85,39 @@ namespace Medico_Backend.Controllers
         {
             return await DeleteRole(roleGuid);
         }
+
+        [HttpGet("get-user-roles")]
+        public async Task<IActionResult> GetUserRoles([FromQuery] long usercode)
+        {
+            var tenantCode = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenantCode))
+                return BadRequest("tenant_code header is required.");
+
+            if (usercode <= 0)
+                return BadRequest("Valid usercode is required.");
+
+            var roles = await _roleMasterClass.GetUserRolesAsync(usercode, tenantCode);
+            return Ok(roles);
+        }
+
+        public class UserRoleSaveRequest
+        {
+            public long usercode { get; set; }
+            public List<long>? Role_ids { get; set; }
+        }
+
+        [HttpPost("save-user-roles")]
+        public async Task<IActionResult> SaveUserRoles([FromBody] UserRoleSaveRequest req)
+        {
+            var tenantCode = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenantCode))
+                return BadRequest("tenant_code header is required.");
+
+            if (req == null || req.usercode <= 0)
+                return BadRequest("Valid usercode is required.");
+
+            var saved = await _roleMasterClass.SaveUserRolesAsync(req.usercode, req.Role_ids, tenantCode);
+            return Ok(new { success = saved, message = saved ? "User roles saved successfully." : "Failed to save user roles." });
+        }
     }
 }

@@ -1,4 +1,4 @@
-﻿using Dapper.Contrib.Extensions;
+using Dapper.Contrib.Extensions;
 
 namespace medico_backend.Model
 {
@@ -106,6 +106,9 @@ namespace medico_backend.Model
         public user_master User { get; set; } = new();
         public IList<UserBranchMaster>? Branches { get; set; }
         public IList<UserGroupMaster>? Departments { get; set; }
+        public IList<long>? RoleIds { get; set; }
+        public string? RoleTemplateName { get; set; }
+        public Guid? RoleTemplateGuid { get; set; }
     }
 
     public class LoginDto
@@ -173,5 +176,6 @@ namespace medico_backend.Model
         public user_master user { get; set; }
         public IList<UserBranchMaster> branch { get; set; } = new List<UserBranchMaster>();
         public IList<UserGroupMaster> department { get; set; } = new List<UserGroupMaster>();
+        public IList<long> role_ids { get; set; } = new List<long>();
     }
 }

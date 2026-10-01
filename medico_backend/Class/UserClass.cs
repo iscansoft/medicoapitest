@@ -1,4 +1,4 @@
-﻿using BCrypt.Net;
+using BCrypt.Net;
 using Dapper;
 using Dapper.Contrib.Extensions;
 using medico_backend.Model;
@@ -10,13 +10,80 @@ namespace medico_backend.Class
     public class UserClass
     {
         private readonly string _dbConn;
+        private readonly string _masterConnStr;
 
         public UserClass(IConfiguration configuration)
         {
             _dbConn = configuration.GetConnectionString("conn");
+            var tenConn = configuration.GetConnectionString("ten_conn");
+            var masterConn = configuration.GetConnectionString("master_conn");
+            if (!string.IsNullOrWhiteSpace(tenConn)) _masterConnStr = tenConn;
+            else if (!string.IsNullOrWhiteSpace(masterConn)) _masterConnStr = masterConn;
+            else
+            {
+                var conn = configuration.GetConnectionString("conn") ?? string.Empty;
+                var builder = new NpgsqlConnectionStringBuilder(conn) { Database = "MasterTenantDB" };
+                _masterConnStr = builder.ConnectionString;
+            }
         }
 
         private IDbConnection Connection() => new NpgsqlConnection(_dbConn);
+
+        public async Task SaveUserRoles(int userCode, string tenantCode, IList<long>? roleIds)
+        {
+            if (userCode <= 0 || string.IsNullOrEmpty(tenantCode)) return;
+
+            try
+            {
+                using var conn = new NpgsqlConnection(_masterConnStr);
+                await conn.OpenAsync();
+                using var trans = await conn.BeginTransactionAsync();
+
+                try
+                {
+                    string deleteSql = @"DELETE FROM public.""USER_ROLE_MASTER"" WHERE usercode = @userCode AND tenant_code = @tenantCode;";
+                    await conn.ExecuteAsync(deleteSql, new { userCode, tenantCode }, trans);
+
+                    if (roleIds != null && roleIds.Count > 0)
+                    {
+                        string maxIdSql = @"SELECT COALESCE(MAX(""UserRoleID""), 0) FROM public.""USER_ROLE_MASTER"";";
+                        long currentMaxId = await conn.ExecuteScalarAsync<long>(maxIdSql, null, trans);
+
+                        var distinctRoleIds = roleIds.Distinct().ToList();
+                        var entities = new List<object>();
+
+                        for (int i = 0; i < distinctRoleIds.Count; i++)
+                        {
+                            currentMaxId++;
+                            entities.Add(new
+                            {
+                                UserRoleID = currentMaxId,
+                                usercode = userCode,
+                                Role_id = distinctRoleIds[i],
+                                tenant_code = tenantCode
+                            });
+                        }
+
+                        string insertSql = @"
+                            INSERT INTO public.""USER_ROLE_MASTER"" (""UserRoleID"", usercode, ""Role_id"", tenant_code)
+                            VALUES (@UserRoleID, @usercode, @Role_id, @tenant_code);";
+
+                        await conn.ExecuteAsync(insertSql, entities, trans);
+                    }
+
+                    await trans.CommitAsync();
+                }
+                catch (Exception ex)
+                {
+                    await trans.RollbackAsync();
+                    Console.WriteLine($"[UserClass.SaveUserRoles] Error: {ex.Message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[UserClass.SaveUserRoles] Connection error: {ex.Message}");
+            }
+        }
 
         // ─── View Profile ─────────────────────────────────────────────────────
 
@@ -173,7 +240,9 @@ namespace medico_backend.Class
         public async Task<string> Update_profile(
             user_master user,
             IList<UserBranchMaster>? branchModel,
-            IList<UserGroupMaster>? deptModel)
+            IList<UserGroupMaster>? deptModel,
+            IList<long>? roleIds = null,
+            string? roleTemplateName = null)
         {
             try
             {
@@ -187,6 +256,11 @@ namespace medico_backend.Class
                     new { user.user_code, user.tenant_code });
 
                 if (oldUser == null) return "User not found";
+
+                if (!string.IsNullOrEmpty(roleTemplateName))
+                {
+                    user.role = roleTemplateName;
+                }
 
                 // ── Password: hash only when actually changed ─────────────────
                 if (!string.IsNullOrWhiteSpace(user.password))
@@ -335,6 +409,11 @@ namespace medico_backend.Class
                     }
                 }
 
+                if (roleIds != null)
+                {
+                    await SaveUserRoles(user.user_code, user.tenant_code!, roleIds);
+                }
+
                 return "success";
             }
             catch (Exception ex)
@@ -433,20 +512,26 @@ namespace medico_backend.Class
         public async Task<string> CreateUser(
             user_master user,
             IList<UserBranchMaster>? branchModel,
-            IList<UserGroupMaster>? deptModel) =>
-            await InsertUserInternal(user, branchModel, deptModel, isVerified: false);
+            IList<UserGroupMaster>? deptModel,
+            IList<long>? roleIds = null,
+            string? roleTemplateName = null) =>
+            await InsertUserInternal(user, branchModel, deptModel, isVerified: false, roleIds, roleTemplateName);
 
         public async Task<string> InsertUser(
             user_master user,
             IList<UserBranchMaster>? branchModel,
-            IList<UserGroupMaster>? deptModel) =>
-            await InsertUserInternal(user, branchModel, deptModel, isVerified: true);
+            IList<UserGroupMaster>? deptModel,
+            IList<long>? roleIds = null,
+            string? roleTemplateName = null) =>
+            await InsertUserInternal(user, branchModel, deptModel, isVerified: true, roleIds, roleTemplateName);
 
         private async Task<string> InsertUserInternal(
             user_master user,
             IList<UserBranchMaster>? branchModel,
             IList<UserGroupMaster>? deptModel,
-            bool isVerified)
+            bool isVerified,
+            IList<long>? roleIds = null,
+            string? roleTemplateName = null)
         {
             try
             {
@@ -480,6 +565,11 @@ namespace medico_backend.Class
                 if (status == "EMAIL_EXISTS") return "Email already in use";
                 if (status == "MOBILE_EXISTS") return "Mobile already in use";
 
+                if (!string.IsNullOrEmpty(roleTemplateName))
+                {
+                    user.role = roleTemplateName;
+                }
+
                 string? modules = await db.QueryFirstOrDefaultAsync<string>(@"
                     SELECT module
                     FROM mastertenant.user_master
@@ -491,6 +581,7 @@ namespace medico_backend.Class
                 user.password = BCrypt.Net.BCrypt.HashPassword(user.password);
                 var now = DateTimeOffset.UtcNow;
                 user.deleted = false;
+                user.is_verified = isVerified;
                 user.entered_date = now.UtcDateTime;
                 user.ibs_date = now.UtcDateTime;
                 user.modified_date = now.UtcDateTime;
@@ -526,6 +617,11 @@ namespace medico_backend.Class
                 {
                     tx.Rollback();
                     throw;
+                }
+
+                if (roleIds != null)
+                {
+                    await SaveUserRoles(user.user_code, user.tenant_code!, roleIds);
                 }
 
                 return "User Created";
@@ -637,11 +733,28 @@ namespace medico_backend.Class
                 var branchLookup = branches.ToLookup(b => b.user_code);
                 var deptLookup = departments.ToLookup(d => d.user_code);
 
+                ILookup<long, long>? roleLookup = null;
+                try
+                {
+                    using var masterDb = new NpgsqlConnection(_masterConnStr);
+                    var userRoles = await masterDb.QueryAsync<(long UserCode, long RoleId)>(@"
+                        SELECT usercode as ""UserCode"", ""Role_id"" as ""RoleId""
+                        FROM public.""USER_ROLE_MASTER""
+                        WHERE tenant_code = @tenant_code;",
+                        new { tenant_code });
+                    roleLookup = userRoles.ToLookup(r => r.UserCode, r => r.RoleId);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[GetAllUsers] Error loading roles: {ex.Message}");
+                }
+
                 var result = users.Select(u => new GetUser
                 {
                     user = u,
                     branch = branchLookup[u.user_code].ToList(),
-                    department = deptLookup[u.user_code].ToList()
+                    department = deptLookup[u.user_code].ToList(),
+                    role_ids = roleLookup != null ? roleLookup[u.user_code].ToList() : new List<long>()
                 }).ToList();
 
                 return result;
