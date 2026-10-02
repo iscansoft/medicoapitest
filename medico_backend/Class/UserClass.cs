@@ -681,14 +681,50 @@ namespace medico_backend.Class
                 new { user_code = user.user_code, tenant_code = user.tenant_code }))
                 .ToList();
 
-            var departments = (await db.QueryAsync<UserGroupMaster>(@"
-                SELECT *
-                FROM user_group_master
-                WHERE user_code   = @user_code
-                  AND tenant_code = @tenant_code
-                  AND deleted     = false",
-                new { user_code = user.user_code, tenant_code = user.tenant_code }))
-                .ToList();
+            if (!branches.Any())
+            {
+                try
+                {
+                    var activeBranchCodes = (await db.QueryAsync<int>(@"
+                        SELECT bh_code
+                        FROM mastertenant.branch_master
+                        WHERE tenant_code = @tenant_code AND deleted = false",
+                        new { tenant_code = user.tenant_code }))
+                        .ToList();
+
+                    foreach (var code in activeBranchCodes)
+                    {
+                        branches.Add(new UserBranchMaster
+                        {
+                            user_code = user.user_code,
+                            bhcode = code,
+                            cntcode = 1,
+                            tenant_code = user.tenant_code
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Login] Active branch fallback skipped: {ex.Message}");
+                }
+            }
+
+            List<UserGroupMaster> departments = new();
+            try
+            {
+                departments = (await db.QueryAsync<UserGroupMaster>(@"
+                    SELECT *
+                    FROM user_group_master
+                    WHERE user_code   = @user_code
+                      AND tenant_code = @tenant_code
+                      AND deleted     = false",
+                    new { user_code = user.user_code, tenant_code = user.tenant_code }))
+                    .ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Login] user_group_master query skipped: {ex.Message}");
+            }
 
             return LoginResult.Ok(user, branches, departments);
         }
@@ -722,13 +758,21 @@ namespace medico_backend.Class
               AND deleted = false;",
                     new { tenant_code });
 
-                var departments = await db.QueryAsync<UserGroupMaster>(
-                    @"
-            SELECT *
-            FROM user_group_master
-            WHERE tenant_code = @tenant_code
-              AND deleted = false;",
-                    new { tenant_code });
+                IEnumerable<UserGroupMaster> departments = Enumerable.Empty<UserGroupMaster>();
+                try
+                {
+                    departments = await db.QueryAsync<UserGroupMaster>(
+                        @"
+                SELECT *
+                FROM user_group_master
+                WHERE tenant_code = @tenant_code
+                  AND deleted = false;",
+                        new { tenant_code });
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[GetAllUsers] user_group_master query skipped: {ex.Message}");
+                }
 
                 var branchLookup = branches.ToLookup(b => b.user_code);
                 var deptLookup = departments.ToLookup(d => d.user_code);

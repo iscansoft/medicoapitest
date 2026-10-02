@@ -207,6 +207,33 @@ namespace Medico_Backend.Class
             }
         }
 
+        public async Task<List<RolePermissionItem>> GetUserEffectivePermissionsAsync(long usercode, string tenantCode)
+        {
+            try
+            {
+                using IDbConnection db = new NpgsqlConnection(_masterConnStr);
+                string sql = @"
+                    SELECT m.""Role_id"", 
+                           COALESCE(m.""Main_module"", 'General') AS ""Main_module"", 
+                           COALESCE(m.""Sub_module"", 'General') AS ""Sub_module"", 
+                           COALESCE(m.""Module"", '') AS ""Module"", 
+                           COALESCE(m.""Product_id"", 'MEDICO_APP') AS ""Product_id""
+                    FROM public.""USER_ROLE_MASTER"" u
+                    INNER JOIN public.""ROLE_MASTER"" m ON u.""Role_id"" = m.""Role_id""
+                    WHERE u.usercode = @usercode AND u.tenant_code = @tenantCode
+                    ORDER BY m.""Role_id"";";
+
+                var res = await db.QueryAsync<RolePermissionItem>(sql, new { usercode, tenantCode });
+                return res.ToList();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[RoleMasterClass.GetUserEffectivePermissionsAsync] Error: {ex.Message}");
+                return new List<RolePermissionItem>();
+            }
+        }
+
+
         public async Task<bool> SaveUserRolesAsync(long usercode, IList<long>? roleIds, string tenantCode)
         {
             if (usercode <= 0) return false;

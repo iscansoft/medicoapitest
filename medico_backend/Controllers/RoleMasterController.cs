@@ -100,6 +100,20 @@ namespace Medico_Backend.Controllers
             return Ok(roles);
         }
 
+        [HttpGet("get-user-effective-permissions")]
+        public async Task<IActionResult> GetUserEffectivePermissions([FromQuery] long usercode)
+        {
+            var tenantCode = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenantCode))
+                return BadRequest("tenant_code header is required.");
+
+            if (usercode <= 0)
+                return BadRequest("Valid usercode is required.");
+
+            var permissions = await _roleMasterClass.GetUserEffectivePermissionsAsync(usercode, tenantCode);
+            return Ok(permissions);
+        }
+
         public class UserRoleSaveRequest
         {
             public long usercode { get; set; }
