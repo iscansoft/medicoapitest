@@ -10,10 +10,12 @@ namespace medico_backend.InventoryClass
     public class ItemMasterClass
     {
         private readonly string con;
+        private readonly string _hmsCon;   // DB that holds counter_timing / billno_master / lab_settings
 
         public ItemMasterClass(IConfiguration config)
         {
             con = config.GetConnectionString("inventory_conn");
+            _hmsCon = config.GetConnectionString("conn") ?? con;
         }
 
         // ─── ITEM MASTER ──────────────────────────────────────────────────────────────
@@ -2818,6 +2820,9 @@ string tenantcode)
         }
         public async Task<string> InsertSales(sales_request request)
         {
+            var (shiftError, cnttid) = await ResolveSalesShift(request.master, request.master.tenantcode!);
+            if (shiftError != null) return shiftError;
+            request.master.cnttid = cnttid;
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
@@ -2885,7 +2890,8 @@ INSERT INTO sales_master
     companycode,
     ordercode,
     cntcode,
-    bh_code
+    bh_code,
+    cnttid
 )
 VALUES
 (
@@ -2920,7 +2926,8 @@ VALUES
     @companycode,
     @ordercode,
     @cntcode,
-    @bh_code
+    @bh_code,
+    @cnttid
 )
 RETURNING salescode;";
 
@@ -3037,7 +3044,27 @@ WHERE stockcode=@stockcode;";
                                 },
                                 trans);
                         }
+                        // ── Mark pharmacy queue rows as BILLED (same transaction) ──
+                        if (request.queue_ids != null && request.queue_ids.Any())
+                        {
+                            var ids = request.queue_ids.Distinct().ToArray();
 
+                            int marked = await conn.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = true,
+            billno        = @billno,
+            salescode     = @salescode,
+            billed_date   = NOW(),
+            updated_at    = NOW()
+        WHERE queue_id = ANY(@ids)
+          AND tenant_code = @tenantcode
+          AND COALESCE(billed_status, false) = false
+          AND status <> 'CANCELLED';",
+                                new { billno, salescode, ids, tenantcode = request.master.tenantcode }, trans);
+
+                            if (marked != ids.Length)
+                                throw new Exception("One or more pharmacy queue items are already billed or cancelled.");
+                        }
                         await trans.CommitAsync();
 
                         return "Sales Inserted Successfully";
@@ -3172,14 +3199,27 @@ WHERE stockcode=@stockcode;";
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
+                using var trans = await conn.BeginTransactionAsync();
+                try
+                {
+                    await conn.ExecuteAsync(@"
+                UPDATE sales_master
+                SET deleted = true, isactive = false, modifieddate = NOW()
+                WHERE salescode = @salescode AND tenantcode = @tenantcode",
+                        new { salescode, tenantcode }, trans);
 
-                string query = @"
-            UPDATE sales_master
-            SET deleted = true, isactive = false, modifieddate = NOW()
-            WHERE salescode = @salescode AND tenantcode = @tenantcode";
+                    // release pharmacy queue rows linked to this sale
+                    await conn.ExecuteAsync(@"
+                UPDATE pharmacy_prescription_queue
+                SET billed_status = false, billno = NULL, salescode = NULL,
+                    billed_date = NULL, updated_at = NOW()
+                WHERE salescode = @salescode AND tenant_code = @tenantcode;",
+                        new { salescode, tenantcode }, trans);
 
-                await conn.ExecuteAsync(query, new { salescode, tenantcode });
-                return "Sales Deleted Successfully";
+                    await trans.CommitAsync();
+                    return "Sales Deleted Successfully";
+                }
+                catch { await trans.RollbackAsync(); throw; }
             }
         }
 
@@ -7593,6 +7633,251 @@ AND deleted = false;";
                 details = details.ToList(),
                 terms = terms.ToList()
             };
+        }
+        public async Task<List<PharmacyPrescriptionQueueRow>> GetPharmacyQueue(
+    string tenant_code, string? status = null, bool? billed = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            var rows = await db.QueryAsync<PharmacyPrescriptionQueueRow>(
+                @"SELECT * FROM pharmacy_prescription_queue
+          WHERE tenant_code = @tenant_code
+          AND (@status IS NULL OR status = @status)
+          AND (@billed::boolean IS NULL OR COALESCE(billed_status,false) = @billed::boolean)
+          ORDER BY created_at DESC",
+                new { tenant_code, status, billed });
+            return rows.ToList();
+        }
+
+        public async Task<List<PharmacyQueueGroup>> GetPharmacyQueueByCustId(
+            decimal custid, string tenant_code, string? status = null, bool? billed = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            var rows = (await db.QueryAsync<PharmacyPrescriptionQueueRow>(
+                @"SELECT * FROM pharmacy_prescription_queue
+          WHERE custid = @custid AND tenant_code = @tenant_code
+          AND (@status IS NULL OR status = @status)
+          AND (@billed::boolean IS NULL OR COALESCE(billed_status,false) = @billed::boolean)
+          ORDER BY created_at DESC",
+                new { custid, tenant_code, status, billed })).ToList();
+
+            return rows
+                .GroupBy(r => new { r.pr_code, r.sheet_id })
+                .Select(g => new PharmacyQueueGroup
+                {
+                    custid = custid,
+                    pr_code = g.Key.pr_code,
+                    sheet_id = g.Key.sheet_id,
+                    op_id = g.First().op_id,
+                    ip_id = g.First().ip_id,
+                    items = g.ToList(),
+                    all_billed = g.All(i => i.billed_status),
+                    unbilled_count = g.Count(i => !i.billed_status && i.status != "CANCELLED")
+                })
+                .OrderByDescending(g => g.items.Max(i => i.created_at))
+                .ToList();
+        }
+
+        // Manual mark-as-billed (e.g. billed outside InsertSales)
+        public async Task<string> MarkQueueBilled(MarkQueueBilledRequest req, string tenant_code)
+        {
+            if (req.queue_ids == null || !req.queue_ids.Any()) return "queue_ids is required";
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            int rows = await db.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = true, billno = @billno, salescode = @salescode,
+            billed_date = NOW(), updated_at = NOW()
+        WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+          AND COALESCE(billed_status,false) = false AND status <> 'CANCELLED';",
+                new { ids = req.queue_ids.Distinct().ToArray(), req.billno, req.salescode, tenant_code });
+
+            return rows > 0 ? $"Success|Billed:{rows}" : "No unbilled queue items found";
+        }
+
+        public async Task<string> UnbillQueue(UnbillQueueRequest req, string tenant_code)
+        {
+            if (req.queue_ids == null || !req.queue_ids.Any()) return "queue_ids is required";
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            int rows = await db.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = false, billno = NULL, salescode = NULL,
+            billed_date = NULL, updated_at = NOW()
+        WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+          AND COALESCE(billed_status,false) = true;",
+                new { ids = req.queue_ids.Distinct().ToArray(), tenant_code });
+
+            return rows > 0 ? $"Success|Unbilled:{rows}" : "No billed queue items found";
+        }
+        // ─── SALES COUNTER SHIFT (uses same counter_timing table as HMS billing) ──────
+
+        // Set to true to make an open counter mandatory for EVERY sale.
+        // false = if bh_code/cntcode are not sent, old behaviour is kept.
+        private const bool RequireCounterForSales = false;
+
+        private static TimeZoneInfo GetIst()
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"); }
+            catch { return TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"); }
+        }
+
+        private static DateTime ComputeSalesShiftPlannedEndUtc(DateTime startUtc, string? mode, string? endTime)
+        {
+            var tz = GetIst();
+            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), tz);
+            var midnight = startLocal.Date.AddDays(1);
+            var endLocal = midnight;
+
+            if (string.Equals(mode, "FIXED", StringComparison.OrdinalIgnoreCase)
+                && TimeSpan.TryParse(endTime, out var t))
+            {
+                var configured = startLocal.Date + t;
+                if (configured > startLocal && configured < midnight) endLocal = configured;
+            }
+            return TimeZoneInfo.ConvertTimeToUtc(endLocal, tz);
+        }
+
+        public async Task<(string status, medico_backend.Model.HmsCounterTimingDto? session)> OpenSalesCounterShift(
+            medico_backend.Model.HmsCounterTiming req, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            var now = DateTime.UtcNow;
+
+            // 1. close expired-but-unswept shift
+            await db.ExecuteAsync(
+                @"UPDATE counter_timing SET todate = planned_to, close_type = 'AUTO'
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND tenant_code=@tenantCode
+            AND todate IS NULL AND planned_to IS NOT NULL AND planned_to <= @now",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode, now });
+
+            // 2. already running?
+            var running = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                @"SELECT * FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND todate IS NULL AND tenant_code=@tenantCode LIMIT 1",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode });
+            if (running != null)
+                return ("An active shift counter is currently operational for this target interface window.", null);
+
+            // 3. shift number for the day
+            var counterDate = req.counterdate?.Date ?? TimeZoneInfo.ConvertTimeFromUtc(now, GetIst()).Date;
+
+            int shiftNo = await db.ExecuteScalarAsync<int>(
+                @"SELECT COALESCE(MAX(shiftsno), 0) + 1 FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND counterdate=@counterDate::date AND tenant_code=@tenantCode",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, counterDate, tenantCode });
+
+            // 4. lab setting (FIXED / VARIABLE)
+            var setting = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT shift_timing_mode, shift_end_time FROM lab_settings
+          WHERE tenant_code=@tenantCode AND deleted=false
+            AND (bh_code=@bh OR bh_code=0 OR bh_code IS NULL)
+          ORDER BY (bh_code=@bh) DESC NULLS LAST LIMIT 1",
+                new { bh = req.bhcode, tenantCode });
+
+            string mode = ((string?)setting?.shift_timing_mode ?? "VARIABLE").ToUpper();
+
+            // 5. fill + insert once
+            req.cnttid = Guid.NewGuid().ToString();
+            req.shiftsno = shiftNo;
+            req.counterdate = counterDate;
+            req.fromdate = now;
+            req.todate = null;
+            req.shift_mode = mode;
+            req.planned_to = ComputeSalesShiftPlannedEndUtc(now, mode, (string?)setting?.shift_end_time);
+            req.close_type = null;
+            req.tenant_code = tenantCode;
+
+            await Dapper.Contrib.Extensions.SqlMapperExtensions.InsertAsync(db, req);
+
+            var mapped = await GetSalesShiftById(req.cnttid, tenantCode);
+            return ("SUCCESS", mapped);
+        }
+
+        public async Task<string> CloseSalesCounterShift(medico_backend.Model.CloseCounterRequest req, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            var shift = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                "SELECT * FROM counter_timing WHERE cnttid=@cnttid AND tenant_code=@tenantCode",
+                new { cnttid = req.cnttid, tenantCode });
+
+            if (shift == null) return "Shift not found.";
+            if (shift.todate != null) return "SUCCESS";
+
+            var now = DateTime.UtcNow;
+
+            if (shift.planned_to != null && now >= shift.planned_to.Value.AddSeconds(-60))
+            {
+                await db.ExecuteAsync(
+                    "UPDATE counter_timing SET todate=@t, close_type='AUTO' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                    new { t = shift.planned_to, id = shift.cnttid, tenantCode });
+                return "SUCCESS";
+            }
+
+            if (shift.shift_mode == "FIXED")
+                return "This is a fixed-timing shift. It will close automatically at the scheduled time.";
+
+            await db.ExecuteAsync(
+                "UPDATE counter_timing SET todate=@now, close_type='MANUAL' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                new { now, id = shift.cnttid, tenantCode });
+            return "SUCCESS";
+        }
+
+        public async Task<medico_backend.Model.HmsCounterTimingDto?> GetSalesShiftById(string cnttid, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            return await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTimingDto>(
+                @"SELECT c.*, b.name as counter_name,
+                 CASE WHEN c.todate IS NULL THEN true ELSE false END as is_open,
+                 CASE WHEN c.todate IS NOT NULL THEN true ELSE false END as is_closed
+          FROM counter_timing c
+          LEFT JOIN billno_master b ON c.cntcode = b.cntcode AND c.tenant_code = b.tenant_code
+          WHERE c.cnttid = @cnttid AND c.tenant_code = @tenantCode LIMIT 1",
+                new { cnttid, tenantCode });
+        }
+
+        public async Task<medico_backend.Model.HmsCounterTimingDto?> GetActiveSalesShift(int bhcode, int cntcode, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            return await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTimingDto>(
+                @"SELECT c.*, b.name as counter_name,
+                 CASE WHEN c.todate IS NULL THEN true ELSE false END as is_open,
+                 CASE WHEN c.todate IS NOT NULL THEN true ELSE false END as is_closed
+          FROM counter_timing c
+          LEFT JOIN billno_master b ON c.cntcode = b.cntcode AND c.tenant_code = b.tenant_code
+          WHERE c.bhcode = @bhcode AND c.cntcode = @cntcode AND c.todate IS NULL
+            AND (c.planned_to IS NULL OR c.planned_to > @now)
+            AND c.tenant_code = @tenantCode
+          LIMIT 1",
+                new { bhcode, cntcode, tenantCode, now = DateTime.UtcNow });
+        }
+
+        // Used by InsertSales: validates the counter shift and returns cnttid to stamp on the bill
+        private async Task<(string? error, string? cnttid)> ResolveSalesShift(sales_master m, string tenantcode)
+        {
+            bool hasBh = m.bh_code.HasValue && m.bh_code.Value > 0;
+            bool hasCnt = m.cntcode.HasValue && m.cntcode.Value > 0;
+
+            if (!hasBh && !hasCnt)
+            {
+                if (RequireCounterForSales) return ("bh_code and cntcode are required for billing.", null);
+                return (null, null);                       // legacy behaviour
+            }
+            if (hasBh != hasCnt)
+                return ("Both bh_code and cntcode are required.", null);
+
+            using var db = new NpgsqlConnection(_hmsCon);
+            var shift = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                @"SELECT * FROM counter_timing
+          WHERE bhcode = @bhcode AND cntcode = @cntcode AND todate IS NULL
+            AND (planned_to IS NULL OR planned_to > @now)
+            AND tenant_code = @tenantCode
+          LIMIT 1",
+                new { bhcode = m.bh_code, cntcode = m.cntcode, tenantCode = tenantcode, now = DateTime.UtcNow });
+
+            if (shift == null)
+                return ("Selected billing counter shift session is not open.", null);
+
+            return (null, shift.cnttid);
         }
     }
 }

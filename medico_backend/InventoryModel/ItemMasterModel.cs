@@ -646,7 +646,8 @@ namespace medico_backend.InventoryModel
 
      public long? ordercode { get; set; }
      public decimal? cntcode { get; set; }
-     public int? bh_code { get; set; }
+        public int? bh_code { get; set; }
+        public string? cnttid { get; set; }   // counter shift session id
     }
     public class sales_detail
  {
@@ -696,8 +697,9 @@ namespace medico_backend.InventoryModel
  public class sales_request
  {
      public sales_master master { get; set; }
-     public List<sales_detail> details { get; set; }
- }
+        public List<sales_detail> details { get; set; }
+        public List<Guid>? queue_ids { get; set; }   // pharmacy queue rows being billed in this sale
+    }
     [Table("warehouse_master")]
     public class warehouse_master
  {
@@ -1120,7 +1122,10 @@ public long? customercode { get; set; }
         public int? days { get; set; }
         public string? route { get; set; }
         public string? notes { get; set; }
-
+        public bool billed_status { get; set; } = false;
+        public string? billno { get; set; }
+        public long? salescode { get; set; }
+        public DateTime? billed_date { get; set; }
         public string status { get; set; } = "PENDING";
         public string? tenant_code { get; set; }
         public DateTime created_at { get; set; } = DateTime.UtcNow;
@@ -1174,6 +1179,8 @@ public long? customercode { get; set; }
         public Guid? sheet_id { get; set; }
         public Guid? op_id { get; set; }
         public Guid? ip_id { get; set; }
+        public bool all_billed { get; set; }
+        public int unbilled_count { get; set; }
         public List<PharmacyPrescriptionQueueRow> items { get; set; } = new();
     }
 
@@ -1341,6 +1348,16 @@ public long? customercode { get; set; }
             public List<purchase_order_detail> details { get; set; } = new();
             public List<purchase_order_terms>? terms { get; set; }
         }
-        
+    public class MarkQueueBilledRequest
+    {
+        public List<Guid> queue_ids { get; set; } = new();
+        public long? salescode { get; set; }
+        public string? billno { get; set; }
+    }
+
+    public class UnbillQueueRequest
+    {
+        public List<Guid> queue_ids { get; set; } = new();
+    }
 }
 
