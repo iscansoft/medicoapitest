@@ -2967,6 +2967,38 @@ namespace medico_backend.InventoryController
             }
             catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
         }
+        [HttpPost("upload-item-excel")]
+        public async Task<IActionResult> UploadItemExcel(IFormFile file, [FromQuery] bool skipduplicates = false)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (file == null || file.Length == 0)
+                    return BadRequest(new { Status = "Failed", Message = "No file uploaded." });
+
+                var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+                if (ext != ".xlsx")
+                    return BadRequest(new { Status = "Failed", Message = "Only .xlsx files are supported." });
+
+                long? usercode = long.TryParse(Request.Headers["usercode"].FirstOrDefault(), out var u) ? u : null;
+
+                using var stream = file.OpenReadStream();
+                var result = await itemclass.UploadItemsFromExcel(stream, tenantcode, usercode, skipduplicates);
+
+                return Ok(new
+                {
+                    Status = result.errors.Count == 0 ? "Success" : "PartialSuccess",
+                    Message = $"{result.inserted} item(s) uploaded, {result.errors.Count} row(s) failed.",
+                    Data = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     

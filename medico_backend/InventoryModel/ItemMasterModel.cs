@@ -1359,5 +1359,20 @@ public long? customercode { get; set; }
     {
         public List<Guid> queue_ids { get; set; } = new();
     }
+    public class ItemExcelUploadResult
+    {
+        public int total_rows { get; set; }
+        public int inserted { get; set; }
+        public int skipped_blank { get; set; }
+        public int skipped_duplicate { get; set; }
+        public List<string> ignored_columns { get; set; } = new();
+        public List<ItemExcelRowError> errors { get; set; } = new();
+    }
+
+    public class ItemExcelRowError
+    {
+        public int row { get; set; }
+        public string message { get; set; } = string.Empty;
+    }
 }
 

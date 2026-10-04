@@ -7879,6 +7879,190 @@ AND deleted = false;";
 
             return (null, shift.cnttid);
         }
+        // ─── ITEM MASTER EXCEL UPLOAD (header-based, null tolerant) ─────────────────────
+        private static readonly string[] ItemStringCols =
+        { "itemname","shortname","description","itemtype","manufacturername","drugname","packaging","schedule" };
+
+        private static readonly string[] ItemIntCols =
+        { "categorycode","subcategorycode","hsncode","uomcode","brandcode","manufacturercode",
+  "taxcode","naturetype","ledgergroupcode","expiryalertdays" };
+
+        private static readonly string[] ItemDecimalCols =
+        { "gstpercentage","purchaserate","salesrate","mrp","currentstock","minstock","reorderlevel","packsize" };
+
+        private static readonly string[] ItemBoolCols =
+        { "isexpiry","batchrequired","expiryrequired","serialrequired","isnarcoticdrug","isactive","deleted" };
+
+        public async Task<ItemExcelUploadResult> UploadItemsFromExcel(
+            Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
+        {
+            var result = new ItemExcelUploadResult();
+
+            using var package = new ExcelPackage(stream);
+            var ws = package.Workbook.Worksheets.FirstOrDefault()
+                     ?? throw new Exception("Excel file has no worksheets.");
+            if (ws.Dimension == null)
+                throw new Exception("Excel file is empty.");
+
+            int rowCount = ws.Dimension.Rows;
+            int colCount = ws.Dimension.Columns;
+
+            // ── map header name -> column index ──
+            var allKnown = ItemStringCols.Concat(ItemIntCols).Concat(ItemDecimalCols).Concat(ItemBoolCols)
+                                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var headers = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int c = 1; c <= colCount; c++)
+            {
+                var h = ws.Cells[1, c].Text?.Trim().Replace(" ", "").ToLower();
+                if (string.IsNullOrEmpty(h)) continue;
+                if (allKnown.Contains(h)) headers[h] = c;
+                else result.ignored_columns.Add(ws.Cells[1, c].Text.Trim());
+            }
+            if (headers.Count == 0)
+                throw new Exception("No recognised column headers found in row 1.");
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // existing names for duplicate check
+                var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (skipDuplicates)
+                {
+                    var names = await db.QueryAsync<string>(
+                        "SELECT itemname FROM public.item_master WHERE tenantcode = @tenantcode AND deleted = false AND itemname IS NOT NULL;",
+                        new { tenantcode }, tx);
+                    foreach (var n in names) existing.Add(n.Trim());
+                }
+
+                for (int r = 2; r <= rowCount; r++)
+                {
+                    result.total_rows++;
+
+                    // fully blank row?
+                    bool blank = true;
+                    for (int c = 1; c <= colCount; c++)
+                        if (!string.IsNullOrWhiteSpace(ws.Cells[r, c].Text)) { blank = false; break; }
+                    if (blank) { result.skipped_blank++; continue; }
+
+                    var p = new DynamicParameters();
+                    var errs = new List<string>();
+
+                    string? Cell(string col) =>
+                        headers.TryGetValue(col, out var ci)
+                            ? (string.IsNullOrWhiteSpace(ws.Cells[r, ci].Text) ? null : ws.Cells[r, ci].Text.Trim())
+                            : null;
+
+                    foreach (var col in ItemStringCols)
+                        p.Add(col, Cell(col));
+
+                    foreach (var col in ItemIntCols)
+                    {
+                        var s = Cell(col);
+                        if (s == null) { p.Add(col, null, DbType.Int32); continue; }
+                        if (decimal.TryParse(s, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var d))
+                            p.Add(col, (int)d, DbType.Int32);
+                        else { errs.Add($"{col}: '{s}' is not a number"); }
+                    }
+
+                    foreach (var col in ItemDecimalCols)
+                    {
+                        var s = Cell(col);
+                        if (s == null)
+                        {
+                            // packsize is used as a divisor in purchases, so blank = 1 instead of NULL
+                            if (col == "packsize") p.Add(col, 1m, DbType.Decimal);
+                            else p.Add(col, null, DbType.Decimal);
+                            continue;
+                        }
+                        if (decimal.TryParse(s, System.Globalization.NumberStyles.Any,
+                                System.Globalization.CultureInfo.InvariantCulture, out var d))
+                            p.Add(col, d, DbType.Decimal);
+                        else { errs.Add($"{col}: '{s}' is not a number"); }
+                    }
+
+                    foreach (var col in ItemBoolCols)
+                    {
+                        var s = Cell(col)?.ToLower();
+                        bool? val = s switch
+                        {
+                            null => null,
+                            "true" or "yes" or "y" or "1" => true,
+                            "false" or "no" or "n" or "0" => false,
+                            _ => (bool?)null
+                        };
+                        if (s != null && val == null) { errs.Add($"{col}: '{s}' is not yes/no/true/false"); continue; }
+
+                        // isactive / deleted must not be NULL: getallitems filters "deleted = false",
+                        // and NULL would hide the item. So blank = active and not deleted.
+                        if (val == null && col == "isactive") val = true;
+                        if (val == null && col == "deleted") val = false;
+
+                        p.Add(col, val, DbType.Boolean);
+                    }
+
+                    if (errs.Count > 0)
+                    {
+                        result.errors.Add(new ItemExcelRowError { row = r, message = string.Join("; ", errs) });
+                        continue;
+                    }
+
+                    // duplicate check
+                    var nameForCheck = Cell("itemname");
+                    if (skipDuplicates && nameForCheck != null)
+                    {
+                        if (existing.Contains(nameForCheck)) { result.skipped_duplicate++; continue; }
+                        existing.Add(nameForCheck);
+                    }
+
+                    p.Add("tenantcode", tenantcode);
+                    p.Add("usercode", (int?)(usercode), DbType.Int32);
+
+                    try
+                    {
+                        await db.ExecuteAsync("SAVEPOINT row_sp;", transaction: tx);
+                        await db.ExecuteAsync(@"
+                    INSERT INTO public.item_master
+                    (
+                        itemname, shortname, description, categorycode, subcategorycode, hsncode, itemtype,
+                        gstpercentage, uomcode, purchaserate, salesrate, mrp, currentstock, minstock, reorderlevel,
+                        packsize, isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
+                        brandcode, manufacturercode, taxcode, naturetype, manufacturername, ledgergroupcode,
+                        drugname, packaging, isactive, deleted, createddate, usercode, tenantcode,
+                        schedule, isnarcoticdrug
+                    )
+                    VALUES
+                    (
+                        @itemname, @shortname, @description, @categorycode, @subcategorycode, @hsncode, @itemtype,
+                        @gstpercentage, @uomcode, @purchaserate, @salesrate, @mrp, @currentstock, @minstock, @reorderlevel,
+                        @packsize, @isexpiry, @expirydalertdays_placeholder, @batchrequired, @expiryrequired, @serialrequired,
+                        @brandcode, @manufacturercode, @taxcode, @naturetype, @manufacturername, @ledgergroupcode,
+                        @drugname, @packaging, @isactive, @deleted, CURRENT_TIMESTAMP, @usercode, @tenantcode,
+                        @schedule, @isnarcoticdrug
+                    );".Replace("@expirydalertdays_placeholder", "@expiryalertdays"),
+                            p, tx);
+                        await db.ExecuteAsync("RELEASE SAVEPOINT row_sp;", transaction: tx);
+                        result.inserted++;
+                    }
+                    catch (Exception rowEx)
+                    {
+                        await db.ExecuteAsync("ROLLBACK TO SAVEPOINT row_sp;", transaction: tx);
+                        result.errors.Add(new ItemExcelRowError { row = r, message = rowEx.Message });
+                    }
+                }
+
+                tx.Commit();
+                return result;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
     }
 }
 
