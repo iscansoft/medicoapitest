@@ -692,9 +692,13 @@ namespace medico_backend.InventoryModel
 
         public long? warehousecode { get; set; }
 
-     public string? tenantcode { get; set; }
- }
- public class sales_request
+        public string? tenantcode { get; set; }
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+    }
+    public class sales_request
  {
      public sales_master master { get; set; }
         public List<sales_detail> details { get; set; }

@@ -2957,7 +2957,11 @@ INSERT INTO sales_detail
     expirydate,
     soldqty,
     warehousecode,
-    tenantcode
+    tenantcode,
+    morning_dose,
+    afternoon_dose,
+    evening_dose,
+    night_dose
 )
 VALUES
 (
@@ -2978,7 +2982,11 @@ VALUES
     @expirydate,
     @soldqty,
     @warehousecode,
-    @tenantcode
+    @tenantcode,
+    @morning_dose,
+    @afternoon_dose,
+    @evening_dose,
+    @night_dose
 );";
 
                         foreach (var item in request.details)
@@ -3136,7 +3144,7 @@ WHERE stockcode=@stockcode;";
                         amount, totalamount, batchno,
                         manufacturingdate, expirydate,
                         soldqty, returnedqty,days, warehousecode,
-                        tenantcode
+                        tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
                     )
                     VALUES
                     (
@@ -3147,7 +3155,7 @@ WHERE stockcode=@stockcode;";
                         @amount, @totalamount, @batchno,
                         @manufacturingdate, @expirydate,
                         @soldqty, @returnedqty,@days, @warehousecode,
-                        @tenantcode
+                        @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
                     )";
 
                         foreach (var item in request.details)
