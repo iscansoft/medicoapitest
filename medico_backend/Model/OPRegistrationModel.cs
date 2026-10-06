@@ -209,6 +209,7 @@ namespace medico_backend.Model
             public int? enteredbhcode { get; set; }
             public int? cntcode { get; set; }
             public int? usercode { get; set; }               // who added it — logged in notes only
+
         }
     }
 }

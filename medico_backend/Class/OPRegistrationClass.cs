@@ -1711,6 +1711,13 @@ AND b.tenant_code = @tenant_code
         // Separate from UpdateVisitStatus so cancel-specific
         // rules (blocked states, reason capture) live in one place.
         // ─────────────────────────────────────────
+        // ─────────────────────────────────────────
+        // CANCEL OP REGISTRATION
+        // Routing-aware cleanup:
+        //   auto_route_billing_after_register = true  → delete bill from cash counter
+        //                                               (+ clean unbilled rows)
+        //   otherwise (combo on/off, route off)       → delete from unbilling
+        // ─────────────────────────────────────────
         public async Task<string> CancelOp(CancelOpRequest req, string tenant_code)
         {
             try
@@ -1736,29 +1743,89 @@ AND b.tenant_code = @tenant_code
                 if (op.visit_status == "TRANSFERRED")
                     return "Cannot cancel a transferred visit";
 
+                // ── Read routing settings (same lookup pattern used elsewhere) ──
+                bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
+                    @"SELECT auto_route_billing_after_register FROM lab_settings
+              WHERE tenant_code = @tenant_code AND deleted = false
+              ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? false;
+
+                string opIdText = req.op_id.ToString();
+
+                // ── Guard: if routed to cash counter, block when money was already collected ──
+                if (routeToBilling)
+                {
+                    decimal paidTotal = await db.ExecuteScalarAsync<decimal?>(
+                        @"SELECT COALESCE(SUM(COALESCE(lrm.paidamount, 0)), 0)
+                  FROM lab_request_master lrm
+                  WHERE lrm.tenant_code = @tenant_code
+                  AND   COALESCE(lrm.isdeleted, false) = false
+                  AND   COALESCE(lrm.deleted, false)   = false
+                  AND   lrm.requestguid IN (
+                        SELECT billid FROM unbilledcharges
+                        WHERE opvisitid   = @opIdText
+                        AND   tenant_code = @tenant_code
+                        AND   billedstatus = true
+                        AND   billid IS NOT NULL)",
+                        new { tenant_code, opIdText }) ?? 0m;
+
+                    if (paidTotal > 0)
+                        return $"Cannot cancel: payment of {paidTotal} already collected in cash counter. Refund it first.";
+                }
+
+                // ── Cancel the OP itself ──
                 string notes = string.IsNullOrWhiteSpace(req.cancel_reason)
                     ? op.notes ?? string.Empty
                     : string.IsNullOrWhiteSpace(op.notes)
                         ? $"Cancelled. Reason: {req.cancel_reason}"
                         : $"{op.notes} | Cancelled. Reason: {req.cancel_reason}";
 
-                string sql = @"UPDATE op_registration
-                   SET visit_status = 'CANCELLED',
-                       notes        = @notes,
-                       updated_at   = now()
-                   WHERE op_id      = @op_id
-                   AND   tenant_code = @tenant_code
-                   AND   isdeleted   = false";
-
-                int rows = await db.ExecuteAsync(sql, new { req.op_id, notes, tenant_code });
+                int rows = await db.ExecuteAsync(
+                    @"UPDATE op_registration
+              SET visit_status = 'CANCELLED',
+                  notes        = @notes,
+                  updated_at   = now()
+              WHERE op_id      = @op_id
+              AND   tenant_code = @tenant_code
+              AND   isdeleted   = false",
+                    new { req.op_id, notes, tenant_code });
 
                 if (rows == 0)
                     return "Cancel failed";
 
-                // ✅ NEW — drop any pending unbilled fee (consultation/service) for this visit.
-                // Failure here shouldn't undo the cancel itself, so it's logged, not thrown.
-                var unbillRes = await _unbilledCls.DeleteUnbilledForOp(req.op_id.ToString(), tenant_code);
-                Console.WriteLine($"[CANCEL-OP] DeleteUnbilledForOp op_id={req.op_id} result={unbillRes}");
+                // ── Routing-based cleanup (failures logged, don't undo the cancel) ──
+                try
+                {
+                    if (routeToBilling)
+                    {
+                        // Charges were auto-billed → remove the bill from the cash counter
+                        // HOOK: if you have an HmsBillingClass method that deletes a bill
+                        // (receipts/ledger too), call it here instead of this SQL.
+                        int billRows = await db.ExecuteAsync(
+                            @"UPDATE lab_request_master
+                      SET deleted   = true,
+                          isdeleted = true
+                      WHERE tenant_code = @tenant_code
+                      AND   requestguid IN (
+                            SELECT billid FROM unbilledcharges
+                            WHERE opvisitid   = @opIdText
+                            AND   tenant_code = @tenant_code
+                            AND   billedstatus = true
+                            AND   billid IS NOT NULL)",
+                            new { tenant_code, opIdText });
+
+                        Console.WriteLine($"[CANCEL-OP] Cash counter bills deleted op_id={req.op_id} rows={billRows}");
+                    }
+
+                    // Always clean unbilledcharges for this visit
+                    // (route OFF → this is the main delete; route ON → removes the billed-link rows)
+                    var unbillRes = await _unbilledCls.DeleteUnbilledForOp(opIdText, tenant_code);
+                    Console.WriteLine($"[CANCEL-OP] DeleteUnbilledForOp op_id={req.op_id} routeToBilling={routeToBilling} result={unbillRes}");
+                }
+                catch (Exception cleanupEx)
+                {
+                    Console.WriteLine($"[CANCEL-OP] Cleanup failed op_id={req.op_id}: {cleanupEx.Message}");
+                }
 
                 return "Success";
             }
@@ -2360,7 +2427,7 @@ AND b.tenant_code = @tenant_code
     primaryType == "CONSULTATION" ? "CONSULTATION"
     : primaryType == "DRESSING"   ? "Dressing"
     : primarySvc!.service_name
-}; 
+};
 
                 foreach (var item in req.additional_items ?? new())
                 {
@@ -2627,6 +2694,7 @@ AND b.tenant_code = @tenant_code
                 return ex.Message;
             }
         }
-    }
 
+
+    }
 }
