@@ -867,5 +867,47 @@ namespace medico_backend.Class
                 schedule = await GetSchedule(ip_id, tenant_code)                // NEW
             };
         }
+        // ═══════════════════════════════════════════════════════
+        // 9. AUTHORIZATION
+        // First call  -> inserts row (authorized_by / authorized_at set once)
+        // Later calls -> keeps original authorizer, stamps updated_by / updated_at
+        // ═══════════════════════════════════════════════════════
+        public async Task<string> AuthorizeNurseNotes(AuthorizeNurseNotesRequest req, int usercode, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            if (!await IpExists(db, req.ip_id, tenant_code)) return "IP Registration not found";
+
+            // xmax = 0 is true only when the row was freshly inserted (not updated by ON CONFLICT)
+            bool inserted = await db.ExecuteScalarAsync<bool>(@"
+        INSERT INTO ip_nurse_note_authorization
+        (auth_id, ip_id, custid, is_authorized, authorized_by, authorized_at, tenant_code)
+        VALUES
+        (@auth_id, @ip_id, @custid, true, @usercode, now(), @tenant_code)
+        ON CONFLICT (ip_id, tenant_code)
+        DO UPDATE SET
+            is_authorized = true,
+            updated_by    = @usercode,
+            updated_at    = now()
+        RETURNING (xmax = 0);",
+                new
+                {
+                    auth_id = Guid.NewGuid(),
+                    req.ip_id,
+                    req.custid,
+                    usercode,
+                    tenant_code
+                });
+
+            return inserted ? "Success|Authorized" : "Success|AuthorizationUpdated";
+        }
+
+        public async Task<NurseNoteAuthorizationModel?> GetNurseNoteAuthorization(Guid ip_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseNoteAuthorizationModel>(
+                @"SELECT * FROM ip_nurse_note_authorization
+          WHERE ip_id = @ip_id AND tenant_code = @tenant_code",
+                new { ip_id, tenant_code });
+        }
     }
 }

@@ -6516,7 +6516,7 @@ INSERT INTO stock_adjustment_log
     stockvalue,
     adjustmenttype,
     adjustmentreason,
-    remarks,
+    remarks,065265765432q   A
     adjustmentdate,
     adjustedby,
     isactive,

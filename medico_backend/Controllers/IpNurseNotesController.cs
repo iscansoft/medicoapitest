@@ -15,6 +15,9 @@ namespace medico_backend.Controllers
     // Each tab has its own Save button -> its own add/get/delete
     // endpoints below, all scoped to a single ip_id.
     //
+    // tenant_code comes from the request HEADER.
+    // usercode comes from the request BODY (add + authorize calls).
+    //
     // OP Case Sheet is intentionally NOT here — reuse:
     //   GET api/CaseSheet/by-visit?ip_id=...
     // ─────────────────────────────────────────────────────────────
@@ -32,26 +35,21 @@ namespace medico_backend.Controllers
         private string GetTenantCode() =>
             Request.Headers["tenant_code"].FirstOrDefault() ?? string.Empty;
 
-        // Logged-in nurse's usercode. Replace this with however the rest
-        // of the app resolves the current user (claims/session/header) —
-        // kept as a header read here so it matches the tenant_code pattern.
-        private int GetUserCode() =>
-            int.TryParse(Request.Headers["usercode"].FirstOrDefault(), out int uc) ? uc : 1;
-
         // ═══════════════════════════════════════════════════════
         // 1. TEMPERATURE
         // ═══════════════════════════════════════════════════════
 
         // POST api/IpBedsideChart/temperature/add
-        // { "ip_id": "...", "custid": 1001, "shift": "MORNING",
+        // { "ip_id": "...", "custid": 1001, "usercode": 12, "shift": "MORNING",
         //   "temperature": 98.4, "unit": "F", "remarks": "Normal" }
         [HttpPost("temperature/add")]
         public async Task<IActionResult> AddTemperature([FromBody] AddTemperatureRequest req)
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddTemperature(req, GetUserCode(), tenant);
+            var res = await cls.AddTemperature(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -109,8 +107,9 @@ namespace medico_backend.Controllers
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddInputOutput(req, GetUserCode(), tenant);
+            var res = await cls.AddInputOutput(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -157,8 +156,9 @@ namespace medico_backend.Controllers
             var tenant = GetTenantCode();
             Console.WriteLine($"[DEBUG] tenant_code header received = '{tenant}' (length={tenant.Length})");
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddService(req, GetUserCode(), tenant);
+            var res = await cls.AddService(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -204,8 +204,9 @@ namespace medico_backend.Controllers
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddMedicine(req, GetUserCode(), tenant);
+            var res = await cls.AddMedicine(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -251,8 +252,9 @@ namespace medico_backend.Controllers
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddOther(req, GetUserCode(), tenant);
+            var res = await cls.AddOther(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -290,9 +292,9 @@ namespace medico_backend.Controllers
 
         // ═══════════════════════════════════════════════════════
         // COMBINED — Temperature + Input/Output + Service + Medicine
-        // + Other for a patient in one call. Vitals and OP Case
-        // Sheet are NOT included (fetch those separately from
-        // api/OpRegistration/vitals/all?ip_id=... and
+        // + Other + Visiting Doctor + Schedule for a patient in one call.
+        // Vitals and OP Case Sheet are NOT included (fetch those
+        // separately from api/OpRegistration/vitals/all?ip_id=... and
         // api/CaseSheet/by-visit?ip_id=... — see notes above).
         // ═══════════════════════════════════════════════════════
 
@@ -305,6 +307,7 @@ namespace medico_backend.Controllers
 
             return Ok(await cls.GetAllNurseNotes(ip_id, tenant));
         }
+
         // GET api/IpBedsideChart/temperature/{ip_id}/detail?temp_id=...
         [HttpGet("temperature/{ip_id}/detail")]
         public async Task<IActionResult> GetTemperatureById(Guid ip_id, [FromQuery] Guid temp_id)
@@ -315,6 +318,7 @@ namespace medico_backend.Controllers
             var res = await cls.GetTemperatureById(ip_id, temp_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+
         // GET api/IpBedsideChart/input-output/{ip_id}/detail?io_id=...
         [HttpGet("input-output/{ip_id}/detail")]
         public async Task<IActionResult> GetInputOutputById(Guid ip_id, [FromQuery] Guid io_id)
@@ -325,6 +329,7 @@ namespace medico_backend.Controllers
             var res = await cls.GetInputOutputById(ip_id, io_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+
         // GET api/IpBedsideChart/service/{ip_id}/detail?service_id=...
         [HttpGet("service/{ip_id}/detail")]
         public async Task<IActionResult> GetServiceById(Guid ip_id, [FromQuery] Guid service_id)
@@ -335,6 +340,7 @@ namespace medico_backend.Controllers
             var res = await cls.GetServiceById(ip_id, service_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+
         // GET api/IpBedsideChart/medicine/{ip_id}/detail?med_id=...
         [HttpGet("medicine/{ip_id}/detail")]
         public async Task<IActionResult> GetMedicineById(Guid ip_id, [FromQuery] Guid med_id)
@@ -345,6 +351,7 @@ namespace medico_backend.Controllers
             var res = await cls.GetMedicineById(ip_id, med_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+
         // GET api/IpBedsideChart/other/{ip_id}/detail?other_id=...
         [HttpGet("other/{ip_id}/detail")]
         public async Task<IActionResult> GetOtherById(Guid ip_id, [FromQuery] Guid other_id)
@@ -355,12 +362,13 @@ namespace medico_backend.Controllers
             var res = await cls.GetOtherById(ip_id, other_id, tenant);
             return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
         }
+
         // ═══════════════════════════════════════════════════════
         // 7. VISITING DOCTOR LIST
         // ═══════════════════════════════════════════════════════
 
         // POST api/IpBedsideChart/visiting-doctor/add
-        // { "ip_id": "...", "custid": 1001, "shift": "MORNING",
+        // { "ip_id": "...", "custid": 1001, "usercode": 12, "shift": "MORNING",
         //   "doctor_name": "Dr. Karthik Raja", "specialization": "Cardiology",
         //   "visit_time": "10:30:00", "diagnosis_notes": "Stable, mild tachycardia",
         //   "advice": "Continue current medication, review tomorrow", "remarks": "" }
@@ -369,8 +377,9 @@ namespace medico_backend.Controllers
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddVisitingDoctor(req, GetUserCode(), tenant);
+            var res = await cls.AddVisitingDoctor(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -422,7 +431,7 @@ namespace medico_backend.Controllers
         // ═══════════════════════════════════════════════════════
 
         // POST api/IpBedsideChart/schedule/add
-        // { "ip_id": "...", "custid": 1001, "shift": "MORNING",
+        // { "ip_id": "...", "custid": 1001, "usercode": 12, "shift": "MORNING",
         //   "scheduled_date": "2026-09-04", "scheduled_time": "08:00:00",
         //   "item_type": "MEDICINE", "item_name": "Insulin 10 units",
         //   "instructions": "Give before breakfast", "status": "PENDING" }
@@ -431,8 +440,9 @@ namespace medico_backend.Controllers
         {
             var tenant = GetTenantCode();
             if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
 
-            var res = await cls.AddSchedule(req, GetUserCode(), tenant);
+            var res = await cls.AddSchedule(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 
@@ -477,6 +487,40 @@ namespace medico_backend.Controllers
 
             var res = await cls.DeleteSchedule(schedule_id, tenant);
             return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // 9. AUTHORIZATION
+        // ═══════════════════════════════════════════════════════
+
+        // POST api/IpBedsideChart/authorize
+        // { "ip_id": "...", "custid": 1001, "usercode": 12 }
+        // header: tenant_code   (usercode is mandatory, sent in the body)
+        [HttpPost("authorize")]
+        public async Task<IActionResult> Authorize([FromBody] AuthorizeNurseNotesRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
+
+            var res = await cls.AuthorizeNurseNotes(req, req.usercode, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        // GET api/IpBedsideChart/authorize/{ip_id}
+        [HttpGet("authorize/{ip_id}")]
+        public async Task<IActionResult> GetAuthorization(Guid ip_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+
+            var res = await cls.GetNurseNoteAuthorization(ip_id, tenant);
+            return Ok(res ?? new NurseNoteAuthorizationModel
+            {
+                ip_id = ip_id,
+                is_authorized = false,
+                tenant_code = tenant
+            });
         }
     }
 }
