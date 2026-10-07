@@ -2956,6 +2956,7 @@ INSERT INTO sales_detail
     manufacturingdate,
     expirydate,
     soldqty,
+    days,
     warehousecode,
     tenantcode,
     morning_dose,
@@ -2981,6 +2982,7 @@ VALUES
     @manufacturingdate,
     @expirydate,
     @soldqty,
+    @days,
     @warehousecode,
     @tenantcode,
     @morning_dose,
@@ -3143,7 +3145,7 @@ WHERE stockcode=@stockcode;";
                         taxpercentage, taxamount,
                         amount, totalamount, batchno,
                         manufacturingdate, expirydate,
-                        soldqty, returnedqty,days, warehousecode,
+                        soldqty, days,returnedqty,days, warehousecode,
                         tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
                     )
                     VALUES
@@ -3154,7 +3156,7 @@ WHERE stockcode=@stockcode;";
                         @taxpercentage, @taxamount,
                         @amount, @totalamount, @batchno,
                         @manufacturingdate, @expirydate,
-                        @soldqty, @returnedqty,@days, @warehousecode,
+                        @soldqty, @days,@returnedqty,@days, @warehousecode,
                         @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
                     )";
 
