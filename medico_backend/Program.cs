@@ -18,6 +18,18 @@ using System.Text;
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 var builder = WebApplication.CreateBuilder(args);
 
+var env = builder.Configuration["Environment"] ?? "live";
+var envConn = builder.Configuration[$"Environments:{env}:ConnectionStrings:conn"];
+var envReportServer = builder.Configuration[$"Environments:{env}:ConnectionStrings:reportserver"];
+
+if (!string.IsNullOrWhiteSpace(envConn))
+{
+    builder.Configuration["ConnectionStrings:conn"] = envConn;
+}
+if (!string.IsNullOrWhiteSpace(envReportServer))
+{
+    builder.Configuration["ConnectionStrings:reportserver"] = envReportServer;
+}
 SqlMapper.AddTypeHandler(typeof(TimeOnly), new TimeOnlyTypeHandler());
 SqlMapper.AddTypeHandler(typeof(TimeOnly?), new NullableTimeOnlyTypeHandler());
 
@@ -41,6 +53,7 @@ builder.Services.AddControllers();
 // Fix Npgsql UTC timestamp handling
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+
 builder.Services.AddOpenApi();
 builder.Services.AddScoped<RoleMasterClass>();
 builder.Services.AddScoped<RoleMasterController>();
