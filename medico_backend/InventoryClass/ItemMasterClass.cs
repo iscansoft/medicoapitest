@@ -5,6 +5,8 @@ using Npgsql;
 using OfficeOpenXml;
 using System.Data;
 using System.Globalization;
+using System.IO.Compression;
+using System.Xml.Linq;
 
 namespace medico_backend.InventoryClass
 {
@@ -6516,7 +6518,7 @@ INSERT INTO stock_adjustment_log
     stockvalue,
     adjustmenttype,
     adjustmentreason,
-    remarks,065265765432q   A
+    remarks,
     adjustmentdate,
     adjustedby,
     isactive,
@@ -7921,25 +7923,378 @@ AND deleted = false;";
         private static string NameKey(string? s) =>
             System.Text.RegularExpressions.Regex.Replace((s ?? "").Trim(), @"\s+", " ").ToLowerInvariant();
 
+        //public async Task<ItemExcelUploadResult> UploadItemsFromExcel(
+        //    Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
+        //{
+        //    var result = new ItemExcelUploadResult();
+
+        //    using var package = new ExcelPackage(stream);
+        //    var ws = package.Workbook.Worksheets.FirstOrDefault(w => w.Name.Equals("Items", StringComparison.OrdinalIgnoreCase))
+        //             ?? package.Workbook.Worksheets.FirstOrDefault()
+        //             ?? throw new Exception("Excel file has no worksheets.");
+        //    if (ws.Dimension == null) throw new Exception("Excel file is empty.");
+
+        //    int rowCount = ws.Dimension.Rows;
+        //    int colCount = ws.Dimension.Columns;
+
+        //    // ── header row → field → column index ──
+        //    var headers = new Dictionary<string, int>();
+        //    for (int c = 1; c <= colCount; c++)
+        //    {
+        //        var raw = ws.Cells[1, c].Text?.Trim();
+        //        if (string.IsNullOrEmpty(raw)) continue;
+        //        if (ItemHeaderMap.TryGetValue(NormHeader(raw), out var field)) headers[field] = c;
+        //        else result.ignored_columns.Add(raw);
+        //    }
+        //    foreach (var req in new[] { "itemname", "category", "itemtype", "uom" })
+        //        if (!headers.ContainsKey(req))
+        //            throw new Exception($"Required column '{req}' is missing in row 1.");
+
+        //    using IDbConnection db = new NpgsqlConnection(con);
+        //    db.Open();
+        //    using var tx = db.BeginTransaction();
+
+        //    try
+        //    {
+        //        // ── load masters once (tenant wise) ──
+        //        var parentMap = new Dictionary<string, int>();                 // category name → parentcategorycode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT parentcategorycode, parentcategoryname
+        //    FROM public.parent_category_master
+        //    WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
+        //            parentMap.TryAdd(NameKey((string)r.parentcategoryname), Convert.ToInt32(r.parentcategorycode));
+
+        //        var subMap = new Dictionary<(int, string), int>();             // (parent, item type name) → categorycode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT categorycode, categoryname, parentcategorycode
+        //    FROM public.category_master
+        //    WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
+        //            subMap.TryAdd((Convert.ToInt32(r.parentcategorycode), NameKey((string)r.categoryname)),
+        //                          Convert.ToInt32(r.categorycode));
+
+        //        var uomMap = new Dictionary<string, int>();                    // name / shortname → ucode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT ucode, name, shortname
+        //    FROM public.uom_master
+        //    WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;", new { tenantcode }, tx))
+        //        {
+        //            int code = Convert.ToInt32(r.ucode);
+        //            if (r.name != null) uomMap.TryAdd(NameKey((string)r.name), code);
+        //            if (r.shortname != null) uomMap.TryAdd(NameKey((string)r.shortname), code);
+        //        }
+
+        //        // ── existing item names (duplicate check) ──
+        //        var existing = new HashSet<string>();
+        //        if (skipDuplicates)
+        //        {
+        //            var names = await db.QueryAsync<string>(
+        //                "SELECT itemname FROM public.item_master WHERE tenantcode = @tenantcode AND deleted = false AND itemname IS NOT NULL;",
+        //                new { tenantcode }, tx);
+        //            foreach (var n in names) existing.Add(NameKey(n));
+        //        }
+
+        //        for (int r = 2; r <= rowCount; r++)
+        //        {
+        //            result.total_rows++;
+
+        //            bool blank = true;
+        //            for (int c = 1; c <= colCount; c++)
+        //                if (!string.IsNullOrWhiteSpace(ws.Cells[r, c].Text)) { blank = false; break; }
+        //            if (blank) { result.skipped_blank++; continue; }
+
+        //            var errs = new List<string>();
+
+        //            string? Cell(string f) =>
+        //                headers.TryGetValue(f, out var ci) && !string.IsNullOrWhiteSpace(ws.Cells[r, ci].Text)
+        //                    ? ws.Cells[r, ci].Text.Trim() : null;
+
+        //            decimal? Dec(string f)
+        //            {
+        //                var s = Cell(f);
+        //                if (s == null) return null;
+        //                s = s.Replace("%", "").Replace(",", "").Trim();
+        //                if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)) return d;
+        //                errs.Add($"{f}: '{s}' is not a number");
+        //                return null;
+        //            }
+
+        //            bool Bool(string f)
+        //            {
+        //                var s = Cell(f)?.ToLowerInvariant();
+        //                if (s == null) return false;
+        //                if (s is "true" or "yes" or "y" or "1") return true;
+        //                if (s is "false" or "no" or "n" or "0") return false;
+        //                errs.Add($"{f}: '{s}' must be Yes/No");
+        //                return false;
+        //            }
+
+        //            // ── required text ──
+        //            var itemname = Cell("itemname");
+        //            if (itemname == null) errs.Add("Item name is required");
+
+        //            // ── Category name → code ──
+        //            var catName = Cell("category");
+        //            int categorycode = 0;
+        //            if (catName == null) errs.Add("Category is required");
+        //            else if (!parentMap.TryGetValue(NameKey(catName), out categorycode))
+        //                errs.Add($"Category '{catName}' not found in master");
+
+        //            // ── Item type (sub-category) name → code, scoped to the category ──
+        //            var typeName = Cell("itemtype");
+        //            int subcategorycode = 0;
+        //            if (typeName == null) errs.Add("Item type is required");
+        //            else if (categorycode != 0 && !subMap.TryGetValue((categorycode, NameKey(typeName)), out subcategorycode))
+        //                errs.Add($"Item type '{typeName}' not found under category '{catName}'");
+
+        //            // ── UOM name → code ──
+        //            var uomName = Cell("uom");
+        //            int uomcode = 0;
+        //            if (uomName == null) errs.Add("UOM is required");
+        //            else if (!uomMap.TryGetValue(NameKey(uomName), out uomcode))
+        //                errs.Add($"UOM '{uomName}' not found in master");
+
+        //            // ── numbers / flags (blank = 0 / false, packsize blank = 1) ──
+        //            decimal purchaserate = Dec("purchaserate") ?? 0m;
+        //            decimal mrp = Dec("mrp") ?? 0m;
+        //            decimal gst = Dec("gst") ?? 0m;
+        //            decimal minstock = Dec("minstock") ?? 0m;
+        //            decimal reorderlevel = Dec("reorderlevel") ?? 0m;
+        //            decimal packsize = Dec("packsize") ?? 1m;
+        //            int hsncode = (int)(Dec("hsncode") ?? 0m);
+        //            int expiryalertdays = (int)(Dec("expiryalertdays") ?? 0m);
+        //            bool isexpiry = Bool("isexpiry");
+        //            bool isnarcotic = Bool("isnarcoticdrug");
+
+        //            if (packsize <= 0) errs.Add("Pack size must be greater than 0");
+
+        //            if (errs.Count > 0)
+        //            {
+        //                result.errors.Add(new ItemExcelRowError { row = r, message = string.Join("; ", errs) });
+        //                continue;
+        //            }
+
+        //            // ── duplicate check (DB + inside the file) ──
+        //            if (skipDuplicates)
+        //            {
+        //                var key = NameKey(itemname);
+        //                if (existing.Contains(key)) { result.skipped_duplicate++; continue; }
+        //                existing.Add(key);
+        //            }
+
+        //            try
+        //            {
+        //                await db.ExecuteAsync("SAVEPOINT row_sp;", transaction: tx);
+
+        //                await db.ExecuteAsync(@"
+        //            INSERT INTO public.item_master
+        //            (
+        //                itemname, shortname, description,
+        //                categorycode, subcategorycode, itemtype,
+        //                schedule, drugname, isnarcoticdrug,
+        //                purchaserate, salesrate, mrp,
+        //                uomcode, packsize, hsncode, gstpercentage,
+        //                minstock, reorderlevel, currentstock,
+        //                isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
+        //                brandcode, manufacturercode, taxcode, naturetype, ledgergroupcode,
+        //                isactive, deleted, createddate, usercode, tenantcode
+        //            )
+        //            VALUES
+        //            (
+        //                @itemname, @shortname, NULL,
+        //                @categorycode, @subcategorycode, @itemtype,
+        //                @schedule, @drugname, @isnarcoticdrug,
+        //                @purchaserate, @salesrate, @mrp,
+        //                @uomcode, @packsize, @hsncode, @gstpercentage,
+        //                @minstock, @reorderlevel, 0,
+        //                @isexpiry, @expiryalertdays, true, @isexpiry, false,
+        //                0, 0, 0, 0, 0,
+        //                true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
+        //            );",
+        //                    new
+        //                    {
+        //                        itemname,
+        //                        shortname = Cell("shortname") ?? itemname,
+        //                        categorycode,
+        //                        subcategorycode,
+        //                        itemtype = typeName,
+        //                        schedule = Cell("schedule"),
+        //                        drugname = Cell("drugname"),
+        //                        isnarcoticdrug = isnarcotic,
+        //                        purchaserate,
+        //                        salesrate = mrp,                 // template has no sales rate → defaults to MRP
+        //                        mrp,
+        //                        uomcode,
+        //                        packsize,
+        //                        hsncode,
+        //                        gstpercentage = gst,
+        //                        minstock,
+        //                        reorderlevel,
+        //                        isexpiry,
+        //                        expiryalertdays,
+        //                        usercode = (int)(usercode ?? 0),
+        //                        tenantcode
+        //                    }, tx);
+
+        //                await db.ExecuteAsync("RELEASE SAVEPOINT row_sp;", transaction: tx);
+        //                result.inserted++;
+        //            }
+        //            catch (Exception rowEx)
+        //            {
+        //                await db.ExecuteAsync("ROLLBACK TO SAVEPOINT row_sp;", transaction: tx);
+        //                result.errors.Add(new ItemExcelRowError { row = r, message = rowEx.Message });
+        //            }
+        //        }
+
+        //        tx.Commit();
+        //        return result;
+        //    }
+        //    catch
+        //    {
+        //        tx.Rollback();
+        //        throw;
+        //    }
+        //}
+        // ─── Minimal .xlsx reader (no external library) ─────────────────────────────────
+        // Returns: row number → (column number → text). Handles shared strings, inline strings,
+        // booleans and numbers. Reads the sheet named `preferredSheet`, else the first sheet.
+        private static SortedDictionary<int, Dictionary<int, string>> ReadXlsxRows(Stream input, string preferredSheet)
+        {
+            XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            XNamespace rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+            XNamespace pns = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+            var ms = new MemoryStream();
+            input.CopyTo(ms);
+            ms.Position = 0;
+
+            using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+
+            XDocument Load(string path)
+            {
+                var entry = zip.GetEntry(path.TrimStart('/'));
+                if (entry == null) throw new Exception($"Invalid Excel file: '{path}' not found.");
+                using var s = entry.Open();
+                return XDocument.Load(s);
+            }
+
+            // ── sheets list ──
+            var wb = Load("xl/workbook.xml");
+            var sheets = wb.Root!.Element(ns + "sheets")?.Elements(ns + "sheet").ToList()
+                         ?? throw new Exception("Excel file has no worksheets.");
+            if (sheets.Count == 0) throw new Exception("Excel file has no worksheets.");
+
+            var sheet = sheets.FirstOrDefault(s =>
+                            string.Equals((string?)s.Attribute("name"), preferredSheet, StringComparison.OrdinalIgnoreCase))
+                        ?? sheets[0];
+
+            string relId = (string?)sheet.Attribute(rns + "id") ?? throw new Exception("Invalid worksheet reference.");
+
+            var rels = Load("xl/_rels/workbook.xml.rels");
+            string target = rels.Root!.Elements(pns + "Relationship")
+                .Where(r => (string?)r.Attribute("Id") == relId)
+                .Select(r => (string?)r.Attribute("Target"))
+                .FirstOrDefault() ?? throw new Exception("Worksheet file not found.");
+
+            string sheetPath = target.StartsWith("/") ? target.TrimStart('/') : "xl/" + target;
+
+            // ── shared strings ──
+            var shared = new List<string>();
+            if (zip.GetEntry("xl/sharedStrings.xml") != null)
+            {
+                var ss = Load("xl/sharedStrings.xml");
+                foreach (var si in ss.Root!.Elements(ns + "si"))
+                {
+                    // concatenate all <t> except phonetic runs (<rPh>)
+                    var text = string.Concat(si.Descendants(ns + "t")
+                        .Where(t => t.Parent?.Name != ns + "rPh")
+                        .Select(t => t.Value));
+                    shared.Add(text);
+                }
+            }
+
+            // ── column letters → index (A=1, B=2, ... AA=27) ──
+            static int ColIndex(string cellRef)
+            {
+                int col = 0;
+                foreach (char ch in cellRef)
+                {
+                    if (!char.IsLetter(ch)) break;
+                    col = col * 26 + (char.ToUpperInvariant(ch) - 'A' + 1);
+                }
+                return col;
+            }
+
+            // ── read sheet ──
+            var result = new SortedDictionary<int, Dictionary<int, string>>();
+            var sheetDoc = Load(sheetPath);
+            var sheetData = sheetDoc.Root!.Element(ns + "sheetData");
+            if (sheetData == null) return result;
+
+            int rowSeq = 0;
+            foreach (var row in sheetData.Elements(ns + "row"))
+            {
+                rowSeq++;
+                int rowNo = int.TryParse((string?)row.Attribute("r"), out var rn) ? rn : rowSeq;
+                var cells = new Dictionary<int, string>();
+                int colSeq = 0;
+
+                foreach (var c in row.Elements(ns + "c"))
+                {
+                    colSeq++;
+                    string? cref = (string?)c.Attribute("r");
+                    int colNo = !string.IsNullOrEmpty(cref) ? ColIndex(cref) : colSeq;
+                    string type = (string?)c.Attribute("t") ?? "";
+                    string raw = c.Element(ns + "v")?.Value ?? "";
+                    string value;
+
+                    switch (type)
+                    {
+                        case "s":   // shared string
+                            value = int.TryParse(raw, out var idx) && idx >= 0 && idx < shared.Count ? shared[idx] : "";
+                            break;
+                        case "inlineStr":
+                            value = string.Concat(c.Descendants(ns + "t").Select(t => t.Value));
+                            break;
+                        case "b":   // boolean
+                            value = raw == "1" ? "true" : "false";
+                            break;
+                        case "e":   // error cell (#N/A etc.)
+                            value = "";
+                            break;
+                        default:    // number / formula string
+                            value = raw;
+                            break;
+                    }
+
+                    if (colNo > 0) cells[colNo] = value;
+                }
+
+                result[rowNo] = cells;
+            }
+
+            return result;
+        }
         public async Task<ItemExcelUploadResult> UploadItemsFromExcel(
-            Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
+    Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
         {
             var result = new ItemExcelUploadResult();
 
-            using var package = new ExcelPackage(stream);
-            var ws = package.Workbook.Worksheets.FirstOrDefault(w => w.Name.Equals("Items", StringComparison.OrdinalIgnoreCase))
-                     ?? package.Workbook.Worksheets.FirstOrDefault()
-                     ?? throw new Exception("Excel file has no worksheets.");
-            if (ws.Dimension == null) throw new Exception("Excel file is empty.");
+            // ── read the workbook (no external library) ──
+            var grid = ReadXlsxRows(stream, "Items");
+            if (grid.Count == 0) throw new Exception("Excel file is empty.");
 
-            int rowCount = ws.Dimension.Rows;
-            int colCount = ws.Dimension.Columns;
+            int rowCount = grid.Keys.Max();
+            int colCount = grid.Values.Where(r => r.Count > 0).Select(r => r.Keys.Max()).DefaultIfEmpty(0).Max();
+            if (colCount == 0) throw new Exception("Excel file is empty.");
+
+            string CellText(int r, int c) =>
+                grid.TryGetValue(r, out var rw) && rw.TryGetValue(c, out var v) ? (v ?? "") : "";
 
             // ── header row → field → column index ──
             var headers = new Dictionary<string, int>();
             for (int c = 1; c <= colCount; c++)
             {
-                var raw = ws.Cells[1, c].Text?.Trim();
+                var raw = CellText(1, c).Trim();
                 if (string.IsNullOrEmpty(raw)) continue;
                 if (ItemHeaderMap.TryGetValue(NormHeader(raw), out var field)) headers[field] = c;
                 else result.ignored_columns.Add(raw);
@@ -7955,30 +8310,43 @@ AND deleted = false;";
             try
             {
                 // ── load masters once (tenant wise) ──
-                var parentMap = new Dictionary<string, int>();                 // category name → parentcategorycode
-                foreach (var r in await db.QueryAsync(@"
+                // category name → parentcategorycode
+                var parentMap = new Dictionary<string, int>();
+                var parentRows = await db.QueryAsync<(int parentcategorycode, string parentcategoryname)>(@"
             SELECT parentcategorycode, parentcategoryname
             FROM public.parent_category_master
-            WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
-                    parentMap.TryAdd(NameKey((string)r.parentcategoryname), Convert.ToInt32(r.parentcategorycode));
+            WHERE deleted = false AND tenantcode = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var p in parentRows)
+                    if (p.parentcategoryname != null)
+                        parentMap.TryAdd(NameKey(p.parentcategoryname), p.parentcategorycode);
 
-                var subMap = new Dictionary<(int, string), int>();             // (parent, item type name) → categorycode
-                foreach (var r in await db.QueryAsync(@"
+                // (parentcategorycode, item type name) → categorycode
+                var subMap = new Dictionary<(int, string), int>();
+                var subRows = await db.QueryAsync<(long categorycode, string categoryname, int parentcategorycode)>(@"
             SELECT categorycode, categoryname, parentcategorycode
             FROM public.category_master
-            WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
-                    subMap.TryAdd((Convert.ToInt32(r.parentcategorycode), NameKey((string)r.categoryname)),
-                                  Convert.ToInt32(r.categorycode));
+            WHERE deleted = false AND tenantcode = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var s in subRows)
+                {
+                    if (s.categoryname == null) continue;
+                    var key = (s.parentcategorycode, NameKey(s.categoryname));
+                    subMap.TryAdd(key, (int)s.categorycode);
+                }
 
-                var uomMap = new Dictionary<string, int>();                    // name / shortname → ucode
-                foreach (var r in await db.QueryAsync(@"
+                // uom name / shortname → ucode
+                var uomMap = new Dictionary<string, int>();
+                var uomRows = await db.QueryAsync<(long ucode, string? name, string? shortname)>(@"
             SELECT ucode, name, shortname
             FROM public.uom_master
-            WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;", new { tenantcode }, tx))
+            WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var u in uomRows)
                 {
-                    int code = Convert.ToInt32(r.ucode);
-                    if (r.name != null) uomMap.TryAdd(NameKey((string)r.name), code);
-                    if (r.shortname != null) uomMap.TryAdd(NameKey((string)r.shortname), code);
+                    int code = (int)u.ucode;
+                    if (u.name != null) uomMap.TryAdd(NameKey(u.name), code);
+                    if (u.shortname != null) uomMap.TryAdd(NameKey(u.shortname), code);
                 }
 
                 // ── existing item names (duplicate check) ──
@@ -7997,14 +8365,17 @@ AND deleted = false;";
 
                     bool blank = true;
                     for (int c = 1; c <= colCount; c++)
-                        if (!string.IsNullOrWhiteSpace(ws.Cells[r, c].Text)) { blank = false; break; }
+                        if (!string.IsNullOrWhiteSpace(CellText(r, c))) { blank = false; break; }
                     if (blank) { result.skipped_blank++; continue; }
 
                     var errs = new List<string>();
 
-                    string? Cell(string f) =>
-                        headers.TryGetValue(f, out var ci) && !string.IsNullOrWhiteSpace(ws.Cells[r, ci].Text)
-                            ? ws.Cells[r, ci].Text.Trim() : null;
+                    string? Cell(string f)
+                    {
+                        if (!headers.TryGetValue(f, out var ci)) return null;
+                        var text = CellText(r, ci);
+                        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+                    }
 
                     decimal? Dec(string f)
                     {
@@ -8119,7 +8490,7 @@ AND deleted = false;";
                                 drugname = Cell("drugname"),
                                 isnarcoticdrug = isnarcotic,
                                 purchaserate,
-                                salesrate = mrp,                 // template has no sales rate → defaults to MRP
+                                salesrate = mrp,
                                 mrp,
                                 uomcode,
                                 packsize,

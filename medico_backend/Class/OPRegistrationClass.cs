@@ -670,21 +670,25 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         }
                     }
 
-                    int? noSlotTcode; double noSlotRate; double noSlotAmount;
-                    if (svc != null)
-                        (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                    else
-                        (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    if (!isDressing)
                     {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        int? noSlotTcode; double noSlotRate; double noSlotAmount;
+                        if (svc != null)
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                        else
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = noSlotData.op_id.ToString(),
+                            custid = noSlotData.custid,
+                            tcode = noSlotTcode,
+                            rate = noSlotRate,
+                            amount = noSlotAmount,
+                            quantity = 1
+                        }, tenant_code);
+                    }
+
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}" +
                            (svc != null ? $"|ServiceId:{req.service_id}" : "");
@@ -808,21 +812,24 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     }
                 }
 
-                int? feeTcode2; double feeRate2; double feeAmount2;
-                if (svc != null)
-                    (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                else
-                    (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                if (!isDressing)
                 {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode2,
-                    rate = feeRate2,
-                    amount = feeAmount2,
-                    quantity = 1
-                }, tenant_code);
+                    int? feeTcode2; double feeRate2; double feeAmount2;
+                    if (svc != null)
+                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                    else
+                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+
+                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = data.op_id.ToString(),
+                        custid = data.custid,
+                        tcode = feeTcode2,
+                        rate = feeRate2,
+                        amount = feeAmount2,
+                        quantity = 1
+                    }, tenant_code);
+                }
 
                 await db.ExecuteAsync(@"
             UPDATE doctor_appointment_slot_details
@@ -1322,17 +1329,17 @@ AND b.tenant_code = @tenant_code
                             noSlotData.created_at,
                             noSlotData.updated_at
                         });
-                    var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                    //var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
 
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                    {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                    //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    //{
+                    //    op_id = noSlotData.op_id.ToString(),
+                    //    custid = noSlotData.custid,
+                    //    tcode = noSlotTcode,
+                    //    rate = noSlotRate,
+                    //    amount = noSlotAmount,
+                    //    quantity = 1
+                    //}, tenant_code);
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}";
                 }
@@ -1446,17 +1453,17 @@ AND b.tenant_code = @tenant_code
                     new { slot_detail_id = slot.slot_detail_id, tenant_code });
 
                 // ✅ NEW — add unbilled dressing charge
-                var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                //var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
 
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode,
-                    rate = feeRate,
-                    amount = feeAmount,
-                    quantity = 1
-                }, tenant_code);
+                //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                //{
+                //    op_id = data.op_id.ToString(),
+                //    custid = data.custid,
+                //    tcode = feeTcode,
+                //    rate = feeRate,
+                //    amount = feeAmount,
+                //    quantity = 1
+                //}, tenant_code);
 
                 return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{data.token_no}";
             }
@@ -2000,17 +2007,20 @@ AND b.tenant_code = @tenant_code
                         catch { tx.Rollback(); throw; }
                     }
 
-                    var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    if (!isDressing)
                     {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = noSlotData.op_id.ToString(),
+                            custid = noSlotData.custid,
+                            tcode = noSlotTcode,
+                            rate = noSlotRate,
+                            amount = noSlotAmount,
+                            quantity = 1
+                        }, tenant_code);
+                    }
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}|ServiceId:{req.service_id}";
                 }
@@ -2105,17 +2115,20 @@ AND b.tenant_code = @tenant_code
                     catch { tx.Rollback(); throw; }
                 }
 
-                var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                if (!isDressing)
                 {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode,
-                    rate = feeRate,
-                    amount = feeAmount,
-                    quantity = 1
-                }, tenant_code);
+                    var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+
+                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = data.op_id.ToString(),
+                        custid = data.custid,
+                        tcode = feeTcode,
+                        rate = feeRate,
+                        amount = feeAmount,
+                        quantity = 1
+                    }, tenant_code);
+                }
 
                 await db.ExecuteAsync(@"
             UPDATE doctor_appointment_slot_details
@@ -2406,13 +2419,8 @@ AND b.tenant_code = @tenant_code
 
                 async Task FlushDressing()
                 {
-                    if (primaryDressingDeferred)
-                    {
-                        await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
-                        primaryDressingDeferred = false;
-                    }
-                    foreach (var d in deferredDressing)
-                        await _unbilledCls.AddVisitAdditionalCharge(d, "DRESSING", tenant_code);
+                    // Dressing charges are intentionally NOT pushed to unbilledcharges.
+                    primaryDressingDeferred = false;
                     deferredDressing.Clear();
                 }
 

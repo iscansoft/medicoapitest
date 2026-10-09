@@ -503,7 +503,7 @@ namespace medico_backend.InventoryClass
             {
                 "MM/yyyy", "M/yyyy", "MM-yyyy", "M-yyyy",
                 "MM/yy", "M/yy", "MMM-yyyy", "MMM-yy", "MMM/yy"
-            };
+            }; 
 
             if (DateTime.TryParseExact(text, monthYearFormats, CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var my))

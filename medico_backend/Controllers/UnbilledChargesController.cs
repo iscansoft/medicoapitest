@@ -125,5 +125,34 @@ namespace medico_backend.Controllers
 
             return Ok(new { message = res });
         }
+        // POST api/UnbilledCharges/discard
+        // Body: { "unbilledids": ["id1"] }  or  { "unbilledids": ["id1","id2","id3"] }
+        [HttpPost("discard")]
+        public async Task<IActionResult> Discard([FromBody] DiscardUnbilledChargesRequest req)
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            if (string.IsNullOrWhiteSpace(tenant))
+                return BadRequest("tenant_code header is required");
+            if (req?.unbilledids == null || req.unbilledids.Count == 0)
+                return BadRequest("unbilledids is required");
+
+            try
+            {
+                var res = await cls.DiscardUnbilledCharges(req.unbilledids, tenant);
+
+                if (res.discarded == 0)
+                    return BadRequest(new { message = "No charges were discarded", result = res });
+
+                return Ok(new
+                {
+                    message = $"Discarded {res.discarded} of {res.requested} charge(s)",
+                    result = res
+                });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { message = ex.Message });
+            }
+        }
     }
 }

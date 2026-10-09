@@ -791,5 +791,112 @@ namespace medico_backend.Class
             }
             catch (Exception ex) { return ex.Message; }
         }
+        // ── Discard pending unbilled charges — one or many ──
+        // Billed rows are never touched (that's a refund concern).
+        // Normal charges are deleted.
+        // ROOMRENT rows are closed out (billedstatus = true, billed qty/amount = 0, tagged [DISCARDED])
+        // so RecalculateRoomRent does NOT recreate them.
+        public async Task<DiscardUnbilledResult> DiscardUnbilledCharges(
+            List<string> unbilledids, string tenant_code)
+        {
+            var result = new DiscardUnbilledResult();
+
+            var ids = unbilledids
+                .Where(i => !string.IsNullOrWhiteSpace(i))
+                .Select(i => i.Trim())
+                .Distinct()
+                .ToArray();
+
+            result.requested = ids.Length;
+            if (ids.Length == 0) return result;
+
+            using var db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // Load whatever exists for this tenant
+                var existing = (await db.QueryAsync<UnbilledChargeRow>(
+                    @"SELECT * FROM unbilledcharges
+              WHERE unbilledid = ANY(@ids) AND tenant_code = @tenant_code",
+                    new { ids, tenant_code }, tx)).ToDictionary(r => r.unbilledid!);
+
+                var deletable = new List<string>();     // normal charges → hard delete
+                var roomRentIds = new List<string>();   // ROOMRENT → close out as discarded
+
+                foreach (var id in ids)
+                {
+                    if (!existing.TryGetValue(id, out var row))
+                    {
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Not found" });
+                        continue;
+                    }
+                    if (row.billedstatus == true)
+                    {
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Already billed" });
+                        continue;
+                    }
+
+                    if (string.Equals(row.entrytype?.Trim(), "ROOMRENT", StringComparison.OrdinalIgnoreCase))
+                        roomRentIds.Add(id);
+                    else
+                        deletable.Add(id);
+                }
+
+                var processedIds = new List<string>();
+
+                // ── 1) Normal charges: delete (re-check billedstatus to guard against a race with billing) ──
+                if (deletable.Count > 0)
+                {
+                    var deletedIds = (await db.QueryAsync<string>(
+                        @"DELETE FROM unbilledcharges
+                  WHERE unbilledid = ANY(@deletable)
+                  AND   tenant_code = @tenant_code
+                  AND   (billedstatus = false OR billedstatus IS NULL)
+                  RETURNING unbilledid",
+                        new { deletable = deletable.ToArray(), tenant_code }, tx)).ToList();
+
+                    processedIds.AddRange(deletedIds);
+
+                    foreach (var id in deletable.Except(deletedIds))
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Billed while discarding" });
+                }
+
+                // ── 2) ROOMRENT: close out so RecalculateRoomRent won't recreate it ──
+                if (roomRentIds.Count > 0)
+                {
+                    var closedIds = (await db.QueryAsync<string>(
+                        @"UPDATE unbilledcharges
+                  SET billedstatus   = true,
+                      billeddate     = @now,
+                      billedquantity = 0,
+                      billedamount   = 0,
+                      particulars    = COALESCE(particulars, 'ROOMRENT') || ' [DISCARDED]'
+                  WHERE unbilledid = ANY(@roomRentIds)
+                  AND   tenant_code = @tenant_code
+                  AND   entrytype = 'ROOMRENT'
+                  AND   (billedstatus = false OR billedstatus IS NULL)
+                  RETURNING unbilledid",
+                        new { roomRentIds = roomRentIds.ToArray(), tenant_code, now = DateTime.UtcNow }, tx)).ToList();
+
+                    processedIds.AddRange(closedIds);
+
+                    foreach (var id in roomRentIds.Except(closedIds))
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Billed while discarding" });
+                }
+
+                result.discarded_ids = processedIds;
+                result.discarded = processedIds.Count;
+
+                tx.Commit();
+                return result;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
     }
 }
