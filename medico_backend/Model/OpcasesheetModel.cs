@@ -534,4 +534,5 @@ namespace medico_backend.Model
         public int? dcode { get; set; }
         public string? notes { get; set; }
     }
+
 }

@@ -76,7 +76,13 @@ namespace medico_backend.Class
             int next = await db.ExecuteScalarAsync<int>(sql, new { tenant_code, year, month }, tx);
             return $"INV/{year}/{month}/{next:D4}";
         }
-
+        private sealed class ExistingInvRow
+        {
+            public Guid inv_det_id { get; set; }
+            public int? test_code { get; set; }
+            public string? test_name { get; set; }
+            public bool? is_billed { get; set; }
+        }
         // ─────────────────────────────────────────────────────────
         // SAVE OP/IP CASE SHEET
         // Accepts EITHER op_id OR ip_id (or both). Entire operation is
@@ -465,6 +471,8 @@ namespace medico_backend.Class
         // ─────────────────────────────────────────────────────────
         // SAVE INVESTIGATION
         // ─────────────────────────────────────────────────────────
+
+
         private async Task<string> SaveInvestigation(
             IDbConnection db,
             IDbTransaction tx,
@@ -533,44 +541,103 @@ namespace medico_backend.Class
                     new { inv_id = invId, req.notes, is_urgent = req.is_urgent, tenant_code }, tx);
             }
 
-            // Clear stale unbilled INVESTIGATION rows for this visit BEFORE deleting
-            // op_investigation_detail (only pending/unbilled ones — already-billed
-            // rows are untouched since they belong to a bill already generated)
+            // 1. Clear only PENDING unbilled investigation rows (billed rows untouched)
             await db.ExecuteAsync(
                 @"DELETE FROM unbilledcharges
-                  WHERE entrytype = 'INVESTIGATION'
-                  AND (
-                        (@op_id IS NOT NULL AND opvisitid = @op_id)
-                     OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
-                      )
-                  AND tenant_code = @tenant_code
-                  AND (billedstatus = false OR billedstatus IS NULL)",
+      WHERE entrytype = 'INVESTIGATION'
+      AND (
+            (@op_id IS NOT NULL AND opvisitid = @op_id)
+         OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+          )
+      AND tenant_code = @tenant_code
+      AND (billedstatus = false OR billedstatus IS NULL)",
                 new { op_id, ip_id, tenant_code }, tx);
 
-            // Delete + re-insert test rows
-            await db.ExecuteAsync(
-                "DELETE FROM op_investigation_detail WHERE inv_id = @inv_id",
-                new { inv_id = invId }, tx);
+            // 2. Load existing tests + find which are already billed
+            var existingRows = (await db.QueryAsync<ExistingInvRow>(
+                @"SELECT inv_det_id, test_code, test_name, is_billed
+      FROM op_investigation_detail
+      WHERE inv_id = @inv_id AND isdeleted = false",
+                new { inv_id = invId }, tx)).ToList();
+
+            var existingIds = existingRows.Select(r => r.inv_det_id.ToString()).ToArray();
+
+            var billedSet = existingIds.Length == 0
+                ? new HashSet<string>()
+                : (await db.QueryAsync<string>(
+                    @"SELECT entryid FROM unbilledcharges
+          WHERE entrytype = 'INVESTIGATION'
+          AND   billedstatus = true
+          AND   tenant_code = @tenant_code
+          AND   entryid = ANY(@ids)",
+                    new { ids = existingIds, tenant_code }, tx)).ToHashSet();
+
+            var matched = new HashSet<Guid>();
 
             foreach (var test in req.tests)
             {
-                Guid? diagId = string.IsNullOrWhiteSpace(test.diag_id)
-                    ? null
-                    : Guid.Parse(test.diag_id);
+                Guid? diagId = string.IsNullOrWhiteSpace(test.diag_id) ? null : Guid.Parse(test.diag_id);
 
-                Guid invDetId = Guid.NewGuid();   // generated here so we can link unbilledcharges
+                // match an existing row (same test_code, or same name when no code)
+                var match = existingRows.FirstOrDefault(r =>
+                    !matched.Contains(r.inv_det_id) &&
+                    (test.test_code.HasValue
+                        ? r.test_code == test.test_code
+                        : string.Equals(r.test_name, test.test_name, StringComparison.OrdinalIgnoreCase)));
 
+                if (match != null)
+                {
+                    matched.Add(match.inv_det_id);
+                    bool alreadyBilled = match.is_billed == true || billedSet.Contains(match.inv_det_id.ToString());
+
+                    if (alreadyBilled)
+                    {
+                        // billed → only touch sno/diag, never re-push to unbilling
+                        await db.ExecuteAsync(
+                            @"UPDATE op_investigation_detail
+                  SET sno = @sno, diag_id = @diag_id, updated_at = NOW()
+                  WHERE inv_det_id = @inv_det_id",
+                            new { inv_det_id = match.inv_det_id, test.sno, diag_id = diagId }, tx);
+                        continue;
+                    }
+
+                    // existing but still unbilled → update, keep same id, re-push (pending row was cleared above)
+                    await db.ExecuteAsync(
+                        @"UPDATE op_investigation_detail
+              SET sno=@sno, diag_id=@diag_id, test_name=@test_name, test_code=@test_code,
+                  test_category=@test_category, quantity=@quantity, rate=@rate,
+                  amount=@amount, updated_at=NOW()
+              WHERE inv_det_id=@inv_det_id",
+                        new
+                        {
+                            inv_det_id = match.inv_det_id,
+                            test.sno,
+                            diag_id = diagId,
+                            test.test_name,
+                            test.test_code,
+                            test.test_category,
+                            test.quantity,
+                            test.rate,
+                            test.amount
+                        }, tx);
+
+                    await _unbilledCls.AddInvestigationChargeRow(
+                        db, tx, op_id,
+                        string.IsNullOrWhiteSpace(ip_id) ? (Guid?)null : Guid.Parse(ip_id),
+                        custid, tenant_code,
+                        match.inv_det_id.ToString(), test.test_code, test.quantity, test.rate, test.amount);
+                    continue;
+                }
+
+                // brand-new test → insert + push to unbilling
+                Guid invDetId = Guid.NewGuid();
                 await db.ExecuteAsync(
                     @"INSERT INTO op_investigation_detail
-                      (inv_det_id, inv_id, diag_id, sno,
-                       test_name, test_code, test_category,
-                       quantity, rate, amount,
-                       result_status, is_billed, tenant_code, isdeleted, created_at, updated_at)
-                      VALUES
-                      (@inv_det_id, @inv_id, @diag_id, @sno,
-                       @test_name, @test_code, @test_category,
-                       @quantity, @rate, @amount,
-                       'PENDING', false, @tenant_code, false, NOW(), NOW())",
+          (inv_det_id, inv_id, diag_id, sno, test_name, test_code, test_category,
+           quantity, rate, amount, result_status, is_billed, tenant_code, isdeleted, created_at, updated_at)
+          VALUES
+          (@inv_det_id, @inv_id, @diag_id, @sno, @test_name, @test_code, @test_category,
+           @quantity, @rate, @amount, 'PENDING', false, @tenant_code, false, NOW(), NOW())",
                     new
                     {
                         inv_det_id = invDetId,
@@ -586,12 +653,25 @@ namespace medico_backend.Class
                         tenant_code
                     }, tx);
 
-                // Push into unbilledcharges so it shows up on the billing screen
                 await _unbilledCls.AddInvestigationChargeRow(
                     db, tx, op_id,
                     string.IsNullOrWhiteSpace(ip_id) ? (Guid?)null : Guid.Parse(ip_id),
                     custid, tenant_code,
                     invDetId.ToString(), test.test_code, test.quantity, test.rate, test.amount);
+            }
+
+            // 3. Remove tests the doctor deleted from the list — but never a billed one
+            var removeIds = existingRows
+                .Where(r => !matched.Contains(r.inv_det_id)
+                         && r.is_billed != true
+                         && !billedSet.Contains(r.inv_det_id.ToString()))
+                .Select(r => r.inv_det_id).ToArray();
+
+            if (removeIds.Length > 0)
+            {
+                await db.ExecuteAsync(
+                    "DELETE FROM op_investigation_detail WHERE inv_det_id = ANY(@removeIds)",
+                    new { removeIds }, tx);
             }
 
             return invCode;
