@@ -8299,7 +8299,9 @@ AND deleted = false;";
                 if (ItemHeaderMap.TryGetValue(NormHeader(raw), out var field)) headers[field] = c;
                 else result.ignored_columns.Add(raw);
             }
-            foreach (var req in new[] { "itemname", "category", "itemtype", "uom" })
+
+            // Only Item name is mandatory now
+            foreach (var req in new[] { "itemname" })
                 if (!headers.ContainsKey(req))
                     throw new Exception($"Required column '{req}' is missing in row 1.");
 
@@ -8313,9 +8315,9 @@ AND deleted = false;";
                 // category name → parentcategorycode
                 var parentMap = new Dictionary<string, int>();
                 var parentRows = await db.QueryAsync<(int parentcategorycode, string parentcategoryname)>(@"
-            SELECT parentcategorycode, parentcategoryname
-            FROM public.parent_category_master
-            WHERE deleted = false AND tenantcode = @tenantcode;",
+    SELECT parentcategorycode, parentcategoryname
+    FROM public.parent_category_master
+    WHERE deleted = false AND tenantcode = @tenantcode;",
                     new { tenantcode }, tx);
                 foreach (var p in parentRows)
                     if (p.parentcategoryname != null)
@@ -8324,9 +8326,9 @@ AND deleted = false;";
                 // (parentcategorycode, item type name) → categorycode
                 var subMap = new Dictionary<(int, string), int>();
                 var subRows = await db.QueryAsync<(long categorycode, string categoryname, int parentcategorycode)>(@"
-            SELECT categorycode, categoryname, parentcategorycode
-            FROM public.category_master
-            WHERE deleted = false AND tenantcode = @tenantcode;",
+    SELECT categorycode, categoryname, parentcategorycode
+    FROM public.category_master
+    WHERE deleted = false AND tenantcode = @tenantcode;",
                     new { tenantcode }, tx);
                 foreach (var s in subRows)
                 {
@@ -8338,9 +8340,9 @@ AND deleted = false;";
                 // uom name / shortname → ucode
                 var uomMap = new Dictionary<string, int>();
                 var uomRows = await db.QueryAsync<(long ucode, string? name, string? shortname)>(@"
-            SELECT ucode, name, shortname
-            FROM public.uom_master
-            WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;",
+    SELECT ucode, name, shortname
+    FROM public.uom_master
+    WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;",
                     new { tenantcode }, tx);
                 foreach (var u in uomRows)
                 {
@@ -8401,31 +8403,37 @@ AND deleted = false;";
                     var itemname = Cell("itemname");
                     if (itemname == null) errs.Add("Item name is required");
 
-                    // ── Category name → code ──
+                    // ── Category: OPTIONAL. Validated only when a value is given ──
                     var catName = Cell("category");
                     int categorycode = 0;
-                    if (catName == null) errs.Add("Category is required");
-                    else if (!parentMap.TryGetValue(NameKey(catName), out categorycode))
+                    if (catName != null && !parentMap.TryGetValue(NameKey(catName), out categorycode))
                         errs.Add($"Category '{catName}' not found in master");
 
-                    // ── Item type (sub-category) name → code, scoped to the category ──
+                    // ── Item type (sub-category): OPTIONAL. Validated only when a value is given
+                    //    and a valid category was resolved to scope it ──
                     var typeName = Cell("itemtype");
                     int subcategorycode = 0;
-                    if (typeName == null) errs.Add("Item type is required");
-                    else if (categorycode != 0 && !subMap.TryGetValue((categorycode, NameKey(typeName)), out subcategorycode))
+                    if (typeName != null && categorycode != 0
+                        && !subMap.TryGetValue((categorycode, NameKey(typeName)), out subcategorycode))
                         errs.Add($"Item type '{typeName}' not found under category '{catName}'");
 
-                    // ── UOM name → code ──
+                    // ── UOM: OPTIONAL. Validated only when a value is given ──
                     var uomName = Cell("uom");
                     int uomcode = 0;
-                    if (uomName == null) errs.Add("UOM is required");
-                    else if (!uomMap.TryGetValue(NameKey(uomName), out uomcode))
+                    if (uomName != null && !uomMap.TryGetValue(NameKey(uomName), out uomcode))
                         errs.Add($"UOM '{uomName}' not found in master");
 
                     // ── numbers / flags (blank = 0 / false, packsize blank = 1) ──
                     decimal purchaserate = Dec("purchaserate") ?? 0m;
                     decimal mrp = Dec("mrp") ?? 0m;
                     decimal gst = Dec("gst") ?? 0m;
+
+                    // Excel stores a "12%"-formatted cell as 0.12 → convert back to 12
+                    if (gst > 0m && gst < 1m) gst *= 100m;
+                    gst = Math.Round(gst, 2);
+                    if (gst < 0m || gst > 100m)
+                        errs.Add($"gst: '{gst}' must be between 0 and 100");
+
                     decimal minstock = Dec("minstock") ?? 0m;
                     decimal reorderlevel = Dec("reorderlevel") ?? 0m;
                     decimal packsize = Dec("packsize") ?? 1m;
@@ -8455,37 +8463,37 @@ AND deleted = false;";
                         await db.ExecuteAsync("SAVEPOINT row_sp;", transaction: tx);
 
                         await db.ExecuteAsync(@"
-                    INSERT INTO public.item_master
-                    (
-                        itemname, shortname, description,
-                        categorycode, subcategorycode, itemtype,
-                        schedule, drugname, isnarcoticdrug,
-                        purchaserate, salesrate, mrp,
-                        uomcode, packsize, hsncode, gstpercentage,
-                        minstock, reorderlevel, currentstock,
-                        isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
-                        brandcode, manufacturercode, taxcode, naturetype, ledgergroupcode,
-                        isactive, deleted, createddate, usercode, tenantcode
-                    )
-                    VALUES
-                    (
-                        @itemname, @shortname, NULL,
-                        @categorycode, @subcategorycode, @itemtype,
-                        @schedule, @drugname, @isnarcoticdrug,
-                        @purchaserate, @salesrate, @mrp,
-                        @uomcode, @packsize, @hsncode, @gstpercentage,
-                        @minstock, @reorderlevel, 0,
-                        @isexpiry, @expiryalertdays, true, @isexpiry, false,
-                        0, 0, 0, 0, 0,
-                        true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
-                    );",
+            INSERT INTO public.item_master
+            (
+                itemname, shortname, description,
+                categorycode, subcategorycode, itemtype,
+                schedule, drugname, isnarcoticdrug,
+                purchaserate, salesrate, mrp,
+                uomcode, packsize, hsncode, gstpercentage,
+                minstock, reorderlevel, currentstock,
+                isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
+                brandcode, manufacturercode, taxcode, naturetype, ledgergroupcode,
+                isactive, deleted, createddate, usercode, tenantcode
+            )
+            VALUES
+            (
+                @itemname, @shortname, '',
+                @categorycode, @subcategorycode, @itemtype,
+                @schedule, @drugname, @isnarcoticdrug,
+                @purchaserate, @salesrate, @mrp,
+                @uomcode, @packsize, @hsncode, @gstpercentage,
+                @minstock, @reorderlevel, 0,
+                @isexpiry, @expiryalertdays, true, @isexpiry, false,
+                0, 0, 0, 0, 0,
+                true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
+            );",
                             new
                             {
                                 itemname,
                                 shortname = Cell("shortname") ?? itemname,
                                 categorycode,
                                 subcategorycode,
-                                itemtype = typeName,
+                                itemtype = typeName ?? "",
                                 schedule = Cell("schedule"),
                                 drugname = Cell("drugname"),
                                 isnarcoticdrug = isnarcotic,

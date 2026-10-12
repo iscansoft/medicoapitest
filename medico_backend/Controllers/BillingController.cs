@@ -269,5 +269,23 @@ namespace medico_backend.Controller
 
             return Ok(session);
         }
+        // POST /api/HmsBilling/auto-bill-op
+        [HttpPost("auto-bill-op")]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsBillResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> AutoBillOp([FromBody] AutoBillOpRequest request)
+        {
+            string tenantToken = GetTenantCode();
+            var (status, data) = await _billingService.AutoBillOpByOpId(request, tenantToken);
+
+            // Bill was committed but the re-read failed -> still a success, don't make the UI retry
+            if (status == "SUCCESS_FETCH_FAILED")
+                return Ok(new { message = "Bill created successfully. Please refresh the cash counter list." });
+
+            if (status != "SUCCESS")
+                return BadRequest(new { message = status });
+
+            return Ok(data);
+        }
     }
 }

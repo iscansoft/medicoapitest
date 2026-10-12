@@ -1898,6 +1898,51 @@ namespace medico_backend.Class
             }
             return TimeZoneInfo.ConvertTimeToUtc(endLocal, Tz);
         }
+        // ════════════════════════════════════════════════════════════════════════
+        //  AUTO-BILL BY OP ID — standalone trigger. Looks up custid/dcode from
+        //  op_registration, then reuses AutoBillOpVisit (same flow as
+        //  ComboRegistration). Does NOT check any lab_settings flag.
+        // ════════════════════════════════════════════════════════════════════════
+        public async Task<(string status, HmsBillResponse? data)> AutoBillOpByOpId(
+            AutoBillOpRequest req, string tenantCode)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.op_id) || !Guid.TryParse(req.op_id, out var opGuid))
+                return ("A valid op_id is required.", null);
 
+            if (!req.enteredbhcode.HasValue || !req.cntcode.HasValue)
+                return ("enteredbhcode and cntcode are required to bill into a cash counter.", null);
+
+            try
+            {
+                using var db = GetConnection();
+
+                var op = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT op_id, custid, dcode, visit_status
+              FROM op_registration
+              WHERE op_id = @op_id AND tenant_code = @tenantCode AND isdeleted = false",
+                    new { op_id = opGuid, tenantCode });
+
+                if (op == null)
+                    return ("OP Registration not found.", null);
+
+                string visitStatus = (string?)op.visit_status ?? "";
+                if (visitStatus == "CANCELLED" || visitStatus == "TRANSFERRED" || visitStatus == "RESCHEDULED")
+                    return ($"Cannot bill a {visitStatus.ToLower()} visit.", null);
+
+                // Same pipeline ComboRegistration uses (pending unbilled -> bill -> mark billed)
+                return await AutoBillOpVisit(
+                    opGuid.ToString(),
+                    (decimal)op.custid,
+                    (int)op.dcode,
+                    req.enteredbhcode,
+                    req.cntcode,
+                    tenantCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AutoBillOpByOpId failed for op_id={op_id}", req.op_id);
+                return ($"AutoBillOpByOpId error: {ex.Message}", null);
+            }
+        }
     }
 }

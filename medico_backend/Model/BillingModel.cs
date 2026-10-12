@@ -764,4 +764,10 @@ namespace medico_backend.Model
         public double? pmc3_amount { get; set; }
         public List<HmsBillLineResponse> items { get; set; } = new();
     }
+    public class AutoBillOpRequest
+    {
+        public string op_id { get; set; } = string.Empty;   // op_registration.op_id (GUID text)
+        public int? enteredbhcode { get; set; }              // branch of the cash counter
+        public int? cntcode { get; set; }                    // cash counter code (must have an open shift)
+    }
 }
