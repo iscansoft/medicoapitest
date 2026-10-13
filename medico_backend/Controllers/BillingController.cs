@@ -287,5 +287,24 @@ namespace medico_backend.Controller
 
             return Ok(data);
         }
+        // GET /api/HmsBilling/reports/paymode-collection?fromdate=2026-10-01&todate=2026-10-13&bhcode=1&cntcode=2
+        [HttpGet("reports/paymode-collection")]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsPayModeCollectionResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> GetPayModeCollection(
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] int? bhcode,
+            [FromQuery] int? cntcode)
+        {
+            if (fromdate == default || todate == default)
+                return BadRequest(new { message = "fromdate and todate are required." });
+            if (todate.Date < fromdate.Date)
+                return BadRequest(new { message = "todate cannot be earlier than fromdate." });
+
+            string tenantToken = GetTenantCode();
+            var result = await _billingService.GetPayModeCollectionReport(fromdate, todate, bhcode, cntcode, tenantToken);
+            return Ok(result);
+        }
     }
 }

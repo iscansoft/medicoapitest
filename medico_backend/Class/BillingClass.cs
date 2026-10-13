@@ -1944,5 +1944,62 @@ namespace medico_backend.Class
                 return ($"AutoBillOpByOpId error: {ex.Message}", null);
             }
         }
+        public async Task<HmsPayModeCollectionResponse> GetPayModeCollectionReport(
+    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, string tenantCode)
+        {
+            using var db = GetConnection();
+
+            var p = new DynamicParameters();
+            p.Add("tenantCode", tenantCode);
+            p.Add("fromdate", fromdate.Date);
+            p.Add("todate", todate.Date.AddDays(1));   // exclusive upper bound
+
+            string extra = "";
+            if (bhcode.HasValue) { extra += " AND bcb.bhcode = @bhcode "; p.Add("bhcode", bhcode.Value); }
+            if (cntcode.HasValue) { extra += " AND bcb.cntcode = @cntcode "; p.Add("cntcode", cntcode.Value); }
+
+            string sql = $@"
+        SELECT
+            bcb.pmcode                                                        AS pmcode,
+            COALESCE(NULLIF(pm.name, ''), NULLIF(bcb.collection_type, ''), 'UNSPECIFIED') AS paymode_name,
+            COUNT(DISTINCT bcb.receipt_guid)::int                             AS receipt_count,
+            COUNT(DISTINCT bcb.request_guid)::int                             AS bill_count,
+            COALESCE(SUM(bcb.collectedamount), 0)::double precision           AS total_collected
+        FROM balancecollectionby bcb
+        INNER JOIN lab_request_master m
+                ON m.requestguid  = bcb.request_guid
+               AND m.tenant_code  = bcb.tenant_code
+        LEFT JOIN paymode_master pm
+               ON pm.pmcode       = bcb.pmcode
+              AND pm.tenant_code  = bcb.tenant_code
+        WHERE bcb.tenant_code = @tenantCode
+          AND COALESCE(bcb.deleted, false) = false
+          AND COALESCE(m.isdeleted, false) = false
+          AND COALESCE(m.deleted, false)   = false
+          AND m.bill_category = 'HMS'
+          AND COALESCE(bcb.collected_date, bcb.entereddate) >= @fromdate
+          AND COALESCE(bcb.collected_date, bcb.entereddate) <  @todate
+          {extra}
+        GROUP BY bcb.pmcode,
+                 COALESCE(NULLIF(pm.name, ''), NULLIF(bcb.collection_type, ''), 'UNSPECIFIED')
+        ORDER BY total_collected DESC";
+
+            var rows = (await db.QueryAsync<HmsPayModeCollectionRow>(sql, p)).ToList();
+
+            double grand = rows.Sum(r => r.total_collected);
+            foreach (var r in rows)
+                r.percentage = grand > 0 ? Math.Round(r.total_collected * 100.0 / grand, 2) : 0;
+
+            return new HmsPayModeCollectionResponse
+            {
+                fromdate = fromdate.Date,
+                todate = todate.Date,
+                bhcode = bhcode,
+                cntcode = cntcode,
+                grand_total = grand,
+                total_receipts = rows.Sum(r => r.receipt_count),
+                items = rows
+            };
+        }
     }
 }

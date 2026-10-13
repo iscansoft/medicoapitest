@@ -12,7 +12,7 @@ namespace medico_backend.InventoryModel
         public string shortname { get; set; }
         public string description { get; set; }
 
-        public int categorycode { get; set; }
+        public int? categorycode { get; set; }
         public int subcategorycode { get; set; }
 
         public int hsncode { get; set; }

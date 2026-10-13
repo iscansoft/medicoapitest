@@ -770,4 +770,24 @@ namespace medico_backend.Model
         public int? enteredbhcode { get; set; }              // branch of the cash counter
         public int? cntcode { get; set; }                    // cash counter code (must have an open shift)
     }
+    public class HmsPayModeCollectionRow
+    {
+        public decimal? pmcode { get; set; }
+        public string? paymode_name { get; set; }
+        public int receipt_count { get; set; }
+        public int bill_count { get; set; }
+        public double total_collected { get; set; }
+        public double percentage { get; set; }          // filled in C#
+    }
+
+    public class HmsPayModeCollectionResponse
+    {
+        public DateTime fromdate { get; set; }
+        public DateTime todate { get; set; }
+        public int? bhcode { get; set; }
+        public int? cntcode { get; set; }
+        public double grand_total { get; set; }
+        public int total_receipts { get; set; }
+        public List<HmsPayModeCollectionRow> items { get; set; } = new();
+    }
 }
