@@ -235,15 +235,6 @@ namespace medico_backend.Class
 
         // ═══════════════════════════════════════════════════════
         // 4. SERVICE
-        // ═══════════════════════════════════════════════════════
-        // ═══════════════════════════════════════════════════════
-        // 4. SERVICE
-        // Pushes an 'IP_SERVICE' row into unbilledcharges the moment
-        // it's saved — rate resolved from test_master via tcode using
-        // the shared UnbilledChargesClass.GetTestMasterRate lookup.
-        // ═══════════════════════════════════════════════════════
-        // ═══════════════════════════════════════════════════════
-        // 4. SERVICE
         // ip_nurse_note_service stores only the clinical note
         // (service_name/action/remarks) — no pricing columns, same
         // as op_registration carries no fee fields. Pricing lives
@@ -417,44 +408,44 @@ namespace medico_backend.Class
             // ... existing INSERT INTO ip_nurse_note_medicine stays exactly as is ...
 
             // ── NEW: push to pharmacy queue (best-effort, same as FinalizeCaseSheet) ──
-            string pharmacyTag;
-            try
-            {
-                var pharmacyReq = new ReceivePrescriptionRequest
-                {
-                    custid = req.custid,
-                    op_id = null,
-                    ip_id = req.ip_id.ToString(),
-                    sheet_id = null,
-                    // one group per patient per day, so the pharmacist sees one list
-                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{req.ip_id.ToString()[..8]}",
-                    items = new List<PrescriptionQueueItem>
-            {
-                new PrescriptionQueueItem
-                {
-                    pr_det_id = data.med_id.ToString(),   // links queue row back to the nurse note
-                    drug_name = data.medicine_name,
-                    qty = data.quantity,
-                    route     = data.route,
-                    notes     = string.IsNullOrWhiteSpace(data.remarks)
-                                    ? (data.dose.HasValue ? $"Dose: {data.dose} {data.unit}" : null)
-                                    : data.remarks
-                }
-            }
-                };
+            //string pharmacyTag;
+            //try
+            //{
+            //    var pharmacyReq = new ReceivePrescriptionRequest
+            //    {
+            //        custid = req.custid,
+            //        op_id = null,
+            //        ip_id = req.ip_id.ToString(),
+            //        sheet_id = null,
+            //        // one group per patient per day, so the pharmacist sees one list
+            //        pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{req.ip_id.ToString()[..8]}",
+            //        items = new List<PrescriptionQueueItem>
+            //{
+            //    new PrescriptionQueueItem
+            //    {
+            //        pr_det_id = data.med_id.ToString(),   // links queue row back to the nurse note
+            //        drug_name = data.medicine_name,
+            //        qty = data.quantity,
+            //        route     = data.route,
+            //        notes     = string.IsNullOrWhiteSpace(data.remarks)
+            //                        ? (data.dose.HasValue ? $"Dose: {data.dose} {data.unit}" : null)
+            //                        : data.remarks
+            //    }
+            //}
+            //    };
 
-                var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
-                pharmacyTag = pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase)
-                    ? "|Pharmacy:Sent"
-                    : $"|Pharmacy:Failed({pharmRes})";
-            }
-            catch (Exception ex)
-            {
-                // Nurse note is already saved. Don't block the nurse on a pharmacy hiccup.
-                pharmacyTag = $"|Pharmacy:Failed({ex.Message})";
-            }
+            //    var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
+            //    pharmacyTag = pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase)
+            //        ? "|Pharmacy:Sent"
+            //        : $"|Pharmacy:Failed({pharmRes})";
+            //}
+            //catch (Exception ex)
+            //{
+            //    // Nurse note is already saved. Don't block the nurse on a pharmacy hiccup.
+            //    pharmacyTag = $"|Pharmacy:Failed({ex.Message})";
+            //}
 
-            return $"Success|Id:{data.med_id}{pharmacyTag}";   // was: return $"Success|Id:{data.med_id}";
+            return $"Success|Id:{data.med_id}";  // was: return $"Success|Id:{data.med_id}";
         }
         
 
@@ -898,7 +889,10 @@ namespace medico_backend.Class
                     tenant_code
                 });
 
-            return inserted ? "Success|Authorized" : "Success|AuthorizationUpdated";
+            string pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
+
+            return (inserted ? "Success|Authorized" : "Success|AuthorizationUpdated") + pharmacyTag;
+        
         }
 
         public async Task<NurseNoteAuthorizationModel?> GetNurseNoteAuthorization(Guid ip_id, string tenant_code)
@@ -908,6 +902,58 @@ namespace medico_backend.Class
                 @"SELECT * FROM ip_nurse_note_authorization
           WHERE ip_id = @ip_id AND tenant_code = @tenant_code",
                 new { ip_id, tenant_code });
+        }
+        // Pushes every not-yet-sent medicine of this admission to the pharmacy queue.
+        // Best-effort: authorization is already saved, so a pharmacy failure never blocks it.
+        private async Task<string> SendMedicinesToPharmacy(IDbConnection db, Guid ip_id, string tenant_code)
+        {
+            try
+            {
+                var meds = (await db.QueryAsync<NurseMedicineModel>(@"
+            SELECT * FROM ip_nurse_note_medicine
+            WHERE ip_id = @ip_id AND tenant_code = @tenant_code
+              AND isdeleted = false
+              AND COALESCE(sent_to_pharmacy, false) = false
+            ORDER BY entry_date, entry_time",
+                    new { ip_id, tenant_code })).ToList();
+
+                if (meds.Count == 0) return "|Pharmacy:NothingToSend";
+
+                var pharmacyReq = new ReceivePrescriptionRequest
+                {
+                    custid = meds[0].custid,
+                    op_id = null,
+                    ip_id = ip_id.ToString(),
+                    sheet_id = null,
+                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{ip_id.ToString()[..8]}",
+                    items = meds.Select(m => new PrescriptionQueueItem
+                    {
+                        pr_det_id = m.med_id.ToString(),   // links queue row back to the nurse note
+                        drug_name = m.medicine_name,
+                        qty = m.quantity,
+                        route = m.route,
+                        notes = string.IsNullOrWhiteSpace(m.remarks)
+                                    ? (m.dose.HasValue ? $"Dose: {m.dose} {m.unit}" : null)
+                                    : m.remarks
+                    }).ToList()
+                };
+
+                var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
+                if (!pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                    return $"|Pharmacy:Failed({pharmRes})";
+
+                await db.ExecuteAsync(@"
+            UPDATE ip_nurse_note_medicine
+            SET sent_to_pharmacy = true, updated_at = now()
+            WHERE med_id = ANY(@ids) AND tenant_code = @tenant_code",
+                    new { ids = meds.Select(m => m.med_id).ToArray(), tenant_code });
+
+                return $"|Pharmacy:Sent({meds.Count})";
+            }
+            catch (Exception ex)
+            {
+                return $"|Pharmacy:Failed({ex.Message})";
+            }
         }
     }
 }

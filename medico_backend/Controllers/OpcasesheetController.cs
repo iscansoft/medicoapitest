@@ -309,6 +309,22 @@ namespace medico_backend.Controllers
 
             return Ok(result);
         }
+        [HttpPost("prescription/save")]
+        public async Task<IActionResult> SavePrescriptionOnly([FromBody] SavePrescriptionOnlyRequest req)
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.SavePrescriptionOnly(req, tenant);
+            return res.StartsWith("Success") ? Ok(res) : BadRequest(res);
+        }
 
+        [HttpGet("prescription/list")]
+        public async Task<IActionResult> GetPrescriptionList([FromQuery] string? op_id, [FromQuery] string? ip_id)
+        {
+            if (string.IsNullOrWhiteSpace(op_id) && string.IsNullOrWhiteSpace(ip_id))
+                return BadRequest("op_id or ip_id is required");
+            var tenant = Request.Headers["tenant_code"].ToString();
+            return Ok(await cls.GetPrescriptionList(op_id, ip_id, tenant));
+        }
     }
 }

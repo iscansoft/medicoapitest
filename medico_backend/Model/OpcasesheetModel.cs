@@ -453,7 +453,7 @@ namespace medico_backend.Model
         // Prescription
         public CaseSheetPrescriptionViewModel? prescription { get; set; }
 
-
+        public List<CaseSheetPrescriptionViewModel> prescription_list { get; set; } = new();
         // Investigation
         public CaseSheetInvestigationViewModel? investigation { get; set; }
     }
@@ -534,5 +534,12 @@ namespace medico_backend.Model
         public int? dcode { get; set; }
         public string? notes { get; set; }
     }
-
+    public class SavePrescriptionOnlyRequest
+    {
+        public string? op_id { get; set; }
+        public string? ip_id { get; set; }
+        public decimal custid { get; set; }
+        public int dcode { get; set; }
+        public CaseSheetPrescriptionRequest prescription { get; set; } = new();
+    }
 }
