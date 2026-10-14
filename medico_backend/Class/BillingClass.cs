@@ -1950,45 +1950,74 @@ namespace medico_backend.Class
             using var db = GetConnection();
 
             var p = new DynamicParameters();
-            p.Add("tenantCode", tenantCode);
-            p.Add("fromdate", fromdate.Date);
-            p.Add("todate", todate.Date.AddDays(1));   // exclusive upper bound
+            p.Add("t", tenantCode);
+            p.Add("from", fromdate.Date);
+            p.Add("to", todate.Date.AddDays(1));   // exclusive upper bound
 
             string extra = "";
-            if (bhcode.HasValue) { extra += " AND bcb.bhcode = @bhcode "; p.Add("bhcode", bhcode.Value); }
-            if (cntcode.HasValue) { extra += " AND bcb.cntcode = @cntcode "; p.Add("cntcode", cntcode.Value); }
+            string extraRm = "";
+            if (bhcode.HasValue) { extra += " AND bcb.bhcode = @bh "; extraRm += " AND rm.enteredbhcode = @bh "; p.Add("bh", bhcode.Value); }
+            if (cntcode.HasValue) { extra += " AND bcb.cntcode = @cnt "; extraRm += " AND rm.cntcode = @cnt "; p.Add("cnt", cntcode.Value); }
 
-            string sql = $@"
+            // Money-in rows only. ADVANCE usage rows are excluded (already counted at deposit time).
+            var details = (await db.QueryAsync<HmsPayModeSourceRow>($@"
         SELECT
-            bcb.pmcode                                                        AS pmcode,
-            COALESCE(NULLIF(pm.name, ''), NULLIF(bcb.collection_type, ''), 'UNSPECIFIED') AS paymode_name,
+            CASE WHEN rm.receipttype = 'DUE'     THEN 'DUE'
+                 WHEN rm.receipttype = 'ADVANCE' THEN 'ADVANCE'
+                 ELSE 'BILL' END                                              AS source,
+            UPPER(COALESCE(NULLIF(bcb.collection_type, ''), 'UNSPECIFIED'))   AS paymode,
             COUNT(DISTINCT bcb.receipt_guid)::int                             AS receipt_count,
             COUNT(DISTINCT bcb.request_guid)::int                             AS bill_count,
             COALESCE(SUM(bcb.collectedamount), 0)::double precision           AS total_collected
         FROM balancecollectionby bcb
-        INNER JOIN lab_request_master m
-                ON m.requestguid  = bcb.request_guid
-               AND m.tenant_code  = bcb.tenant_code
-        LEFT JOIN paymode_master pm
-               ON pm.pmcode       = bcb.pmcode
-              AND pm.tenant_code  = bcb.tenant_code
-        WHERE bcb.tenant_code = @tenantCode
-          AND COALESCE(bcb.deleted, false) = false
-          AND COALESCE(m.isdeleted, false) = false
-          AND COALESCE(m.deleted, false)   = false
-          AND m.bill_category = 'HMS'
-          AND COALESCE(bcb.collected_date, bcb.entereddate) >= @fromdate
-          AND COALESCE(bcb.collected_date, bcb.entereddate) <  @todate
+        INNER JOIN receipt_master rm
+                ON rm.receiptguid = bcb.receipt_guid
+               AND rm.tenant_code = bcb.tenant_code
+        LEFT JOIN lab_request_master m
+               ON m.requestguid = bcb.request_guid
+              AND m.tenant_code = bcb.tenant_code
+        WHERE bcb.tenant_code = @t
+          AND COALESCE(bcb.deleted, false)  = false
+          AND COALESCE(rm.isdeleted, false) = false
+          AND COALESCE(rm.deleted, false)   = false
+          AND UPPER(COALESCE(bcb.collection_type, '')) <> 'ADVANCE'
+          AND (bcb.request_guid IS NULL
+               OR (m.bill_category = 'HMS'
+                   AND COALESCE(m.isdeleted, false) = false
+                   AND COALESCE(m.deleted, false)   = false))
+          AND COALESCE(bcb.collected_date, bcb.entereddate) >= @from
+          AND COALESCE(bcb.collected_date, bcb.entereddate) <  @to
           {extra}
-        GROUP BY bcb.pmcode,
-                 COALESCE(NULLIF(pm.name, ''), NULLIF(bcb.collection_type, ''), 'UNSPECIFIED')
-        ORDER BY total_collected DESC";
+        GROUP BY 1, 2
+        ORDER BY 2, 1", p)).ToList();
 
-            var rows = (await db.QueryAsync<HmsPayModeCollectionRow>(sql, p)).ToList();
+            // Advance refunds (no balancecollectionby row is written for refunds)
+            double refunded = await db.ExecuteScalarAsync<double>($@"
+        SELECT COALESCE(SUM(rm.amountpaid), 0)::double precision
+        FROM receipt_master rm
+        WHERE rm.tenant_code = @t
+          AND rm.receipttype = 'ADVANCE_REFUND'
+          AND COALESCE(rm.isdeleted, false) = false
+          AND rm.receiptdate >= @from AND rm.receiptdate < @to
+          {extraRm}", p);
 
-            double grand = rows.Sum(r => r.total_collected);
-            foreach (var r in rows)
-                r.percentage = grand > 0 ? Math.Round(r.total_collected * 100.0 / grand, 2) : 0;
+            var byPaymode = details
+                .GroupBy(d => d.paymode)
+                .Select(g => new HmsPayModeTotalRow
+                {
+                    paymode = g.Key,
+                    bill_amount = Math.Round(g.Where(x => x.source == "BILL").Sum(x => x.total_collected), 2),
+                    due_amount = Math.Round(g.Where(x => x.source == "DUE").Sum(x => x.total_collected), 2),
+                    advance_amount = Math.Round(g.Where(x => x.source == "ADVANCE").Sum(x => x.total_collected), 2),
+                    total = Math.Round(g.Sum(x => x.total_collected), 2)
+                })
+                .OrderByDescending(x => x.total)
+                .ToList();
+
+            double bill = byPaymode.Sum(x => x.bill_amount);
+            double due = byPaymode.Sum(x => x.due_amount);
+            double adv = byPaymode.Sum(x => x.advance_amount);
+            double grand = Math.Round(bill + due + adv, 2);
 
             return new HmsPayModeCollectionResponse
             {
@@ -1996,9 +2025,209 @@ namespace medico_backend.Class
                 todate = todate.Date,
                 bhcode = bhcode,
                 cntcode = cntcode,
+                bill_total = Math.Round(bill, 2),
+                due_total = Math.Round(due, 2),
+                advance_total = Math.Round(adv, 2),
                 grand_total = grand,
-                total_receipts = rows.Sum(r => r.receipt_count),
-                items = rows
+                advance_refunded = Math.Round(refunded, 2),
+                net_total = Math.Round(grand - refunded, 2),
+                by_paymode = byPaymode,
+                details = details
+            };
+        }
+        public async Task<HmsOpCategoryCollectionResponse> GetOpCategoryCollectionReport(
+    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
+        {
+            using var db = GetConnection();
+
+            var p = new DynamicParameters();
+            p.Add("t", tenantCode);
+            p.Add("from", fromdate.Date);
+            p.Add("to", todate.Date.AddDays(1));   // exclusive
+
+            string extra = "";
+            if (bhcode.HasValue) { extra += " AND lrm.enteredbhcode = @bh "; p.Add("bh", bhcode.Value); }
+            if (cntcode.HasValue) { extra += " AND lrm.cntcode = @cnt "; p.Add("cnt", cntcode.Value); }
+            if (dcode.HasValue) { extra += " AND op.dcode = @dcode "; p.Add("dcode", dcode.Value); }
+
+            string sql = $@"
+    WITH base AS (
+        SELECT
+            op.op_id::text                                   AS op_id,
+            op.op_no,
+            op.token_no,
+            op.visit_date::timestamp                         AS visit_date,
+            lrm.name                                         AS patient_name,
+            lrm.custid                                       AS custid,
+            lrm.requestguid                                  AS requestguid,
+            lrm.requestsnoprint                              AS bill_no,
+            COALESCE(lrm.totalamount, 0)                     AS bill_total,
+            COALESCE(lrm.paidamount, 0)                      AS bill_paid,
+            UPPER(COALESCE(lrd.chargetype, ''))              AS chargetype,
+            COALESCE(NULLIF(lrd.item_name, ''), tm.name, '') AS item_name,
+            COALESCE(lrd.testamount, 0)                      AS gross,
+            COALESCE(lrd.newamount, lrd.testamount, 0)       AS line_net,
+            COALESCE(gm.name, '')                            AS groupname,
+            COALESCE(gm.isscan, false)                       AS isscan,
+            svc.service_id,
+            svc.service_name,
+            SUM(COALESCE(lrd.newamount, lrd.testamount, 0))
+                OVER (PARTITION BY lrm.requestguid)          AS bill_lines_total
+        FROM lab_request_master lrm
+        INNER JOIN op_registration op
+                ON op.op_id::text   = COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, ''))
+               AND op.tenant_code   = lrm.tenant_code
+               AND COALESCE(op.isdeleted, false) = false
+        INNER JOIN lab_request_details lrd
+                ON lrd.requestguid  = lrm.requestguid
+               AND COALESCE(lrd.isdeleted, false) = false
+        LEFT JOIN test_master tm
+               ON tm.tcode = lrd.tcode AND tm.tenant_code = lrm.tenant_code
+        LEFT JOIN group_master gm
+               ON gm.gcode = tm.gcode AND gm.tenant_code = lrm.tenant_code
+        LEFT JOIN LATERAL (
+            SELECT s.service_id, s.service_name
+              FROM service_type_master s
+             WHERE s.tenant_code = lrm.tenant_code
+               AND COALESCE(s.deleted, false) = false
+               AND LOWER(TRIM(s.service_name)) =
+                   LOWER(TRIM(COALESCE(NULLIF(lrd.item_name, ''), tm.name, '')))
+             LIMIT 1
+        ) svc ON true
+        WHERE lrm.tenant_code = @t
+          AND lrm.bill_category = 'HMS'
+          AND COALESCE(lrm.isdeleted, false) = false
+          AND COALESCE(lrm.deleted, false)   = false
+          AND op.visit_date >= @from AND op.visit_date < @to
+          {extra}
+    ),
+    cat AS (
+        SELECT b.*,
+            CASE
+                WHEN b.chargetype = 'CONSULTATION' THEN 'CONSULTATION'
+                WHEN b.chargetype = 'DRESSING'
+                     OR LOWER(b.item_name) LIKE 'dressing%' THEN 'DRESSING'
+                WHEN b.chargetype = 'SERVICE'
+                     OR b.service_id IS NOT NULL THEN 'SERVICE'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'physio|fisho|therap' THEN 'PHYSIO'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'echo|doppler' THEN 'ECHO'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'ecg|electrocardio' THEN 'ECG'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'x-?ray|radio' THEN 'XRAY'
+                WHEN b.isscan
+                     OR LOWER(b.groupname || ' ' || b.item_name) ~ 'scan|usg|ultrasound|\m(ct|mri)\M' THEN 'SCAN'
+                ELSE 'LAB'
+            END AS category,
+            CASE WHEN b.bill_lines_total > 0 THEN b.line_net / b.bill_lines_total ELSE 0 END AS ratio
+        FROM base b
+    )
+    SELECT op_id, op_no, token_no, visit_date, patient_name, custid, requestguid, bill_no,
+           item_name, service_id, service_name, category,
+           gross::float8                 AS gross,
+           (bill_total * ratio)::float8  AS net,
+           (bill_paid  * ratio)::float8  AS paid
+    FROM cat
+    ORDER BY visit_date, op_no";
+
+            var lines = (await db.QueryAsync<HmsOpCategoryLine>(sql, p, commandTimeout: 60)).ToList();
+
+            double R(double v) => Math.Round(v, 2);
+
+            // ── Category summary ─────────────────────────────────────────────
+            var order = new[] { "CONSULTATION", "DRESSING", "SERVICE", "LAB", "SCAN", "PHYSIO", "ECG", "XRAY", "ECHO" };
+            var optional = new HashSet<string> { "XRAY", "ECHO" };
+
+            var categories = order
+                .Select(c =>
+                {
+                    var g = lines.Where(l => l.category == c).ToList();
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), gross = g.Sum(x => x.gross);
+                    return new HmsOpCategoryAmountRow
+                    {
+                        category = c,
+                        visit_count = g.Select(x => x.op_id).Distinct().Count(),
+                        bill_count = g.Select(x => x.requestguid).Distinct().Count(),
+                        item_count = g.Count,
+                        gross_amount = R(gross),
+                        discount_amount = R(Math.Max(gross - net, 0)),
+                        net_amount = R(net),
+                        collected_amount = R(paid),
+                        due_amount = R(Math.Max(net - paid, 0))
+                    };
+                })
+                .Where(r => !optional.Contains(r.category) || r.item_count > 0)
+                .ToList();
+
+            // ── Per-service breakdown (service master) ───────────────────────
+            var services = lines
+                .Where(l => l.category == "SERVICE")
+                .GroupBy(l => new { l.service_id, name = l.service_name ?? l.item_name ?? "Service" })
+                .Select(g =>
+                {
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid);
+                    return new HmsOpServiceAmountRow
+                    {
+                        service_id = g.Key.service_id,
+                        service_name = g.Key.name,
+                        visit_count = g.Select(x => x.op_id).Distinct().Count(),
+                        item_count = g.Count(),
+                        tokens = string.Join(", ", g.Select(x => x.token_no)
+                                                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                                                    .Distinct().Take(50)),
+                        net_amount = R(net),
+                        collected_amount = R(paid),
+                        due_amount = R(Math.Max(net - paid, 0))
+                    };
+                })
+                .OrderByDescending(s => s.net_amount)
+                .ToList();
+
+            // ── Per-visit rows ───────────────────────────────────────────────
+            var visits = lines
+                .GroupBy(l => l.op_id)
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var row = new HmsOpVisitCategoryRow
+                    {
+                        op_id = g.Key,
+                        op_no = first.op_no,
+                        token_no = first.token_no,
+                        visit_date = first.visit_date,
+                        custid = first.custid,
+                        patient_name = first.patient_name,
+                        bill_nos = string.Join(", ", g.Select(x => x.bill_no).Where(x => x != null).Distinct())
+                    };
+                    foreach (var c in order)
+                    {
+                        var cl = g.Where(x => x.category == c).ToList();
+                        if (cl.Count == 0 && optional.Contains(c)) continue;
+                        row.net_by_category[c] = R(cl.Sum(x => x.net));
+                        row.collected_by_category[c] = R(cl.Sum(x => x.paid));
+                    }
+                    row.net_amount = R(g.Sum(x => x.net));
+                    row.collected_amount = R(g.Sum(x => x.paid));
+                    row.due_amount = R(Math.Max(row.net_amount - row.collected_amount, 0));
+                    return row;
+                })
+                .OrderBy(v => v.visit_date).ThenBy(v => v.op_no)
+                .ToList();
+
+            double totalNet = lines.Sum(l => l.net), totalPaid = lines.Sum(l => l.paid);
+
+            return new HmsOpCategoryCollectionResponse
+            {
+                fromdate = fromdate.Date,
+                todate = todate.Date,
+                bhcode = bhcode,
+                cntcode = cntcode,
+                dcode = dcode,
+                total_visits = visits.Count,
+                total_net = R(totalNet),
+                total_collected = R(totalPaid),
+                total_due = R(Math.Max(totalNet - totalPaid, 0)),
+                categories = categories,
+                services = services,
+                visits = visits
             };
         }
     }
