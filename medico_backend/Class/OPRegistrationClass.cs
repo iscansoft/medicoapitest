@@ -123,12 +123,12 @@ namespace medico_backend.Class
         (op_id, op_no, booking_id, booking_no, slot_detail_id, custid, dcode,
          department_code, visit_type, reg_type, visit_date,
          token_no, queue_no, visit_status, notes,
-         tenant_code,usercode, isdeleted, created_at, updated_at)
+         tenant_code,usercode,walkin_time, isdeleted, created_at, updated_at)
        VALUES
         (@op_id, @op_no, @booking_id, @booking_no, @slot_detail_id, @custid, @dcode,
          @department_code, @visit_type, @reg_type, @visit_date,
          @token_no, @queue_no, @visit_status, @notes,
-         @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)", new
+         @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)", new
                     {
                         data.op_id,
                         data.op_no,
@@ -147,6 +147,7 @@ namespace medico_backend.Class
                         data.notes,
                         data.tenant_code,
                         data.usercode,
+                        data.walkin_time,
                         data.isdeleted,
                         data.created_at,
                         data.updated_at
@@ -337,7 +338,7 @@ namespace medico_backend.Class
 SELECT
     o.op_id, o.op_no, o.booking_id, o.booking_no, o.slot_detail_id,
     o.custid, o.dcode, o.department_code, o.visit_type, o.reg_type,
-    o.visit_date, o.token_no, o.queue_no, o.visit_status, o.notes,
+    o.visit_date, o.token_no, o.queue_no, o.visit_status, o.notes,o.walkin_time,
     o.is_direct_walkin, o.duty_dcode, o.transferred_to_dcode, o.transfer_reason,
     o.is_dressing, o.tenant_code,o.usercode, o.isdeleted, o.created_at, o.updated_at,o.service_id,
     cl.name AS patient_name,
@@ -609,6 +610,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         service_id = req.service_id,       // NEW
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time = req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -629,12 +631,12 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                          reg_type, visit_date, token_no, queue_no, visit_status, notes,
                          is_direct_walkin, duty_dcode, is_dressing, service_id,
-                         tenant_code,usercode, isdeleted, created_at, updated_at)
+                         tenant_code,usercode, walkin_time,isdeleted, created_at, updated_at)
                         VALUES
                         (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                          @reg_type, @visit_date, @token_no, @queue_no, @visit_status, @notes,
                          @is_direct_walkin, @duty_dcode, @is_dressing, @service_id,
-                         @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                         @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)",
                                 new
                                 {
                                     noSlotData.op_id,
@@ -656,6 +658,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                     noSlotData.service_id,
                                     noSlotData.tenant_code,
                                     noSlotData.usercode,
+                                    noSlotData.walkin_time,
                                     noSlotData.isdeleted,
                                     noSlotData.created_at,
                                     noSlotData.updated_at
@@ -744,6 +747,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     service_id = req.service_id,       // NEW
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -768,14 +772,14 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         op_id, op_no, custid, dcode, department_code, slot_detail_id,
                         visit_type, reg_type, visit_date, token_no, queue_no, visit_status,
                         notes, is_direct_walkin, duty_dcode, is_dressing, service_id,
-                        tenant_code,usercode, isdeleted, created_at, updated_at
+                        tenant_code,usercode,walkin_time, isdeleted, created_at, updated_at
                     )
                     VALUES
                     (
                         @op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id,
                         @visit_type, @reg_type, @visit_date, @token_no, @queue_no, @visit_status,
                         @notes, @is_direct_walkin, @duty_dcode, @is_dressing, @service_id,
-                        @tenant_code,@usercode, @isdeleted, @created_at, @updated_at
+                        @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at
                     )",
                             new
                             {
@@ -798,6 +802,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                 data.service_id,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -958,6 +963,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                             duty_dcode = op.duty_dcode,
                             tenant_code = tenant_code,
                             usercode = req.usercode ?? op.usercode,
+                            walkin_time = op.walkin_time,
                             isdeleted = false,
                             created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                             updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -968,13 +974,13 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     (
                         op_id, op_no, custid, dcode, department_code, slot_detail_id,
                         visit_type, reg_type, visit_date, token_no, queue_no, visit_status,
-                        notes, is_direct_walkin, duty_dcode, tenant_code, usercode,isdeleted, created_at, updated_at
+                        notes, is_direct_walkin, duty_dcode, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at
                     )
                     VALUES
                     (
                         @op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id,
                         @visit_type, @reg_type, @visit_date, @token_no, @queue_no, @visit_status,
-                        @notes, @is_direct_walkin, @duty_dcode, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at
+                        @notes, @is_direct_walkin, @duty_dcode, @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at
                     )",
                             new
                             {
@@ -995,6 +1001,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                 newOp.duty_dcode,
                                 newOp.tenant_code,
                                 newOp.usercode,
+                                newOp.walkin_time,
                                 newOp.isdeleted,
                                 newOp.created_at,
                                 newOp.updated_at
@@ -1101,6 +1108,7 @@ AND b.tenant_code = @tenant_code
             op.transferred_to_dcode,
             op.transfer_reason,
             op.usercode,
+            op.walkin_time,
             op.created_at         AS op_created_at,
             op.updated_at         AS op_updated_at,
             c.custcode,
@@ -1292,6 +1300,7 @@ AND b.tenant_code = @tenant_code
                         is_direct_walkin = true,
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time=req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1301,11 +1310,11 @@ AND b.tenant_code = @tenant_code
                 INSERT INTO op_registration
                 (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                  reg_type, visit_date, token_no, queue_no, is_dressing,
-                 visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                 visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                 VALUES
                 (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                  @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-                 @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                 @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
                         new
                         {
                             noSlotData.op_id,
@@ -1325,6 +1334,7 @@ AND b.tenant_code = @tenant_code
                             noSlotData.is_direct_walkin,
                             noSlotData.tenant_code,
                             noSlotData.usercode,
+                            noSlotData.walkin_time,
                             noSlotData.isdeleted,
                             noSlotData.created_at,
                             noSlotData.updated_at
@@ -1397,6 +1407,7 @@ AND b.tenant_code = @tenant_code
                     is_direct_walkin = true,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1406,11 +1417,11 @@ AND b.tenant_code = @tenant_code
             INSERT INTO op_registration
             (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
              reg_type, visit_date, token_no, queue_no, is_dressing,
-             visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+             visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
             VALUES
             (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
              @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@isdeleted, @created_at, @updated_at)",
+             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
                     new
                     {
                         data.op_id,
@@ -1430,6 +1441,7 @@ AND b.tenant_code = @tenant_code
                         data.is_direct_walkin,
                         data.tenant_code,
                         data.usercode,
+                        data.walkin_time,
                         data.isdeleted,
                         data.created_at,
                         data.updated_at
@@ -1953,6 +1965,7 @@ AND b.tenant_code = @tenant_code
                         service_id = req.service_id,
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time=req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1972,11 +1985,11 @@ AND b.tenant_code = @tenant_code
                         INSERT INTO op_registration
                         (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                          reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                         visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                         visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                         VALUES
                         (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                          @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                         @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                         @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)",
                                 new
                                 {
                                     noSlotData.op_id,
@@ -1997,6 +2010,7 @@ AND b.tenant_code = @tenant_code
                                     noSlotData.is_direct_walkin,
                                     noSlotData.tenant_code,
                                     noSlotData.usercode,
+                                    noSlotData.walkin_time,
                                     noSlotData.isdeleted,
                                     noSlotData.created_at,
                                     noSlotData.updated_at
@@ -2058,6 +2072,7 @@ AND b.tenant_code = @tenant_code
                     service_id = req.service_id,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -2080,11 +2095,11 @@ AND b.tenant_code = @tenant_code
                     INSERT INTO op_registration
                     (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                      reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                     visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                     visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                     VALUES
                     (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                      @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                     @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                     @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
                             new
                             {
                                 data.op_id,
@@ -2105,6 +2120,7 @@ AND b.tenant_code = @tenant_code
                                 data.is_direct_walkin,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -2279,6 +2295,7 @@ AND b.tenant_code = @tenant_code
                     service_id = primaryType == "CONSULTATION" ? null : req.primary_service_id,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -2342,11 +2359,11 @@ AND b.tenant_code = @tenant_code
                             INSERT INTO op_registration
                             (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                              reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                             visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                             visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                             VALUES
                             (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                              @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@isdeleted, @created_at, @updated_at)",
+                             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
                             new
                             {
                                 data.op_id,
@@ -2367,6 +2384,7 @@ AND b.tenant_code = @tenant_code
                                 data.is_direct_walkin,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -2702,7 +2720,17 @@ AND b.tenant_code = @tenant_code
                 return ex.Message;
             }
         }
+        // null/empty is allowed (field optional); otherwise name must exist for this tenant
+        private async Task<string?> ValidateWalkinTime(IDbConnection db, string? walkin_time, string tenant_code)
+        {
+            if (string.IsNullOrWhiteSpace(walkin_time)) return null;
 
+            return await db.ExecuteScalarAsync<string?>(
+                @"SELECT status_name FROM op_status_master
+          WHERE tenant_code = @tenant_code AND deleted = false AND is_active = true
+          AND LOWER(status_name) = LOWER(@walkin_time) LIMIT 1",
+                new { tenant_code, walkin_time = walkin_time.Trim() });
+        }
 
     }
 }

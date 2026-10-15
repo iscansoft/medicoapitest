@@ -36,6 +36,8 @@ namespace medico_backend.Model
             public bool is_dressing { get; set; } = false;
             public int? service_id { get; set; }
             public int? usercode { get; set; }
+            public string? walkin_time { get; set; }
+
 
         }
 
@@ -113,6 +115,8 @@ namespace medico_backend.Model
             public string? notes { get; set; }
             public int? service_id { get; set; }
             public int? usercode { get; set; }
+            public string? walkin_time { get; set; }
+
         }
 
         // Transfer to another doctor after duty doctor consultation
@@ -156,6 +160,8 @@ namespace medico_backend.Model
             public Guid? slot_detail_id { get; set; }
             public string? notes { get; set; }
             public int? usercode { get; set; }
+            public string? walkin_time { get; set; }
+
         }
         public class CancelOpRequest
         {
@@ -171,6 +177,8 @@ namespace medico_backend.Model
             public Guid? slot_detail_id { get; set; }
             public string? notes { get; set; }
             public int? usercode { get; set; }
+            public string? walkin_time { get; set; }
+
         }
         public class ComboRegistrationItemRequest
         {
@@ -197,6 +205,8 @@ namespace medico_backend.Model
             // Everything else gets billed onto the SAME op_id, no separate token
             public List<ComboRegistrationItemRequest> additional_items { get; set; } = new();
             public int? usercode { get; set; }
+            public string? walkin_time { get; set; }
+
         }
         // Add services (and/or dressing) to an ALREADY-REGISTERED op visit.
         // No new op_registration row, no token — purely billing line items
