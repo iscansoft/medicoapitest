@@ -25,6 +25,8 @@ namespace medico_backend.Class
             {
                 string sql = @"
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_bill_header_footer_image BOOLEAN DEFAULT true;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_ip_bill_header_footer_image BOOLEAN DEFAULT true;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_op_bill_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_report_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_culture_header_footer_image BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS show_receipt_header_footer_image BOOLEAN DEFAULT true;

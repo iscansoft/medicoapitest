@@ -78,6 +78,8 @@ public class LabSettingModel
 
         // Header & Footer Image Display Toggles per Report Type
         public bool? show_bill_header_footer_image { get; set; } = true;
+        public bool? show_ip_bill_header_footer_image { get; set; } = true;
+        public bool? show_op_bill_header_footer_image { get; set; } = true;
         public bool? show_report_header_footer_image { get; set; } = true;
         public bool? show_culture_header_footer_image { get; set; } = true;
         public bool? show_receipt_header_footer_image { get; set; } = true;

@@ -19,7 +19,13 @@ namespace medico_backend.Controllers
             _dsClass = dsClass;
         }
 
-        private string T => Request.Headers["tenant_code"].ToString();
+        private string T => !string.IsNullOrWhiteSpace(Request.Headers["tenant_code"]) 
+            ? Request.Headers["tenant_code"].ToString() 
+            : (!string.IsNullOrWhiteSpace(Request.Query["tenant_code"]) 
+                ? Request.Query["tenant_code"].ToString() 
+                : (!string.IsNullOrWhiteSpace(Request.Query["tenantcode"]) 
+                    ? Request.Query["tenantcode"].ToString() 
+                    : ""));
         private int Me => int.Parse(User.FindFirst("user_code")?.Value ?? "1");
 
         [HttpGet("getstatement")]
@@ -127,6 +133,67 @@ namespace medico_backend.Controllers
             return Ok(res);
         }
 
+
+                [AllowAnonymous]
+        [HttpGet("getadvancereceipt")]
+        public async Task<IActionResult> GetAdvanceReceipt(
+            [FromQuery] string? receiptguid = null, 
+            [FromQuery] bool? isletterhead = false,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null,
+            [FromQuery] string? format = null,
+            [FromQuery] int? custid = null,
+            [FromQuery] string? admissionno = null,
+            [FromQuery] string? pageformat = "A4")
+        {
+            string t = !string.IsNullOrEmpty(tenantcode) ? tenantcode : (!string.IsNullOrEmpty(tenant_code) ? tenant_code : T);
+            var res = await _reportClass.GetAdvanceReceiptPDF(receiptguid, t, isletterhead, custid, admissionno, pageformat);
+            if (res == null) return NotFound("Advance receipt not found.");
+
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
+            return Ok(res);
+        }
+
+        [AllowAnonymous]
+        [HttpGet("getrefundreceipt")]
+        public async Task<IActionResult> GetRefundReceipt(
+            [FromQuery] string? receiptguid = null, 
+            [FromQuery] bool? isletterhead = false,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null,
+            [FromQuery] string? format = null,
+            [FromQuery] int? custid = null,
+            [FromQuery] string? admissionno = null,
+            [FromQuery] string? pageformat = "A4")
+        {
+            string t = !string.IsNullOrEmpty(tenantcode) ? tenantcode : (!string.IsNullOrEmpty(tenant_code) ? tenant_code : T);
+            var res = await _reportClass.GetRefundReceiptPDF(receiptguid, t, isletterhead, custid, admissionno, pageformat);
+            if (res == null) return NotFound("Refund receipt not found.");
+
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
+            return Ok(res);
+        }
+
+        
+
         [HttpGet("getbill")]
         public async Task<IActionResult> Bill([FromQuery] Guid requestguid, [FromQuery] bool? isletterhead = false)
         {
@@ -181,47 +248,96 @@ namespace medico_backend.Controllers
             return Ok(res);
         }
 
+        [AllowAnonymous]
         [HttpGet("getopcasesheet")]
-        public async Task<IActionResult> GetOPCasesheet([FromQuery] Guid sheet_id, [FromQuery] bool? isletterhead = false)
+        public async Task<IActionResult> GetOPCasesheet([FromQuery] Guid sheet_id, [FromQuery] bool? isletterhead = false, [FromQuery] string? format = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
             var res = await _reportClass.OPCasesheetPDF(sheet_id, T, isletterhead);
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
             return Ok(res);
         }
 
+        [AllowAnonymous]
         [HttpGet("getipcasesheet")]
-        public async Task<IActionResult> GetIPCasesheet([FromQuery] Guid sheet_id, [FromQuery] bool? isletterhead = false)
+        public async Task<IActionResult> GetIPCasesheet([FromQuery] Guid sheet_id, [FromQuery] bool? isletterhead = false, [FromQuery] string? format = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
             var res = await _reportClass.IPCasesheetPDF(sheet_id, T, isletterhead);
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
             return Ok(res);
         }
 
+        [AllowAnonymous]
         [HttpGet("getdischargesummary")]
-        public async Task<IActionResult> GetDischargeSummary([FromQuery] Guid pds_id, [FromQuery] bool? isletterhead = false)
+        public async Task<IActionResult> GetDischargeSummary([FromQuery] Guid pds_id, [FromQuery] bool? isletterhead = false, [FromQuery] string? format = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
             var res = await _dsClass.GetDischargeSummaryReportPdfAsync(pds_id, T, isletterhead);
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
             return Ok(res);
         }
 
+        [AllowAnonymous]
         [HttpGet("getconsolidatedbill")]
         public async Task<IActionResult> GetConsolidatedBill(
-            [FromQuery] Guid requestguid,
-            [FromQuery] bool includeMedicines = true,
+            [FromQuery] Guid requestguid, 
+            [FromQuery] bool includeMedicines = true, 
             [FromQuery] bool? isletterhead = false,
-            [FromQuery] Guid? op_id = null)
+            [FromQuery] Guid? op_id = null,
+            [FromQuery] string? format = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
             var res = await _reportClass.ConsolidatedBillPDF(requestguid, includeMedicines, T, isletterhead, op_id);
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
             return Ok(res);
         }
 
@@ -294,10 +410,10 @@ namespace medico_backend.Controllers
                 return BadRequest(new { success = false, message = "BillNo is required." });
 
             var res = await _reportClass.GetPharmacyBillAsync(billNo, T, orientation ?? "portrait");
-
+            
             if (res == null)
                 return NotFound(new { success = false, message = "Pharmacy bill not found." });
-
+                
             return Ok(res);
         }
 
@@ -323,10 +439,10 @@ namespace medico_backend.Controllers
 
         [HttpGet("getconsolidatedlists")]
         public async Task<IActionResult> GetConsolidatedLists(
-            [FromQuery] DateTime fromdate,
-            [FromQuery] DateTime todate,
-            [FromQuery] string? type = "ALL",
-            [FromQuery] string? search = null,
+            [FromQuery] DateTime fromdate, 
+            [FromQuery] DateTime todate, 
+            [FromQuery] string? type = "ALL", 
+            [FromQuery] string? search = null, 
             [FromQuery] bool? isletterhead = false)
         {
             if (string.IsNullOrWhiteSpace(T))
@@ -338,44 +454,15 @@ namespace medico_backend.Controllers
 
         [HttpGet("getconsolidatedlistsdata")]
         public async Task<IActionResult> GetConsolidatedListsData(
-            [FromQuery] DateTime fromdate,
-            [FromQuery] DateTime todate,
-            [FromQuery] string? type = "ALL",
+            [FromQuery] DateTime fromdate, 
+            [FromQuery] DateTime todate, 
+            [FromQuery] string? type = "ALL", 
             [FromQuery] string? search = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
             var res = await _reportClass.GetConsolidatedListsDataAsync(T, fromdate, todate, type, search);
-            return Ok(res);
-        }
-
-        [HttpGet("labreportlists")]
-        public async Task<IActionResult> GetLabReportLists(
-            [FromQuery] DateTime fromdate,
-            [FromQuery] DateTime todate,
-            [FromQuery] string? type = "ALL",
-            [FromQuery] string? search = null,
-            [FromQuery] bool? isletterhead = false)
-        {
-            if (string.IsNullOrWhiteSpace(T))
-                return BadRequest(new { success = false, message = "tenant_code header required" });
-
-            var res = await _reportClass.LabReportListsReportPDF(fromdate, todate, T, type, search, isletterhead);
-            return Ok(res);
-        }
-
-        [HttpGet("labreportlistsdata")]
-        public async Task<IActionResult> GetLabReportListsData(
-            [FromQuery] DateTime fromdate,
-            [FromQuery] DateTime todate,
-            [FromQuery] string? type = "ALL",
-            [FromQuery] string? search = null)
-        {
-            if (string.IsNullOrWhiteSpace(T))
-                return BadRequest(new { success = false, message = "tenant_code header required" });
-
-            var res = await _reportClass.GetLabReportListsDataAsync(T, fromdate, todate, type, search);
             return Ok(res);
         }
     }
