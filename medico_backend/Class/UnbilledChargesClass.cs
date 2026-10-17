@@ -307,89 +307,143 @@ namespace medico_backend.Class
                         .ToList();
                 }
                 int inserted = 0, skippedExisting = 0, skippedNoRoomType = 0;
+                async Task<List<dynamic>> LoadHeads(int? rmt)
+                {
+                    try
+                    {
+                        return (await db.QueryAsync<dynamic>(
+                            @"SELECT COALESCE(g.subtestcode, g.roomchargehead) AS tcode,
+                     g.testrate AS rate,
+                     tm.name
+              FROM public.test_group_rates g
+              LEFT JOIN test_master tm
+                     ON tm.tcode = COALESCE(g.subtestcode, g.roomchargehead)
+                    AND TRIM(tm.tenant_code) = TRIM(g.tenant_code)
+                    AND tm.deleted = false
+              WHERE g.rmtcode = @rmt
+              AND   TRIM(g.tenant_code) = TRIM(@tenant_code)
+              ORDER BY g.id",
+                            new { rmt, tenant_code })).ToList();
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[ROOMRENT-HEADS-ERROR] {ex.Message}");
+                        return new List<dynamic>();
+                    }
+                }
 
+                // try the billing room type first, then the physical room type
+                var heads = await LoadHeads(effectiveRateRmt);
+                if (heads.Count == 0 && (int?)ip.rmtcode != null && (int?)ip.rmtcode != effectiveRateRmt)
+                    heads = await LoadHeads((int?)ip.rmtcode);
+
+                Console.WriteLine($"[ROOMRENT-DEBUG] ip_id={ip_id} tenant='{tenant_code}' billing_rmt={(int?)ip.billing_rmtcode} physical_rmt={(int?)ip.rmtcode} heads={heads.Count} segments={segments.Count}");
                 // AFTER
                 foreach (var seg in segments)
                 {
-                    if (seg.rmtcode == null) continue;   // still used to confirm the physical segment is valid
+                    if (seg.rmtcode == null) continue;
 
                     decimal chargedDays = CalculateRoomRentDays(seg.from, seg.to);
                     if (chargedDays <= 0) continue;
 
-                    // Rate resolved from billing type, NOT the physical segment's rmtcode.
-                    var roomType = await db.QueryFirstOrDefaultAsync<dynamic>(
-                        @"SELECT roomrate FROM public.roomtype_master
-          WHERE rmtcode = @rmtcode AND tenant_code = @tenant_code
-          AND (deleted IS NULL OR deleted = false)",
-                        new { rmtcode = effectiveRateRmt, tenant_code });
+                    // Build the lines to insert: split by charge head, or the old single line as fallback
+                    var lines = new List<(int? tcode, string particulars, decimal rate)>();
 
-                    if (roomType == null) { skippedNoRoomType++; continue; }
-                    decimal roomRate = (decimal)(roomType.roomrate ?? 0);
-
-                    if (seg.isClosed)
+                    if (heads.Count > 0)
                     {
-                        // Closed segment — insert ONCE, keyed on the fixed segment end time.
-                        // Never touched again on future recalculates.
-                        string closedKey = $"{ip_id}|SEG|{seg.to:o}|bed:{seg.bedcode}";
-                        var already = await db.ExecuteScalarAsync<int>(
-                            @"SELECT COUNT(1) FROM unbilledcharges WHERE entryid = @closedKey AND tenant_code = @tenant_code",
-                            new { closedKey, tenant_code });
-
-                        if (already > 0) { skippedExisting++; continue; }
-
-                        await db.InsertAsync(new UnbilledChargeRow
+                        foreach (var h in heads)
                         {
-                            unbilledid = Guid.NewGuid().ToString(),
-                            entrytype = "ROOMRENT",
-                            entryid = closedKey,
-                            chargedate = seg.to,
-                            custid = (decimal)ip.custid,
-                            ip_id = ip_id,
-                            bedcode = seg.bedcode,        // NEW
-                                                          // AFTER (both places)
-                            tcode = effectiveRateRmt,
-                            quantity = (double)chargedDays,
-                            rate = (double)roomRate,
-                            amount = (double)(chargedDays * roomRate),
-                            discount = 0,
-                            charityamount = 0,
-                            billedstatus = false,
-                            tenant_code = tenant_code
-                        });
-                        inserted++;
+                            decimal headRate = (decimal)(h.rate ?? 0);
+                            if (headRate <= 0) continue;
+                            lines.Add(((int?)h.tcode, (string?)h.name ?? "ROOMRENT", headRate));
+                        }
                     }
                     else
                     {
-                        // Open segment — the bed the patient is in RIGHT NOW.
-                        // Delete only THIS marker's unbilled row and reinsert with fresh quantity.
+                        var roomType = await db.QueryFirstOrDefaultAsync<dynamic>(
+                            @"SELECT roomrate FROM public.roomtype_master
+              WHERE rmtcode = @rmtcode AND tenant_code = @tenant_code
+              AND (deleted IS NULL OR deleted = false)",
+                            new { rmtcode = effectiveRateRmt, tenant_code });
+
+                        if (roomType == null) { skippedNoRoomType++; continue; }
+                        lines.Add((effectiveRateRmt, "ROOMRENT", (decimal)(roomType.roomrate ?? 0)));
+                    }
+
+                    if (lines.Count == 0) { skippedNoRoomType++; continue; }
+
+                    if (seg.isClosed)
+                    {
+                        string closedKey = $"{ip_id}|SEG|{seg.to:o}|bed:{seg.bedcode}";
+
+                        // matches old single-row key AND new per-head keys
+                        var already = await db.ExecuteScalarAsync<int>(
+                            @"SELECT COUNT(1) FROM unbilledcharges
+              WHERE (entryid = @closedKey OR entryid LIKE @closedLike)
+              AND tenant_code = @tenant_code",
+                            new { closedKey, closedLike = closedKey + "|T%", tenant_code });
+
+                        if (already > 0) { skippedExisting++; continue; }
+
+                        foreach (var l in lines)
+                        {
+                            await db.InsertAsync(new UnbilledChargeRow
+                            {
+                                unbilledid = Guid.NewGuid().ToString(),
+                                entrytype = "ROOMRENT",
+                                entryid = heads.Count > 0 ? $"{closedKey}|T{l.tcode}" : closedKey,
+                                chargedate = seg.to,
+                                custid = (decimal)ip.custid,
+                                ip_id = ip_id,
+                                bedcode = seg.bedcode,
+                                tcode = l.tcode,
+                                quantity = (double)chargedDays,
+                                rate = (double)l.rate,
+                                amount = (double)(chargedDays * l.rate),
+                                discount = 0,
+                                charityamount = 0,
+                                billedstatus = false,
+                                tenant_code = tenant_code,
+                                particulars = l.particulars
+                            });
+                            inserted++;
+                        }
+                    }
+                    else
+                    {
                         string openKey = $"{ip_id}|OPEN|bed:{seg.bedcode}";
 
+                        // delete this open segment's pending rows (old single key + per-head keys)
                         await db.ExecuteAsync(
                             @"DELETE FROM unbilledcharges
-                      WHERE entryid = @openKey AND tenant_code = @tenant_code
-                      AND (billedstatus = false OR billedstatus IS NULL)",
-                            new { openKey, tenant_code });
+              WHERE (entryid = @openKey OR entryid LIKE @openLike)
+              AND tenant_code = @tenant_code
+              AND (billedstatus = false OR billedstatus IS NULL)",
+                            new { openKey, openLike = openKey + "|T%", tenant_code });
 
-                        await db.InsertAsync(new UnbilledChargeRow
+                        foreach (var l in lines)
                         {
-                            unbilledid = Guid.NewGuid().ToString(),
-                            entrytype = "ROOMRENT",
-                            entryid = openKey,
-                            chargedate = seg.to,
-                            custid = (decimal)ip.custid,
-                            ip_id = ip_id,
-                            bedcode = seg.bedcode,        // NEW
-                                                          // AFTER (both places)
-                            tcode = effectiveRateRmt,
-                            quantity = (double)chargedDays,
-                            rate = (double)roomRate,
-                            amount = (double)(chargedDays * roomRate),
-                            discount = 0,
-                            charityamount = 0,
-                            billedstatus = false,
-                            tenant_code = tenant_code
-                        });
-                        inserted++;
+                            await db.InsertAsync(new UnbilledChargeRow
+                            {
+                                unbilledid = Guid.NewGuid().ToString(),
+                                entrytype = "ROOMRENT",
+                                entryid = heads.Count > 0 ? $"{openKey}|T{l.tcode}" : openKey,
+                                chargedate = seg.to,
+                                custid = (decimal)ip.custid,
+                                ip_id = ip_id,
+                                bedcode = seg.bedcode,
+                                tcode = l.tcode,
+                                quantity = (double)chargedDays,
+                                rate = (double)l.rate,
+                                amount = (double)(chargedDays * l.rate),
+                                discount = 0,
+                                charityamount = 0,
+                                billedstatus = false,
+                                tenant_code = tenant_code,
+                                particulars = l.particulars
+                            });
+                            inserted++;
+                        }
                     }
                 }
 
@@ -788,6 +842,136 @@ namespace medico_backend.Class
 
                 await db.InsertAsync(row);
                 return $"Success|UnbilledId:{row.unbilledid}";
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
+        // ── Discard pending unbilled charges — one or many ──
+        // Billed rows are never touched (that's a refund concern).
+        // Normal charges are deleted.
+        // ROOMRENT rows are closed out (billedstatus = true, billed qty/amount = 0, tagged [DISCARDED])
+        // so RecalculateRoomRent does NOT recreate them.
+        public async Task<DiscardUnbilledResult> DiscardUnbilledCharges(
+            List<string> unbilledids, string tenant_code)
+        {
+            var result = new DiscardUnbilledResult();
+
+            var ids = unbilledids
+                .Where(i => !string.IsNullOrWhiteSpace(i))
+                .Select(i => i.Trim())
+                .Distinct()
+                .ToArray();
+
+            result.requested = ids.Length;
+            if (ids.Length == 0) return result;
+
+            using var db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // Load whatever exists for this tenant
+                var existing = (await db.QueryAsync<UnbilledChargeRow>(
+                    @"SELECT * FROM unbilledcharges
+              WHERE unbilledid = ANY(@ids) AND tenant_code = @tenant_code",
+                    new { ids, tenant_code }, tx)).ToDictionary(r => r.unbilledid!);
+
+                var deletable = new List<string>();     // normal charges → hard delete
+                var roomRentIds = new List<string>();   // ROOMRENT → close out as discarded
+
+                foreach (var id in ids)
+                {
+                    if (!existing.TryGetValue(id, out var row))
+                    {
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Not found" });
+                        continue;
+                    }
+                    if (row.billedstatus == true)
+                    {
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Already billed" });
+                        continue;
+                    }
+
+                    if (string.Equals(row.entrytype?.Trim(), "ROOMRENT", StringComparison.OrdinalIgnoreCase))
+                        roomRentIds.Add(id);
+                    else
+                        deletable.Add(id);
+                }
+
+                var processedIds = new List<string>();
+
+                // ── 1) Normal charges: delete (re-check billedstatus to guard against a race with billing) ──
+                if (deletable.Count > 0)
+                {
+                    var deletedIds = (await db.QueryAsync<string>(
+                        @"DELETE FROM unbilledcharges
+                  WHERE unbilledid = ANY(@deletable)
+                  AND   tenant_code = @tenant_code
+                  AND   (billedstatus = false OR billedstatus IS NULL)
+                  RETURNING unbilledid",
+                        new { deletable = deletable.ToArray(), tenant_code }, tx)).ToList();
+
+                    processedIds.AddRange(deletedIds);
+
+                    foreach (var id in deletable.Except(deletedIds))
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Billed while discarding" });
+                }
+
+                // ── 2) ROOMRENT: close out so RecalculateRoomRent won't recreate it ──
+                if (roomRentIds.Count > 0)
+                {
+                    var closedIds = (await db.QueryAsync<string>(
+                        @"UPDATE unbilledcharges
+                  SET billedstatus   = true,
+                      billeddate     = @now,
+                      billedquantity = 0,
+                      billedamount   = 0,
+                      particulars    = COALESCE(particulars, 'ROOMRENT') || ' [DISCARDED]'
+                  WHERE unbilledid = ANY(@roomRentIds)
+                  AND   tenant_code = @tenant_code
+                  AND   entrytype = 'ROOMRENT'
+                  AND   (billedstatus = false OR billedstatus IS NULL)
+                  RETURNING unbilledid",
+                        new { roomRentIds = roomRentIds.ToArray(), tenant_code, now = DateTime.UtcNow }, tx)).ToList();
+
+                    processedIds.AddRange(closedIds);
+
+                    foreach (var id in roomRentIds.Except(closedIds))
+                        result.skipped.Add(new DiscardSkipped { unbilledid = id, reason = "Billed while discarding" });
+                }
+
+                result.discarded_ids = processedIds;
+                result.discarded = processedIds.Count;
+
+                tx.Commit();
+                return result;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
+        }
+        // ── Add extra amount onto the pending REGISTRATION line (e.g. reimbursement fee).
+        // If no pending registration line exists, falls back to inserting a new one. ──
+        public async Task<string> AddOrMergeIpRegistrationCharge(AddUnbilledIpRegistrationRequest req, string tenant_code)
+        {
+            try
+            {
+                using var db = GetConnection();
+
+                int rows = await db.ExecuteAsync(
+                    @"UPDATE unbilledcharges
+              SET rate   = COALESCE(rate, 0)   + @amount,
+                  amount = COALESCE(amount, 0) + @amount
+              WHERE ip_id = @ip_id AND entrytype = 'REGISTRATION'
+              AND tenant_code = @tenant_code
+              AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { req.amount, req.ip_id, tenant_code });
+
+                if (rows > 0) return "Success|Merged";
+
+                return await AddIpRegistrationCharge(req, tenant_code);
             }
             catch (Exception ex) { return ex.Message; }
         }

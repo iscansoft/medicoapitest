@@ -54,7 +54,7 @@ namespace medico_backend.Model
             public string? id_proof_id { get; set; }
             public string? identification_mark { get; set; }
             public string? notes { get; set; }
-
+            public bool isreimbursementpatient { get; set; } = false;
             public string? tenant_code { get; set; }
             public bool isdeleted { get; set; } = false;
             public int? usercode { get; set; } = 1;
@@ -85,7 +85,7 @@ namespace medico_backend.Model
             public int? wrdcode { get; set; }
             public int? rmtcode { get; set; }
             public int bedcode { get; set; }        // required — must allocate a bed on admission
-
+            public bool isreimbursementpatient { get; set; } = false;
             public bool isinsurancepatient { get; set; } = false;
             public string? insurance_company { get; set; }
             public string? policyno { get; set; }
@@ -128,7 +128,7 @@ namespace medico_backend.Model
             public string? admission_reason { get; set; }
             public DateTime? admitdate { get; set; }
             public DateTime? expected_dischargedate { get; set; }
-
+            public bool isreimbursementpatient { get; set; } = false;
             public bool isinsurancepatient { get; set; } = false;
             public string? insurance_company { get; set; }
             public string? policyno { get; set; }

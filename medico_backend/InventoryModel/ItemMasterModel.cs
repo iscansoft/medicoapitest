@@ -12,7 +12,7 @@ namespace medico_backend.InventoryModel
         public string shortname { get; set; }
         public string description { get; set; }
 
-        public int categorycode { get; set; }
+        public int? categorycode { get; set; }
         public int subcategorycode { get; set; }
 
         public int hsncode { get; set; }
@@ -646,7 +646,8 @@ namespace medico_backend.InventoryModel
 
      public long? ordercode { get; set; }
      public decimal? cntcode { get; set; }
-     public int? bh_code { get; set; }
+        public int? bh_code { get; set; }
+        public string? cnttid { get; set; }   // counter shift session id
     }
     public class sales_detail
  {
@@ -691,13 +692,18 @@ namespace medico_backend.InventoryModel
 
         public long? warehousecode { get; set; }
 
-     public string? tenantcode { get; set; }
- }
- public class sales_request
+        public string? tenantcode { get; set; }
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+    }
+    public class sales_request
  {
      public sales_master master { get; set; }
-     public List<sales_detail> details { get; set; }
- }
+        public List<sales_detail> details { get; set; }
+        public List<Guid>? queue_ids { get; set; }   // pharmacy queue rows being billed in this sale
+    }
     [Table("warehouse_master")]
     public class warehouse_master
  {
@@ -1110,12 +1116,20 @@ public long? customercode { get; set; }
         public string? afternoon { get; set; }
         public string? evening { get; set; }
         public string? night { get; set; }
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+        public string? dose_unit { get; set; }
         public bool before_food { get; set; }
         public bool after_food { get; set; }
         public int? days { get; set; }
         public string? route { get; set; }
         public string? notes { get; set; }
-
+        public bool billed_status { get; set; } = false;
+        public string? billno { get; set; }
+        public long? salescode { get; set; }
+        public DateTime? billed_date { get; set; }
         public string status { get; set; } = "PENDING";
         public string? tenant_code { get; set; }
         public DateTime created_at { get; set; } = DateTime.UtcNow;
@@ -1141,6 +1155,11 @@ public long? customercode { get; set; }
         public string? afternoon { get; set; }
         public string? evening { get; set; }
         public string? night { get; set; }
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+        public string? dose_unit { get; set; }
         public bool before_food { get; set; }
         public bool after_food { get; set; }
         public int? days { get; set; }
@@ -1164,6 +1183,8 @@ public long? customercode { get; set; }
         public Guid? sheet_id { get; set; }
         public Guid? op_id { get; set; }
         public Guid? ip_id { get; set; }
+        public bool all_billed { get; set; }
+        public int unbilled_count { get; set; }
         public List<PharmacyPrescriptionQueueRow> items { get; set; } = new();
     }
 
@@ -1331,6 +1352,31 @@ public long? customercode { get; set; }
             public List<purchase_order_detail> details { get; set; } = new();
             public List<purchase_order_terms>? terms { get; set; }
         }
-        
+    public class MarkQueueBilledRequest
+    {
+        public List<Guid> queue_ids { get; set; } = new();
+        public long? salescode { get; set; }
+        public string? billno { get; set; }
+    }
+
+    public class UnbillQueueRequest
+    {
+        public List<Guid> queue_ids { get; set; } = new();
+    }
+    public class ItemExcelUploadResult
+    {
+        public int total_rows { get; set; }
+        public int inserted { get; set; }
+        public int skipped_blank { get; set; }
+        public int skipped_duplicate { get; set; }
+        public List<string> ignored_columns { get; set; } = new();
+        public List<ItemExcelRowError> errors { get; set; } = new();
+    }
+
+    public class ItemExcelRowError
+    {
+        public int row { get; set; }
+        public string message { get; set; } = string.Empty;
+    }
 }
 

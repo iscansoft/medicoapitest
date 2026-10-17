@@ -76,7 +76,13 @@ namespace medico_backend.Class
             int next = await db.ExecuteScalarAsync<int>(sql, new { tenant_code, year, month }, tx);
             return $"INV/{year}/{month}/{next:D4}";
         }
-
+        private sealed class ExistingInvRow
+        {
+            public Guid inv_det_id { get; set; }
+            public int? test_code { get; set; }
+            public string? test_name { get; set; }
+            public bool? is_billed { get; set; }
+        }
         // ─────────────────────────────────────────────────────────
         // SAVE OP/IP CASE SHEET
         // Accepts EITHER op_id OR ip_id (or both). Entire operation is
@@ -413,6 +419,7 @@ namespace medico_backend.Class
               (pr_det_id, pr_id, pr_code, diag_id, sno,
                drug_name, drug_code, generic_name, drug_category,
                morning, afternoon, evening, night,
+               morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
                before_food, after_food, days, qty, route,
                rate, mrp, is_billed, notes,
                tenant_code, isdeleted, created_at)
@@ -420,6 +427,7 @@ namespace medico_backend.Class
               (@pr_det_id, @pr_id, @pr_code, @diag_id, @sno,
                @drug_name, @drug_code, @generic_name, @drug_category,
                @morning, @afternoon, @evening, @night,
+               @morning_dose, @afternoon_dose, @evening_dose, @night_dose, @dose_unit,
                @before_food, @after_food, @days, @qty, @route,
                @rate, @mrp, false, @notes,
                @tenant_code, false, NOW())",
@@ -438,6 +446,11 @@ namespace medico_backend.Class
                         item.afternoon,
                         item.evening,
                         item.night,
+                        item.morning_dose,      
+                        item.afternoon_dose,    
+                        item.evening_dose,      
+                        item.night_dose,        
+                        item.dose_unit,
                         item.before_food,
                         item.after_food,
                         item.days,
@@ -458,6 +471,8 @@ namespace medico_backend.Class
         // ─────────────────────────────────────────────────────────
         // SAVE INVESTIGATION
         // ─────────────────────────────────────────────────────────
+
+
         private async Task<string> SaveInvestigation(
             IDbConnection db,
             IDbTransaction tx,
@@ -526,44 +541,103 @@ namespace medico_backend.Class
                     new { inv_id = invId, req.notes, is_urgent = req.is_urgent, tenant_code }, tx);
             }
 
-            // Clear stale unbilled INVESTIGATION rows for this visit BEFORE deleting
-            // op_investigation_detail (only pending/unbilled ones — already-billed
-            // rows are untouched since they belong to a bill already generated)
+            // 1. Clear only PENDING unbilled investigation rows (billed rows untouched)
             await db.ExecuteAsync(
                 @"DELETE FROM unbilledcharges
-                  WHERE entrytype = 'INVESTIGATION'
-                  AND (
-                        (@op_id IS NOT NULL AND opvisitid = @op_id)
-                     OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
-                      )
-                  AND tenant_code = @tenant_code
-                  AND (billedstatus = false OR billedstatus IS NULL)",
+      WHERE entrytype = 'INVESTIGATION'
+      AND (
+            (@op_id IS NOT NULL AND opvisitid = @op_id)
+         OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+          )
+      AND tenant_code = @tenant_code
+      AND (billedstatus = false OR billedstatus IS NULL)",
                 new { op_id, ip_id, tenant_code }, tx);
 
-            // Delete + re-insert test rows
-            await db.ExecuteAsync(
-                "DELETE FROM op_investigation_detail WHERE inv_id = @inv_id",
-                new { inv_id = invId }, tx);
+            // 2. Load existing tests + find which are already billed
+            var existingRows = (await db.QueryAsync<ExistingInvRow>(
+                @"SELECT inv_det_id, test_code, test_name, is_billed
+      FROM op_investigation_detail
+      WHERE inv_id = @inv_id AND isdeleted = false",
+                new { inv_id = invId }, tx)).ToList();
+
+            var existingIds = existingRows.Select(r => r.inv_det_id.ToString()).ToArray();
+
+            var billedSet = existingIds.Length == 0
+                ? new HashSet<string>()
+                : (await db.QueryAsync<string>(
+                    @"SELECT entryid FROM unbilledcharges
+          WHERE entrytype = 'INVESTIGATION'
+          AND   billedstatus = true
+          AND   tenant_code = @tenant_code
+          AND   entryid = ANY(@ids)",
+                    new { ids = existingIds, tenant_code }, tx)).ToHashSet();
+
+            var matched = new HashSet<Guid>();
 
             foreach (var test in req.tests)
             {
-                Guid? diagId = string.IsNullOrWhiteSpace(test.diag_id)
-                    ? null
-                    : Guid.Parse(test.diag_id);
+                Guid? diagId = string.IsNullOrWhiteSpace(test.diag_id) ? null : Guid.Parse(test.diag_id);
 
-                Guid invDetId = Guid.NewGuid();   // generated here so we can link unbilledcharges
+                // match an existing row (same test_code, or same name when no code)
+                var match = existingRows.FirstOrDefault(r =>
+                    !matched.Contains(r.inv_det_id) &&
+                    (test.test_code.HasValue
+                        ? r.test_code == test.test_code
+                        : string.Equals(r.test_name, test.test_name, StringComparison.OrdinalIgnoreCase)));
 
+                if (match != null)
+                {
+                    matched.Add(match.inv_det_id);
+                    bool alreadyBilled = match.is_billed == true || billedSet.Contains(match.inv_det_id.ToString());
+
+                    if (alreadyBilled)
+                    {
+                        // billed → only touch sno/diag, never re-push to unbilling
+                        await db.ExecuteAsync(
+                            @"UPDATE op_investigation_detail
+                  SET sno = @sno, diag_id = @diag_id, updated_at = NOW()
+                  WHERE inv_det_id = @inv_det_id",
+                            new { inv_det_id = match.inv_det_id, test.sno, diag_id = diagId }, tx);
+                        continue;
+                    }
+
+                    // existing but still unbilled → update, keep same id, re-push (pending row was cleared above)
+                    await db.ExecuteAsync(
+                        @"UPDATE op_investigation_detail
+              SET sno=@sno, diag_id=@diag_id, test_name=@test_name, test_code=@test_code,
+                  test_category=@test_category, quantity=@quantity, rate=@rate,
+                  amount=@amount, updated_at=NOW()
+              WHERE inv_det_id=@inv_det_id",
+                        new
+                        {
+                            inv_det_id = match.inv_det_id,
+                            test.sno,
+                            diag_id = diagId,
+                            test.test_name,
+                            test.test_code,
+                            test.test_category,
+                            test.quantity,
+                            test.rate,
+                            test.amount
+                        }, tx);
+
+                    await _unbilledCls.AddInvestigationChargeRow(
+                        db, tx, op_id,
+                        string.IsNullOrWhiteSpace(ip_id) ? (Guid?)null : Guid.Parse(ip_id),
+                        custid, tenant_code,
+                        match.inv_det_id.ToString(), test.test_code, test.quantity, test.rate, test.amount);
+                    continue;
+                }
+
+                // brand-new test → insert + push to unbilling
+                Guid invDetId = Guid.NewGuid();
                 await db.ExecuteAsync(
                     @"INSERT INTO op_investigation_detail
-                      (inv_det_id, inv_id, diag_id, sno,
-                       test_name, test_code, test_category,
-                       quantity, rate, amount,
-                       result_status, is_billed, tenant_code, isdeleted, created_at, updated_at)
-                      VALUES
-                      (@inv_det_id, @inv_id, @diag_id, @sno,
-                       @test_name, @test_code, @test_category,
-                       @quantity, @rate, @amount,
-                       'PENDING', false, @tenant_code, false, NOW(), NOW())",
+          (inv_det_id, inv_id, diag_id, sno, test_name, test_code, test_category,
+           quantity, rate, amount, result_status, is_billed, tenant_code, isdeleted, created_at, updated_at)
+          VALUES
+          (@inv_det_id, @inv_id, @diag_id, @sno, @test_name, @test_code, @test_category,
+           @quantity, @rate, @amount, 'PENDING', false, @tenant_code, false, NOW(), NOW())",
                     new
                     {
                         inv_det_id = invDetId,
@@ -579,12 +653,25 @@ namespace medico_backend.Class
                         tenant_code
                     }, tx);
 
-                // Push into unbilledcharges so it shows up on the billing screen
                 await _unbilledCls.AddInvestigationChargeRow(
                     db, tx, op_id,
                     string.IsNullOrWhiteSpace(ip_id) ? (Guid?)null : Guid.Parse(ip_id),
                     custid, tenant_code,
                     invDetId.ToString(), test.test_code, test.quantity, test.rate, test.amount);
+            }
+
+            // 3. Remove tests the doctor deleted from the list — but never a billed one
+            var removeIds = existingRows
+                .Where(r => !matched.Contains(r.inv_det_id)
+                         && r.is_billed != true
+                         && !billedSet.Contains(r.inv_det_id.ToString()))
+                .Select(r => r.inv_det_id).ToArray();
+
+            if (removeIds.Length > 0)
+            {
+                await db.ExecuteAsync(
+                    "DELETE FROM op_investigation_detail WHERE inv_det_id = ANY(@removeIds)",
+                    new { removeIds }, tx);
             }
 
             return invCode;
@@ -613,63 +700,59 @@ namespace medico_backend.Class
                 if (rows == 0) return "Case sheet not found";
 
                 // ── Push prescription to pharmacy (best-effort; won't undo finalize) ──
-                var prMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
+                // ── Push ALL prescriptions of this sheet to pharmacy (best-effort) ──
+                var prMasters = (await db.QueryAsync<OpPrescriptionMasterModel>(
                     @"SELECT pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
-                     visit_date::timestamp AS visit_date,
-                     pr_date, topremarks, bottonremarks,
-                     is_dispensed, tenant_code, isdeleted, created_at, updated_at
-              FROM   op_prescription_master
-              WHERE  sheet_id    = CAST(@sheet_id AS uuid)
-              AND    tenant_code = @tenant_code
-              AND    isdeleted   = false
-              ORDER  BY created_at DESC
-              LIMIT  1",
-                    new { req.sheet_id, tenant_code });
+             visit_date::timestamp AS visit_date,
+             pr_date, topremarks, bottonremarks,
+             is_dispensed, tenant_code, isdeleted, created_at, updated_at
+      FROM   op_prescription_master
+      WHERE  sheet_id    = CAST(@sheet_id AS uuid)
+      AND    tenant_code = @tenant_code
+      AND    isdeleted   = false
+      ORDER  BY created_at",
+                    new { req.sheet_id, tenant_code })).ToList();
 
-                if (prMst != null)
+                foreach (var prMst in prMasters)
                 {
                     var items = (await db.QueryAsync<OpPrescriptionDetailModel>(
                         @"SELECT * FROM op_prescription_detail
-                  WHERE  pr_id     = @pr_id
-                  AND    isdeleted = false
-                  ORDER  BY sno",
+          WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
                         new { pr_id = prMst.pr_id })).ToList();
 
-                    if (items.Any())
-                    {
-                        var pharmacyReq = new ReceivePrescriptionRequest
-                        {
-                            custid = prMst.custid,
-                            op_id = prMst.op_id?.ToString(),
-                            ip_id = prMst.ip_id?.ToString(),
-                            sheet_id = prMst.sheet_id?.ToString(),
-                            pr_code = prMst.pr_code,
-                            items = items.Select(i => new PrescriptionQueueItem
-                            {
-                                pr_det_id = i.pr_det_id.ToString(),
-                                drug_name = i.drug_name,
-                                qty = i.qty ?? 0,
-                                morning = i.morning,
-                                afternoon = i.afternoon,
-                                evening = i.evening,
-                                night = i.night,
-                                before_food = i.before_food,
-                                after_food = i.after_food,
-                                days = i.days,
-                                route = i.route,
-                                notes = i.notes
-                            }).ToList()
-                        };
+                    if (!items.Any()) continue;
 
-                        try
+                    var pharmacyReq = new ReceivePrescriptionRequest
+                    {
+                        custid = prMst.custid,
+                        op_id = prMst.op_id?.ToString(),
+                        ip_id = prMst.ip_id?.ToString(),
+                        sheet_id = prMst.sheet_id?.ToString(),
+                        pr_code = prMst.pr_code,
+                        items = items.Select(i => new PrescriptionQueueItem
                         {
-                            await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
-                        }
-                        catch
-                        {
-                            // Finalize already succeeded — don't block the doctor on a pharmacy hiccup.
-                        }
-                    }
+                            pr_det_id = i.pr_det_id.ToString(),
+                            drug_name = i.drug_name,
+                            qty = i.qty ?? 0,
+                            morning = i.morning,
+                            afternoon = i.afternoon,
+                            evening = i.evening,
+                            night = i.night,
+                            morning_dose = i.morning_dose,
+                            afternoon_dose = i.afternoon_dose,
+                            evening_dose = i.evening_dose,
+                            night_dose = i.night_dose,
+                            dose_unit = i.dose_unit,
+                            before_food = i.before_food,
+                            after_food = i.after_food,
+                            days = i.days,
+                            route = i.route,
+                            notes = i.notes
+                        }).ToList()
+                    };
+
+                    try { await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code); }
+                    catch { /* finalize already succeeded */ }
                 }
 
                 return "Success";
@@ -758,39 +841,10 @@ namespace medico_backend.Class
     new { sheet_id = sheet.sheet_id })).ToList();
 
             // Prescription
-            var prMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
-    @"SELECT pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
-             visit_date::timestamp AS visit_date,
-             pr_date, topremarks, bottonremarks,
-             is_dispensed, tenant_code, isdeleted, created_at, updated_at
-      FROM   op_prescription_master
-      WHERE  sheet_id    = @sheet_id
-      AND    tenant_code = @tenant_code
-      AND    isdeleted   = false
-      ORDER  BY created_at DESC
-      LIMIT  1",
-    new { sheet_id = sheet.sheet_id, tenant_code });
-
-            if (prMst != null)
-            {
-                var prDet = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                    @"SELECT * FROM op_prescription_detail
-                      WHERE  pr_id      = @pr_id
-                      AND    isdeleted  = false
-                      ORDER  BY sno",
-                    new { pr_id = prMst.pr_id })).ToList();
-
-                vm.prescription = new CaseSheetPrescriptionViewModel
-                {
-                    pr_id = prMst.pr_id.ToString(),
-                    pr_code = prMst.pr_code,
-                    pr_date = prMst.pr_date,
-                    topremarks = prMst.topremarks,
-                    bottonremarks = prMst.bottonremarks,
-                    is_dispensed = prMst.is_dispensed,
-                    items = prDet
-                };
-            }
+            // Prescription: all prescriptions of this visit
+            vm.prescription_list = await GetPrescriptionList(
+                sheet.op_id?.ToString(), sheet.ip_id?.ToString(), tenant_code);
+            vm.prescription = vm.prescription_list.FirstOrDefault();   // latest, for old screens
 
             // Investigation
             var invMst = await db.QueryFirstOrDefaultAsync<OpInvestigationMasterModel>(
@@ -1146,40 +1200,9 @@ namespace medico_backend.Class
 
                 // Prescription — matched by visit directly against op_prescription_master
                 // (which already carries op_id/ip_id), same pattern as GetPrescription()
-                var prMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
-                    @"SELECT pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
-                     visit_date::timestamp AS visit_date,
-                     pr_date, topremarks, bottonremarks,
-                     is_dispensed, tenant_code, isdeleted, created_at, updated_at
-              FROM   op_prescription_master
-              WHERE  ((@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
-                      OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid)))
-              AND    tenant_code = @tenant_code
-              AND    isdeleted   = false
-              ORDER  BY created_at DESC
-              LIMIT  1",
-                    new { op_id = hasOp ? opId : null, ip_id = hasIp ? ipId : null, tenant_code });
-
-                if (prMst != null)
-                {
-                    var prDet = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                        @"SELECT * FROM op_prescription_detail
-                  WHERE  pr_id     = @pr_id
-                  AND    isdeleted = false
-                  ORDER  BY sno",
-                        new { pr_id = prMst.pr_id })).ToList();
-
-                    vm.prescription = new CaseSheetPrescriptionViewModel
-                    {
-                        pr_id = prMst.pr_id.ToString(),
-                        pr_code = prMst.pr_code,
-                        pr_date = prMst.pr_date,
-                        topremarks = prMst.topremarks,
-                        bottonremarks = prMst.bottonremarks,
-                        is_dispensed = prMst.is_dispensed,
-                        items = prDet
-                    };
-                }
+                // Prescription: all prescriptions of this visit
+                vm.prescription_list = await GetPrescriptionList(opId, ipId, tenant_code);
+                vm.prescription = vm.prescription_list.FirstOrDefault();
 
                 // Investigation — matched by visit directly against op_investigation_master
                 var invMst = await db.QueryFirstOrDefaultAsync<OpInvestigationMasterModel>(
@@ -1354,7 +1377,86 @@ ORDER BY im.created_at DESC;";
                 throw new Exception(ex.Message);
             }
         }
+        // Save ONE prescription (new if pr_code is null, update if pr_code is given)
+        public async Task<string> SavePrescriptionOnly(SavePrescriptionOnlyRequest req, string tenant_code)
+        {
+            bool hasOp = !string.IsNullOrWhiteSpace(req.op_id);
+            bool hasIp = !string.IsNullOrWhiteSpace(req.ip_id);
+            if (!hasOp && !hasIp) return "Either op_id or ip_id is required";
+            if (req.prescription == null || !req.prescription.items.Any()) return "At least one drug is required";
 
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            db.Open();
+            using var tx = db.BeginTransaction();
+            try
+            {
+                var sheetId = await db.ExecuteScalarAsync<Guid?>(
+                    @"SELECT sheet_id FROM op_case_sheet
+              WHERE ((@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                  OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid)))
+              AND tenant_code = @tenant_code AND isdeleted = false
+              ORDER BY created_at DESC LIMIT 1",
+                    new { op_id = hasOp ? req.op_id : null, ip_id = hasIp ? req.ip_id : null, tenant_code }, tx);
+
+                if (sheetId == null) return "Case sheet not found. Save the case sheet first.";
+
+                string prCode = await SavePrescription(
+                    db, tx, req.prescription, sheetId.Value,
+                    hasOp ? req.op_id : null, hasIp ? req.ip_id : null,
+                    req.custid, req.dcode, tenant_code);
+
+                tx.Commit();
+                return $"Success|PrCode:{prCode}";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
+        }
+
+        // ALL prescriptions of a visit, newest first
+        public async Task<List<CaseSheetPrescriptionViewModel>> GetPrescriptionList(
+            string? op_id, string? ip_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            bool hasOp = !string.IsNullOrWhiteSpace(op_id);
+            bool hasIp = !string.IsNullOrWhiteSpace(ip_id);
+            if (!hasOp && !hasIp) return new();
+
+            var masters = (await db.QueryAsync<OpPrescriptionMasterModel>(
+                @"SELECT pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
+                 visit_date::timestamp AS visit_date,
+                 pr_date, topremarks, bottonremarks,
+                 is_dispensed, tenant_code, isdeleted, created_at, updated_at
+          FROM op_prescription_master
+          WHERE ((@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+              OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid)))
+          AND tenant_code = @tenant_code AND isdeleted = false
+          ORDER BY created_at DESC",
+                new { op_id = hasOp ? op_id : null, ip_id = hasIp ? ip_id : null, tenant_code })).ToList();
+
+            var result = new List<CaseSheetPrescriptionViewModel>();
+            foreach (var m in masters)
+            {
+                var items = (await db.QueryAsync<OpPrescriptionDetailModel>(
+                    @"SELECT * FROM op_prescription_detail
+              WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
+                    new { pr_id = m.pr_id })).ToList();
+
+                result.Add(new CaseSheetPrescriptionViewModel
+                {
+                    pr_id = m.pr_id.ToString(),
+                    pr_code = m.pr_code,
+                    pr_date = m.pr_date,
+                    topremarks = m.topremarks,
+                    bottonremarks = m.bottonremarks,
+                    is_dispensed = m.is_dispensed,
+                    items = items
+                });
+            }
+            return result;
+        }
 
 
 

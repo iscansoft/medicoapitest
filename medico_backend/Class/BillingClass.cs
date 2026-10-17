@@ -56,8 +56,10 @@ namespace medico_backend.Class
                 // Verify/Retrieve Active Counter Timing
                 var currentShift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
                     @"SELECT * FROM counter_timing 
-              WHERE bhcode = @bhcode AND cntcode = @cntcode AND todate IS NULL AND tenant_code = @tenantCode 
-              LIMIT 1", new { bhcode = req.enteredbhcode, cntcode = req.cntcode, tenantCode }, tx);
+              WHERE bhcode = @bhcode AND cntcode = @cntcode AND todate IS NULL
+                AND (planned_to IS NULL OR planned_to > @now)
+                AND tenant_code = @tenantCode 
+              LIMIT 1", new { bhcode = req.enteredbhcode, cntcode = req.cntcode, tenantCode, now = DateTime.UtcNow }, tx);
 
                 if (currentShift == null)
                     return ("Selected billing counter shift session is not open.", null);
@@ -114,7 +116,7 @@ namespace medico_backend.Class
                     ourdiscount = req.ourdiscount,
                     totalamount = calculativeNetAmount,
                     paidamount = req.paidamount ?? 0,
-                    paidviareceipt =  0,
+                    paidviareceipt = 0,
                     pmc1 = req.pmc1 ?? 0,
                     pmc2 = req.pmc2 ?? 0,
                     pmc3 = req.pmc3 ?? 0,
@@ -939,45 +941,86 @@ namespace medico_backend.Class
         public async Task<(string status, HmsCounterTimingDto? session)> OpenCounterShift(HmsCounterTiming req, string tenantCode)
         {
             using var db = GetConnection();
-            var runningSessionCheck = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
-                @"SELECT * FROM counter_timing 
-                  WHERE bhcode = @bhcode AND cntcode = @cntcode AND todate IS NULL AND tenant_code = @tenantCode LIMIT 1",
-                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode });
+            var now = DateTime.UtcNow;
 
-            if (runningSessionCheck != null)
+            // 1. Close any expired-but-unswept shift for this counter, so it never blocks a new one
+            await db.ExecuteAsync(
+                @"UPDATE counter_timing SET todate = planned_to, close_type = 'AUTO'
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND tenant_code=@tenantCode
+            AND todate IS NULL AND planned_to IS NOT NULL AND planned_to <= @now",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode, now });
+
+            // 2. Is a live shift still open?
+            var running = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                @"SELECT * FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND todate IS NULL AND tenant_code=@tenantCode LIMIT 1",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode });
+            if (running != null)
                 return ("An active shift counter is currently operational for this target interface window.", null);
 
-            int progressiveShiftIndex = await db.ExecuteScalarAsync<int>(
-                @"SELECT COALESCE(MAX(shiftsno), 0) + 1 FROM counter_timing 
-                  WHERE bhcode = @bhcode AND cntcode = @cntcode AND counterdate = @counterdate::DATE AND tenant_code = @tenantCode",
-                new { bhcode = req.bhcode, cntcode = req.cntcode, counterdate = req.counterdate?.ToString("yyyy-MM-dd"), tenantCode });
+            // 3. Default counterdate BEFORE using it
+            var counterDate = req.counterdate?.Date ?? TimeZoneInfo.ConvertTimeFromUtc(now, Tz).Date;
 
+            int shiftNo = await db.ExecuteScalarAsync<int>(
+                @"SELECT COALESCE(MAX(shiftsno), 0) + 1 FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND counterdate=@counterDate::date AND tenant_code=@tenantCode",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, counterDate, tenantCode });
+
+            // 4. Read the lab setting
+            var setting = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT shift_timing_mode, shift_end_time FROM lab_settings
+          WHERE tenant_code=@tenantCode AND deleted=false
+            AND (bh_code=@bh OR bh_code=0 OR bh_code IS NULL)
+          ORDER BY (bh_code=@bh) DESC NULLS LAST LIMIT 1",
+                new { bh = req.bhcode, tenantCode });
+
+            string mode = ((string?)setting?.shift_timing_mode ?? "VARIABLE").ToUpper();
+
+            // 5. Fill everything, then insert ONCE
             req.cnttid = Guid.NewGuid().ToString();
-            req.shiftsno = progressiveShiftIndex;
-            req.fromdate = DateTime.UtcNow;
+            req.shiftsno = shiftNo;
+            req.counterdate = counterDate;
+            req.fromdate = now;
             req.todate = null;
+            req.shift_mode = mode;
+            req.planned_to = ComputePlannedEndUtc(now, mode, (string?)setting?.shift_end_time);
+            req.close_type = null;
             req.tenant_code = tenantCode;
 
             await db.InsertAsync(req);
 
-            var mappedData = await EvaluateShiftProfiling(req.cnttid, tenantCode);
-            return ("SUCCESS", mappedData);
+            var mapped = await EvaluateShiftProfiling(req.cnttid, tenantCode);
+            return ("SUCCESS", mapped);
         }
 
         public async Task<string> CloseCounterShift(CloseCounterRequest req, string tenantCode)
         {
             using var db = GetConnection();
-            var targetedContext = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
-                "SELECT * FROM counter_timing WHERE cnttid = @cnttid AND tenant_code = @tenantCode",
+            var shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                "SELECT * FROM counter_timing WHERE cnttid=@cnttid AND tenant_code=@tenantCode",
                 new { cnttid = req.cnttid, tenantCode });
 
-            if (targetedContext == null) return "Session configuration timeline reference path target missing context.";
-            if (targetedContext.todate != null) return "Operational state context parameter flag evaluates closed already.";
+            if (shift == null) return "Shift not found.";
+            if (shift.todate != null) return "SUCCESS";               // already closed (auto or manual): treat as done
 
+            var now = DateTime.UtcNow;
+
+            // Planned time reached (1-minute tolerance for client clock drift) -> close AT the planned time
+            if (shift.planned_to != null && now >= shift.planned_to.Value.AddSeconds(-60))
+            {
+                await db.ExecuteAsync(
+                    "UPDATE counter_timing SET todate=@t, close_type='AUTO' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                    new { t = shift.planned_to, id = shift.cnttid, tenantCode });
+                return "SUCCESS";
+            }
+
+            if (shift.shift_mode == "FIXED")
+                return "This is a fixed-timing shift. It will close automatically at the scheduled time.";
+
+            // VARIABLE, before midnight: take the moment they click End Shift
             await db.ExecuteAsync(
-                "UPDATE counter_timing SET todate = @now WHERE cnttid = @cnttid AND tenant_code = @tenantCode",
-                new { now = DateTime.UtcNow, cnttid = req.cnttid, tenantCode });
-
+                "UPDATE counter_timing SET todate=@now, close_type='MANUAL' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                new { now, id = shift.cnttid, tenantCode });
             return "SUCCESS";
         }
 
@@ -1752,13 +1795,15 @@ namespace medico_backend.Class
         {
             using var db = GetConnection();
             return await db.QueryFirstOrDefaultAsync<HmsCounterTimingDto>(
-                @"SELECT c.*, b.name as counter_name, 
+                @"SELECT c.*, b.name as counter_name,
                  CASE WHEN c.todate IS NULL THEN true ELSE false END as is_open,
                  CASE WHEN c.todate IS NOT NULL THEN true ELSE false END as is_closed
           FROM counter_timing c
           LEFT JOIN billno_master b ON c.cntcode = b.cntcode AND c.tenant_code = b.tenant_code
-          WHERE c.bhcode = @bhcode AND c.cntcode = @cntcode AND c.todate IS NULL AND c.tenant_code = @tenantCode
-          LIMIT 1", new { bhcode, cntcode, tenantCode });
+          WHERE c.bhcode = @bhcode AND c.cntcode = @cntcode AND c.todate IS NULL
+            AND (c.planned_to IS NULL OR c.planned_to > @now)
+            AND c.tenant_code = @tenantCode
+          LIMIT 1", new { bhcode, cntcode, tenantCode, now = DateTime.UtcNow });
         }
         // ════════════════════════════════════════════════════════════════════════
         //  AUTO-BILL AN OP VISIT — pulls all pending unbilled charges for the
@@ -1835,6 +1880,355 @@ namespace medico_backend.Class
                 _logger.LogError(ex, "AutoBillOpVisit failed for op_id={op_id}", op_id);
                 return ($"AutoBillOpVisit error: {ex.Message}", null);
             }
+        }
+        private static readonly TimeZoneInfo Tz = TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+
+        private static DateTime ComputePlannedEndUtc(DateTime startUtc, string? mode, string? endTime)
+        {
+            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), Tz);
+            var midnight = startLocal.Date.AddDays(1);
+            var endLocal = midnight;   // default: midnight (Variable, or Fixed with no valid time)
+
+            if (string.Equals(mode, "FIXED", StringComparison.OrdinalIgnoreCase)
+                && TimeSpan.TryParse(endTime, out var t))
+            {
+                var configured = startLocal.Date + t;
+                if (configured > startLocal && configured < midnight) endLocal = configured;
+            }
+            return TimeZoneInfo.ConvertTimeToUtc(endLocal, Tz);
+        }
+        // ════════════════════════════════════════════════════════════════════════
+        //  AUTO-BILL BY OP ID — standalone trigger. Looks up custid/dcode from
+        //  op_registration, then reuses AutoBillOpVisit (same flow as
+        //  ComboRegistration). Does NOT check any lab_settings flag.
+        // ════════════════════════════════════════════════════════════════════════
+        public async Task<(string status, HmsBillResponse? data)> AutoBillOpByOpId(
+            AutoBillOpRequest req, string tenantCode)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.op_id) || !Guid.TryParse(req.op_id, out var opGuid))
+                return ("A valid op_id is required.", null);
+
+            if (!req.enteredbhcode.HasValue || !req.cntcode.HasValue)
+                return ("enteredbhcode and cntcode are required to bill into a cash counter.", null);
+
+            try
+            {
+                using var db = GetConnection();
+
+                var op = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT op_id, custid, dcode, visit_status
+              FROM op_registration
+              WHERE op_id = @op_id AND tenant_code = @tenantCode AND isdeleted = false",
+                    new { op_id = opGuid, tenantCode });
+
+                if (op == null)
+                    return ("OP Registration not found.", null);
+
+                string visitStatus = (string?)op.visit_status ?? "";
+                if (visitStatus == "CANCELLED" || visitStatus == "TRANSFERRED" || visitStatus == "RESCHEDULED")
+                    return ($"Cannot bill a {visitStatus.ToLower()} visit.", null);
+
+                // Same pipeline ComboRegistration uses (pending unbilled -> bill -> mark billed)
+                return await AutoBillOpVisit(
+                    opGuid.ToString(),
+                    (decimal)op.custid,
+                    (int)op.dcode,
+                    req.enteredbhcode,
+                    req.cntcode,
+                    tenantCode);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "AutoBillOpByOpId failed for op_id={op_id}", req.op_id);
+                return ($"AutoBillOpByOpId error: {ex.Message}", null);
+            }
+        }
+        public async Task<HmsPayModeCollectionResponse> GetPayModeCollectionReport(
+    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, string tenantCode)
+        {
+            using var db = GetConnection();
+
+            var p = new DynamicParameters();
+            p.Add("t", tenantCode);
+            p.Add("from", fromdate.Date);
+            p.Add("to", todate.Date.AddDays(1));   // exclusive upper bound
+
+            string extra = "";
+            string extraRm = "";
+            if (bhcode.HasValue) { extra += " AND bcb.bhcode = @bh "; extraRm += " AND rm.enteredbhcode = @bh "; p.Add("bh", bhcode.Value); }
+            if (cntcode.HasValue) { extra += " AND bcb.cntcode = @cnt "; extraRm += " AND rm.cntcode = @cnt "; p.Add("cnt", cntcode.Value); }
+
+            // Money-in rows only. ADVANCE usage rows are excluded (already counted at deposit time).
+            var details = (await db.QueryAsync<HmsPayModeSourceRow>($@"
+        SELECT
+            CASE WHEN rm.receipttype = 'DUE'     THEN 'DUE'
+                 WHEN rm.receipttype = 'ADVANCE' THEN 'ADVANCE'
+                 ELSE 'BILL' END                                              AS source,
+            UPPER(COALESCE(NULLIF(bcb.collection_type, ''), 'UNSPECIFIED'))   AS paymode,
+            COUNT(DISTINCT bcb.receipt_guid)::int                             AS receipt_count,
+            COUNT(DISTINCT bcb.request_guid)::int                             AS bill_count,
+            COALESCE(SUM(bcb.collectedamount), 0)::double precision           AS total_collected
+        FROM balancecollectionby bcb
+        INNER JOIN receipt_master rm
+                ON rm.receiptguid = bcb.receipt_guid
+               AND rm.tenant_code = bcb.tenant_code
+        LEFT JOIN lab_request_master m
+               ON m.requestguid = bcb.request_guid
+              AND m.tenant_code = bcb.tenant_code
+        WHERE bcb.tenant_code = @t
+          AND COALESCE(bcb.deleted, false)  = false
+          AND COALESCE(rm.isdeleted, false) = false
+          AND COALESCE(rm.deleted, false)   = false
+          AND UPPER(COALESCE(bcb.collection_type, '')) <> 'ADVANCE'
+          AND (bcb.request_guid IS NULL
+               OR (m.bill_category = 'HMS'
+                   AND COALESCE(m.isdeleted, false) = false
+                   AND COALESCE(m.deleted, false)   = false))
+          AND COALESCE(bcb.collected_date, bcb.entereddate) >= @from
+          AND COALESCE(bcb.collected_date, bcb.entereddate) <  @to
+          {extra}
+        GROUP BY 1, 2
+        ORDER BY 2, 1", p)).ToList();
+
+            // Advance refunds (no balancecollectionby row is written for refunds)
+            double refunded = await db.ExecuteScalarAsync<double>($@"
+        SELECT COALESCE(SUM(rm.amountpaid), 0)::double precision
+        FROM receipt_master rm
+        WHERE rm.tenant_code = @t
+          AND rm.receipttype = 'ADVANCE_REFUND'
+          AND COALESCE(rm.isdeleted, false) = false
+          AND rm.receiptdate >= @from AND rm.receiptdate < @to
+          {extraRm}", p);
+
+            var byPaymode = details
+                .GroupBy(d => d.paymode)
+                .Select(g => new HmsPayModeTotalRow
+                {
+                    paymode = g.Key,
+                    bill_amount = Math.Round(g.Where(x => x.source == "BILL").Sum(x => x.total_collected), 2),
+                    due_amount = Math.Round(g.Where(x => x.source == "DUE").Sum(x => x.total_collected), 2),
+                    advance_amount = Math.Round(g.Where(x => x.source == "ADVANCE").Sum(x => x.total_collected), 2),
+                    total = Math.Round(g.Sum(x => x.total_collected), 2)
+                })
+                .OrderByDescending(x => x.total)
+                .ToList();
+
+            double bill = byPaymode.Sum(x => x.bill_amount);
+            double due = byPaymode.Sum(x => x.due_amount);
+            double adv = byPaymode.Sum(x => x.advance_amount);
+            double grand = Math.Round(bill + due + adv, 2);
+
+            return new HmsPayModeCollectionResponse
+            {
+                fromdate = fromdate.Date,
+                todate = todate.Date,
+                bhcode = bhcode,
+                cntcode = cntcode,
+                bill_total = Math.Round(bill, 2),
+                due_total = Math.Round(due, 2),
+                advance_total = Math.Round(adv, 2),
+                grand_total = grand,
+                advance_refunded = Math.Round(refunded, 2),
+                net_total = Math.Round(grand - refunded, 2),
+                by_paymode = byPaymode,
+                details = details
+            };
+        }
+        public async Task<HmsOpCategoryCollectionResponse> GetOpCategoryCollectionReport(
+    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
+        {
+            using var db = GetConnection();
+
+            var p = new DynamicParameters();
+            p.Add("t", tenantCode);
+            p.Add("from", fromdate.Date);
+            p.Add("to", todate.Date.AddDays(1));   // exclusive
+
+            string extra = "";
+            if (bhcode.HasValue) { extra += " AND lrm.enteredbhcode = @bh "; p.Add("bh", bhcode.Value); }
+            if (cntcode.HasValue) { extra += " AND lrm.cntcode = @cnt "; p.Add("cnt", cntcode.Value); }
+            if (dcode.HasValue) { extra += " AND op.dcode = @dcode "; p.Add("dcode", dcode.Value); }
+
+            string sql = $@"
+    WITH base AS (
+        SELECT
+            op.op_id::text                                   AS op_id,
+            op.op_no,
+            op.token_no,
+            op.visit_date::timestamp                         AS visit_date,
+            lrm.name                                         AS patient_name,
+            lrm.custid                                       AS custid,
+            lrm.requestguid                                  AS requestguid,
+            lrm.requestsnoprint                              AS bill_no,
+            COALESCE(lrm.totalamount, 0)                     AS bill_total,
+            COALESCE(lrm.paidamount, 0)                      AS bill_paid,
+            UPPER(COALESCE(lrd.chargetype, ''))              AS chargetype,
+            COALESCE(NULLIF(lrd.item_name, ''), tm.name, '') AS item_name,
+            COALESCE(lrd.testamount, 0)                      AS gross,
+            COALESCE(lrd.newamount, lrd.testamount, 0)       AS line_net,
+            COALESCE(gm.name, '')                            AS groupname,
+            COALESCE(gm.isscan, false)                       AS isscan,
+            svc.service_id,
+            svc.service_name,
+            SUM(COALESCE(lrd.newamount, lrd.testamount, 0))
+                OVER (PARTITION BY lrm.requestguid)          AS bill_lines_total
+        FROM lab_request_master lrm
+        INNER JOIN op_registration op
+                ON op.op_id::text   = COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, ''))
+               AND op.tenant_code   = lrm.tenant_code
+               AND COALESCE(op.isdeleted, false) = false
+        INNER JOIN lab_request_details lrd
+                ON lrd.requestguid  = lrm.requestguid
+               AND COALESCE(lrd.isdeleted, false) = false
+        LEFT JOIN test_master tm
+               ON tm.tcode = lrd.tcode AND tm.tenant_code = lrm.tenant_code
+        LEFT JOIN group_master gm
+               ON gm.gcode = tm.gcode AND gm.tenant_code = lrm.tenant_code
+        LEFT JOIN LATERAL (
+            SELECT s.service_id, s.service_name
+              FROM service_type_master s
+             WHERE s.tenant_code = lrm.tenant_code
+               AND COALESCE(s.deleted, false) = false
+               AND LOWER(TRIM(s.service_name)) =
+                   LOWER(TRIM(COALESCE(NULLIF(lrd.item_name, ''), tm.name, '')))
+             LIMIT 1
+        ) svc ON true
+        WHERE lrm.tenant_code = @t
+          AND lrm.bill_category = 'HMS'
+          AND COALESCE(lrm.isdeleted, false) = false
+          AND COALESCE(lrm.deleted, false)   = false
+          AND op.visit_date >= @from AND op.visit_date < @to
+          {extra}
+    ),
+    cat AS (
+        SELECT b.*,
+            CASE
+                WHEN b.chargetype = 'CONSULTATION' THEN 'CONSULTATION'
+                WHEN b.chargetype = 'DRESSING'
+                     OR LOWER(b.item_name) LIKE 'dressing%' THEN 'DRESSING'
+                WHEN b.chargetype = 'SERVICE'
+                     OR b.service_id IS NOT NULL THEN 'SERVICE'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'physio|fisho|therap' THEN 'PHYSIO'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'echo|doppler' THEN 'ECHO'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'ecg|electrocardio' THEN 'ECG'
+                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'x-?ray|radio' THEN 'XRAY'
+                WHEN b.isscan
+                     OR LOWER(b.groupname || ' ' || b.item_name) ~ 'scan|usg|ultrasound|\m(ct|mri)\M' THEN 'SCAN'
+                ELSE 'LAB'
+            END AS category,
+            CASE WHEN b.bill_lines_total > 0 THEN b.line_net / b.bill_lines_total ELSE 0 END AS ratio
+        FROM base b
+    )
+    SELECT op_id, op_no, token_no, visit_date, patient_name, custid, requestguid, bill_no,
+           item_name, service_id, service_name, category,
+           gross::float8                 AS gross,
+           (bill_total * ratio)::float8  AS net,
+           (bill_paid  * ratio)::float8  AS paid
+    FROM cat
+    ORDER BY visit_date, op_no";
+
+            var lines = (await db.QueryAsync<HmsOpCategoryLine>(sql, p, commandTimeout: 60)).ToList();
+
+            double R(double v) => Math.Round(v, 2);
+
+            // ── Category summary ─────────────────────────────────────────────
+            var order = new[] { "CONSULTATION", "DRESSING", "SERVICE", "LAB", "SCAN", "PHYSIO", "ECG", "XRAY", "ECHO" };
+            var optional = new HashSet<string> { "XRAY", "ECHO" };
+
+            var categories = order
+                .Select(c =>
+                {
+                    var g = lines.Where(l => l.category == c).ToList();
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), gross = g.Sum(x => x.gross);
+                    return new HmsOpCategoryAmountRow
+                    {
+                        category = c,
+                        visit_count = g.Select(x => x.op_id).Distinct().Count(),
+                        bill_count = g.Select(x => x.requestguid).Distinct().Count(),
+                        item_count = g.Count,
+                        gross_amount = R(gross),
+                        discount_amount = R(Math.Max(gross - net, 0)),
+                        net_amount = R(net),
+                        collected_amount = R(paid),
+                        due_amount = R(Math.Max(net - paid, 0))
+                    };
+                })
+                .Where(r => !optional.Contains(r.category) || r.item_count > 0)
+                .ToList();
+
+            // ── Per-service breakdown (service master) ───────────────────────
+            var services = lines
+                .Where(l => l.category == "SERVICE")
+                .GroupBy(l => new { l.service_id, name = l.service_name ?? l.item_name ?? "Service" })
+                .Select(g =>
+                {
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid);
+                    return new HmsOpServiceAmountRow
+                    {
+                        service_id = g.Key.service_id,
+                        service_name = g.Key.name,
+                        visit_count = g.Select(x => x.op_id).Distinct().Count(),
+                        item_count = g.Count(),
+                        tokens = string.Join(", ", g.Select(x => x.token_no)
+                                                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                                                    .Distinct().Take(50)),
+                        net_amount = R(net),
+                        collected_amount = R(paid),
+                        due_amount = R(Math.Max(net - paid, 0))
+                    };
+                })
+                .OrderByDescending(s => s.net_amount)
+                .ToList();
+
+            // ── Per-visit rows ───────────────────────────────────────────────
+            var visits = lines
+                .GroupBy(l => l.op_id)
+                .Select(g =>
+                {
+                    var first = g.First();
+                    var row = new HmsOpVisitCategoryRow
+                    {
+                        op_id = g.Key,
+                        op_no = first.op_no,
+                        token_no = first.token_no,
+                        visit_date = first.visit_date,
+                        custid = first.custid,
+                        patient_name = first.patient_name,
+                        bill_nos = string.Join(", ", g.Select(x => x.bill_no).Where(x => x != null).Distinct())
+                    };
+                    foreach (var c in order)
+                    {
+                        var cl = g.Where(x => x.category == c).ToList();
+                        if (cl.Count == 0 && optional.Contains(c)) continue;
+                        row.net_by_category[c] = R(cl.Sum(x => x.net));
+                        row.collected_by_category[c] = R(cl.Sum(x => x.paid));
+                    }
+                    row.net_amount = R(g.Sum(x => x.net));
+                    row.collected_amount = R(g.Sum(x => x.paid));
+                    row.due_amount = R(Math.Max(row.net_amount - row.collected_amount, 0));
+                    return row;
+                })
+                .OrderBy(v => v.visit_date).ThenBy(v => v.op_no)
+                .ToList();
+
+            double totalNet = lines.Sum(l => l.net), totalPaid = lines.Sum(l => l.paid);
+
+            return new HmsOpCategoryCollectionResponse
+            {
+                fromdate = fromdate.Date,
+                todate = todate.Date,
+                bhcode = bhcode,
+                cntcode = cntcode,
+                dcode = dcode,
+                total_visits = visits.Count,
+                total_net = R(totalNet),
+                total_collected = R(totalPaid),
+                total_due = R(Math.Max(totalNet - totalPaid, 0)),
+                categories = categories,
+                services = services,
+                visits = visits
+            };
         }
     }
 }

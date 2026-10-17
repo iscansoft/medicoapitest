@@ -4,16 +4,21 @@ using medico_backend.InventoryModel;
 using Npgsql;
 using OfficeOpenXml;
 using System.Data;
+using System.Globalization;
+using System.IO.Compression;
+using System.Xml.Linq;
 
 namespace medico_backend.InventoryClass
 {
     public class ItemMasterClass
     {
         private readonly string con;
+        private readonly string _hmsCon;   // DB that holds counter_timing / billno_master / lab_settings
 
         public ItemMasterClass(IConfiguration config)
         {
             con = config.GetConnectionString("inventory_conn");
+            _hmsCon = config.GetConnectionString("conn") ?? con;
         }
 
         // ─── ITEM MASTER ──────────────────────────────────────────────────────────────
@@ -2818,6 +2823,9 @@ string tenantcode)
         }
         public async Task<string> InsertSales(sales_request request)
         {
+            var (shiftError, cnttid) = await ResolveSalesShift(request.master, request.master.tenantcode!);
+            if (shiftError != null) return shiftError;
+            request.master.cnttid = cnttid;
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
@@ -2885,7 +2893,8 @@ INSERT INTO sales_master
     companycode,
     ordercode,
     cntcode,
-    bh_code
+    bh_code,
+    cnttid
 )
 VALUES
 (
@@ -2920,7 +2929,8 @@ VALUES
     @companycode,
     @ordercode,
     @cntcode,
-    @bh_code
+    @bh_code,
+    @cnttid
 )
 RETURNING salescode;";
 
@@ -2949,8 +2959,13 @@ INSERT INTO sales_detail
     manufacturingdate,
     expirydate,
     soldqty,
+    days,
     warehousecode,
-    tenantcode
+    tenantcode,
+    morning_dose,
+    afternoon_dose,
+    evening_dose,
+    night_dose
 )
 VALUES
 (
@@ -2970,8 +2985,13 @@ VALUES
     @manufacturingdate,
     @expirydate,
     @soldqty,
+    @days,
     @warehousecode,
-    @tenantcode
+    @tenantcode,
+    @morning_dose,
+    @afternoon_dose,
+    @evening_dose,
+    @night_dose
 );";
 
                         foreach (var item in request.details)
@@ -3037,7 +3057,27 @@ WHERE stockcode=@stockcode;";
                                 },
                                 trans);
                         }
+                        // ── Mark pharmacy queue rows as BILLED (same transaction) ──
+                        if (request.queue_ids != null && request.queue_ids.Any())
+                        {
+                            var ids = request.queue_ids.Distinct().ToArray();
 
+                            int marked = await conn.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = true,
+            billno        = @billno,
+            salescode     = @salescode,
+            billed_date   = NOW(),
+            updated_at    = NOW()
+        WHERE queue_id = ANY(@ids)
+          AND tenant_code = @tenantcode
+          AND COALESCE(billed_status, false) = false
+          AND status <> 'CANCELLED';",
+                                new { billno, salescode, ids, tenantcode = request.master.tenantcode }, trans);
+
+                            if (marked != ids.Length)
+                                throw new Exception("One or more pharmacy queue items are already billed or cancelled.");
+                        }
                         await trans.CommitAsync();
 
                         return "Sales Inserted Successfully";
@@ -3108,8 +3148,8 @@ WHERE stockcode=@stockcode;";
                         taxpercentage, taxamount,
                         amount, totalamount, batchno,
                         manufacturingdate, expirydate,
-                        soldqty, returnedqty,days, warehousecode,
-                        tenantcode
+                        soldqty, days,returnedqty, warehousecode,
+                        tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
                     )
                     VALUES
                     (
@@ -3119,8 +3159,8 @@ WHERE stockcode=@stockcode;";
                         @taxpercentage, @taxamount,
                         @amount, @totalamount, @batchno,
                         @manufacturingdate, @expirydate,
-                        @soldqty, @returnedqty,@days, @warehousecode,
-                        @tenantcode
+                        @soldqty, @days,@returnedqty, @warehousecode,
+                        @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
                     )";
 
                         foreach (var item in request.details)
@@ -3172,14 +3212,27 @@ WHERE stockcode=@stockcode;";
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
+                using var trans = await conn.BeginTransactionAsync();
+                try
+                {
+                    await conn.ExecuteAsync(@"
+                UPDATE sales_master
+                SET deleted = true, isactive = false, modifieddate = NOW()
+                WHERE salescode = @salescode AND tenantcode = @tenantcode",
+                        new { salescode, tenantcode }, trans);
 
-                string query = @"
-            UPDATE sales_master
-            SET deleted = true, isactive = false, modifieddate = NOW()
-            WHERE salescode = @salescode AND tenantcode = @tenantcode";
+                    // release pharmacy queue rows linked to this sale
+                    await conn.ExecuteAsync(@"
+                UPDATE pharmacy_prescription_queue
+                SET billed_status = false, billno = NULL, salescode = NULL,
+                    billed_date = NULL, updated_at = NOW()
+                WHERE salescode = @salescode AND tenant_code = @tenantcode;",
+                        new { salescode, tenantcode }, trans);
 
-                await conn.ExecuteAsync(query, new { salescode, tenantcode });
-                return "Sales Deleted Successfully";
+                    await trans.CommitAsync();
+                    return "Sales Deleted Successfully";
+                }
+                catch { await trans.RollbackAsync(); throw; }
             }
         }
 
@@ -6198,6 +6251,11 @@ stock_transfer_partial_reject_request request)
                         afternoon = item.afternoon,
                         evening = item.evening,
                         night = item.night,
+                        morning_dose = item.morning_dose,
+                        afternoon_dose = item.afternoon_dose,
+                        evening_dose = item.evening_dose,
+                        night_dose = item.night_dose,
+                        dose_unit = item.dose_unit,
                         before_food = item.before_food,
                         after_food = item.after_food,
                         days = item.days,
@@ -7588,6 +7646,890 @@ AND deleted = false;";
                 details = details.ToList(),
                 terms = terms.ToList()
             };
+        }
+        public async Task<List<PharmacyPrescriptionQueueRow>> GetPharmacyQueue(
+    string tenant_code, string? status = null, bool? billed = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            var rows = await db.QueryAsync<PharmacyPrescriptionQueueRow>(
+                @"SELECT * FROM pharmacy_prescription_queue
+          WHERE tenant_code = @tenant_code
+          AND (@status IS NULL OR status = @status)
+          AND (@billed::boolean IS NULL OR COALESCE(billed_status,false) = @billed::boolean)
+          ORDER BY created_at DESC",
+                new { tenant_code, status, billed });
+            return rows.ToList();
+        }
+
+        public async Task<List<PharmacyQueueGroup>> GetPharmacyQueueByCustId(
+            decimal custid, string tenant_code, string? status = null, bool? billed = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            var rows = (await db.QueryAsync<PharmacyPrescriptionQueueRow>(
+                @"SELECT * FROM pharmacy_prescription_queue
+          WHERE custid = @custid AND tenant_code = @tenant_code
+          AND (@status IS NULL OR status = @status)
+          AND (@billed::boolean IS NULL OR COALESCE(billed_status,false) = @billed::boolean)
+          ORDER BY created_at DESC",
+                new { custid, tenant_code, status, billed })).ToList();
+
+            return rows
+                .GroupBy(r => new { r.pr_code, r.sheet_id })
+                .Select(g => new PharmacyQueueGroup
+                {
+                    custid = custid,
+                    pr_code = g.Key.pr_code,
+                    sheet_id = g.Key.sheet_id,
+                    op_id = g.First().op_id,
+                    ip_id = g.First().ip_id,
+                    items = g.ToList(),
+                    all_billed = g.All(i => i.billed_status),
+                    unbilled_count = g.Count(i => !i.billed_status && i.status != "CANCELLED")
+                })
+                .OrderByDescending(g => g.items.Max(i => i.created_at))
+                .ToList();
+        }
+
+        // Manual mark-as-billed (e.g. billed outside InsertSales)
+        public async Task<string> MarkQueueBilled(MarkQueueBilledRequest req, string tenant_code)
+        {
+            if (req.queue_ids == null || !req.queue_ids.Any()) return "queue_ids is required";
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            int rows = await db.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = true, billno = @billno, salescode = @salescode,
+            billed_date = NOW(), updated_at = NOW()
+        WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+          AND COALESCE(billed_status,false) = false AND status <> 'CANCELLED';",
+                new { ids = req.queue_ids.Distinct().ToArray(), req.billno, req.salescode, tenant_code });
+
+            return rows > 0 ? $"Success|Billed:{rows}" : "No unbilled queue items found";
+        }
+
+        public async Task<string> UnbillQueue(UnbillQueueRequest req, string tenant_code)
+        {
+            if (req.queue_ids == null || !req.queue_ids.Any()) return "queue_ids is required";
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            int rows = await db.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = false, billno = NULL, salescode = NULL,
+            billed_date = NULL, updated_at = NOW()
+        WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+          AND COALESCE(billed_status,false) = true;",
+                new { ids = req.queue_ids.Distinct().ToArray(), tenant_code });
+
+            return rows > 0 ? $"Success|Unbilled:{rows}" : "No billed queue items found";
+        }
+        // ─── SALES COUNTER SHIFT (uses same counter_timing table as HMS billing) ──────
+
+        // Set to true to make an open counter mandatory for EVERY sale.
+        // false = if bh_code/cntcode are not sent, old behaviour is kept.
+        private const bool RequireCounterForSales = false;
+
+        private static TimeZoneInfo GetIst()
+        {
+            try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata"); }
+            catch { return TimeZoneInfo.FindSystemTimeZoneById("India Standard Time"); }
+        }
+
+        private static DateTime ComputeSalesShiftPlannedEndUtc(DateTime startUtc, string? mode, string? endTime)
+        {
+            var tz = GetIst();
+            var startLocal = TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(startUtc, DateTimeKind.Utc), tz);
+            var midnight = startLocal.Date.AddDays(1);
+            var endLocal = midnight;
+
+            if (string.Equals(mode, "FIXED", StringComparison.OrdinalIgnoreCase)
+                && TimeSpan.TryParse(endTime, out var t))
+            {
+                var configured = startLocal.Date + t;
+                if (configured > startLocal && configured < midnight) endLocal = configured;
+            }
+            return TimeZoneInfo.ConvertTimeToUtc(endLocal, tz);
+        }
+
+        public async Task<(string status, medico_backend.Model.HmsCounterTimingDto? session)> OpenSalesCounterShift(
+            medico_backend.Model.HmsCounterTiming req, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            var now = DateTime.UtcNow;
+
+            // 1. close expired-but-unswept shift
+            await db.ExecuteAsync(
+                @"UPDATE counter_timing SET todate = planned_to, close_type = 'AUTO'
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND tenant_code=@tenantCode
+            AND todate IS NULL AND planned_to IS NOT NULL AND planned_to <= @now",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode, now });
+
+            // 2. already running?
+            var running = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                @"SELECT * FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND todate IS NULL AND tenant_code=@tenantCode LIMIT 1",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, tenantCode });
+            if (running != null)
+                return ("An active shift counter is currently operational for this target interface window.", null);
+
+            // 3. shift number for the day
+            var counterDate = req.counterdate?.Date ?? TimeZoneInfo.ConvertTimeFromUtc(now, GetIst()).Date;
+
+            int shiftNo = await db.ExecuteScalarAsync<int>(
+                @"SELECT COALESCE(MAX(shiftsno), 0) + 1 FROM counter_timing
+          WHERE bhcode=@bhcode AND cntcode=@cntcode AND counterdate=@counterDate::date AND tenant_code=@tenantCode",
+                new { bhcode = req.bhcode, cntcode = req.cntcode, counterDate, tenantCode });
+
+            // 4. lab setting (FIXED / VARIABLE)
+            var setting = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT shift_timing_mode, shift_end_time FROM lab_settings
+          WHERE tenant_code=@tenantCode AND deleted=false
+            AND (bh_code=@bh OR bh_code=0 OR bh_code IS NULL)
+          ORDER BY (bh_code=@bh) DESC NULLS LAST LIMIT 1",
+                new { bh = req.bhcode, tenantCode });
+
+            string mode = ((string?)setting?.shift_timing_mode ?? "VARIABLE").ToUpper();
+
+            // 5. fill + insert once
+            req.cnttid = Guid.NewGuid().ToString();
+            req.shiftsno = shiftNo;
+            req.counterdate = counterDate;
+            req.fromdate = now;
+            req.todate = null;
+            req.shift_mode = mode;
+            req.planned_to = ComputeSalesShiftPlannedEndUtc(now, mode, (string?)setting?.shift_end_time);
+            req.close_type = null;
+            req.tenant_code = tenantCode;
+
+            await Dapper.Contrib.Extensions.SqlMapperExtensions.InsertAsync(db, req);
+
+            var mapped = await GetSalesShiftById(req.cnttid, tenantCode);
+            return ("SUCCESS", mapped);
+        }
+
+        public async Task<string> CloseSalesCounterShift(medico_backend.Model.CloseCounterRequest req, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            var shift = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                "SELECT * FROM counter_timing WHERE cnttid=@cnttid AND tenant_code=@tenantCode",
+                new { cnttid = req.cnttid, tenantCode });
+
+            if (shift == null) return "Shift not found.";
+            if (shift.todate != null) return "SUCCESS";
+
+            var now = DateTime.UtcNow;
+
+            if (shift.planned_to != null && now >= shift.planned_to.Value.AddSeconds(-60))
+            {
+                await db.ExecuteAsync(
+                    "UPDATE counter_timing SET todate=@t, close_type='AUTO' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                    new { t = shift.planned_to, id = shift.cnttid, tenantCode });
+                return "SUCCESS";
+            }
+
+            if (shift.shift_mode == "FIXED")
+                return "This is a fixed-timing shift. It will close automatically at the scheduled time.";
+
+            await db.ExecuteAsync(
+                "UPDATE counter_timing SET todate=@now, close_type='MANUAL' WHERE cnttid=@id AND tenant_code=@tenantCode AND todate IS NULL",
+                new { now, id = shift.cnttid, tenantCode });
+            return "SUCCESS";
+        }
+
+        public async Task<medico_backend.Model.HmsCounterTimingDto?> GetSalesShiftById(string cnttid, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            return await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTimingDto>(
+                @"SELECT c.*, b.name as counter_name,
+                 CASE WHEN c.todate IS NULL THEN true ELSE false END as is_open,
+                 CASE WHEN c.todate IS NOT NULL THEN true ELSE false END as is_closed
+          FROM counter_timing c
+          LEFT JOIN billno_master b ON c.cntcode = b.cntcode AND c.tenant_code = b.tenant_code
+          WHERE c.cnttid = @cnttid AND c.tenant_code = @tenantCode LIMIT 1",
+                new { cnttid, tenantCode });
+        }
+
+        public async Task<medico_backend.Model.HmsCounterTimingDto?> GetActiveSalesShift(int bhcode, int cntcode, string tenantCode)
+        {
+            using var db = new NpgsqlConnection(_hmsCon);
+            return await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTimingDto>(
+                @"SELECT c.*, b.name as counter_name,
+                 CASE WHEN c.todate IS NULL THEN true ELSE false END as is_open,
+                 CASE WHEN c.todate IS NOT NULL THEN true ELSE false END as is_closed
+          FROM counter_timing c
+          LEFT JOIN billno_master b ON c.cntcode = b.cntcode AND c.tenant_code = b.tenant_code
+          WHERE c.bhcode = @bhcode AND c.cntcode = @cntcode AND c.todate IS NULL
+            AND (c.planned_to IS NULL OR c.planned_to > @now)
+            AND c.tenant_code = @tenantCode
+          LIMIT 1",
+                new { bhcode, cntcode, tenantCode, now = DateTime.UtcNow });
+        }
+
+        // Used by InsertSales: validates the counter shift and returns cnttid to stamp on the bill
+        private async Task<(string? error, string? cnttid)> ResolveSalesShift(sales_master m, string tenantcode)
+        {
+            bool hasBh = m.bh_code.HasValue && m.bh_code.Value > 0;
+            bool hasCnt = m.cntcode.HasValue && m.cntcode.Value > 0;
+
+            if (!hasBh && !hasCnt)
+            {
+                if (RequireCounterForSales) return ("bh_code and cntcode are required for billing.", null);
+                return (null, null);                       // legacy behaviour
+            }
+            if (hasBh != hasCnt)
+                return ("Both bh_code and cntcode are required.", null);
+
+            using var db = new NpgsqlConnection(_hmsCon);
+            var shift = await db.QueryFirstOrDefaultAsync<medico_backend.Model.HmsCounterTiming>(
+                @"SELECT * FROM counter_timing
+          WHERE bhcode = @bhcode AND cntcode = @cntcode AND todate IS NULL
+            AND (planned_to IS NULL OR planned_to > @now)
+            AND tenant_code = @tenantCode
+          LIMIT 1",
+                new { bhcode = m.bh_code, cntcode = m.cntcode, tenantCode = tenantcode, now = DateTime.UtcNow });
+
+            if (shift == null)
+                return ("Selected billing counter shift session is not open.", null);
+
+            return (null, shift.cnttid);
+        }
+        // ─── ITEM MASTER EXCEL UPLOAD (header-based, null tolerant) ─────────────────────
+
+        // normalised header text (letters/digits only, lower case) → internal field
+        private static readonly Dictionary<string, string> ItemHeaderMap = new()
+        {
+            ["itemname"] = "itemname",
+            ["shortname"] = "shortname",
+            ["category"] = "category",
+            ["itemtype"] = "itemtype",
+            ["subcategory"] = "itemtype",
+            ["schedule"] = "schedule",
+            ["drugname"] = "drugname",
+            ["isnarcoticdrug"] = "isnarcoticdrug",
+            ["purchaserate"] = "purchaserate",
+            ["mrp"] = "mrp",
+            ["uom"] = "uom",
+            ["packsize"] = "packsize",
+            ["hsncode"] = "hsncode",
+            ["gst"] = "gst",
+            ["minstock"] = "minstock",
+            ["reorderlevel"] = "reorderlevel",
+            ["isexpiry"] = "isexpiry",
+            ["noofdays"] = "expiryalertdays"
+        };
+
+        private static string NormHeader(string? s) =>
+            new string((s ?? "").Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+
+        private static string NameKey(string? s) =>
+            System.Text.RegularExpressions.Regex.Replace((s ?? "").Trim(), @"\s+", " ").ToLowerInvariant();
+
+        //public async Task<ItemExcelUploadResult> UploadItemsFromExcel(
+        //    Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
+        //{
+        //    var result = new ItemExcelUploadResult();
+
+        //    using var package = new ExcelPackage(stream);
+        //    var ws = package.Workbook.Worksheets.FirstOrDefault(w => w.Name.Equals("Items", StringComparison.OrdinalIgnoreCase))
+        //             ?? package.Workbook.Worksheets.FirstOrDefault()
+        //             ?? throw new Exception("Excel file has no worksheets.");
+        //    if (ws.Dimension == null) throw new Exception("Excel file is empty.");
+
+        //    int rowCount = ws.Dimension.Rows;
+        //    int colCount = ws.Dimension.Columns;
+
+        //    // ── header row → field → column index ──
+        //    var headers = new Dictionary<string, int>();
+        //    for (int c = 1; c <= colCount; c++)
+        //    {
+        //        var raw = ws.Cells[1, c].Text?.Trim();
+        //        if (string.IsNullOrEmpty(raw)) continue;
+        //        if (ItemHeaderMap.TryGetValue(NormHeader(raw), out var field)) headers[field] = c;
+        //        else result.ignored_columns.Add(raw);
+        //    }
+        //    foreach (var req in new[] { "itemname", "category", "itemtype", "uom" })
+        //        if (!headers.ContainsKey(req))
+        //            throw new Exception($"Required column '{req}' is missing in row 1.");
+
+        //    using IDbConnection db = new NpgsqlConnection(con);
+        //    db.Open();
+        //    using var tx = db.BeginTransaction();
+
+        //    try
+        //    {
+        //        // ── load masters once (tenant wise) ──
+        //        var parentMap = new Dictionary<string, int>();                 // category name → parentcategorycode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT parentcategorycode, parentcategoryname
+        //    FROM public.parent_category_master
+        //    WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
+        //            parentMap.TryAdd(NameKey((string)r.parentcategoryname), Convert.ToInt32(r.parentcategorycode));
+
+        //        var subMap = new Dictionary<(int, string), int>();             // (parent, item type name) → categorycode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT categorycode, categoryname, parentcategorycode
+        //    FROM public.category_master
+        //    WHERE deleted = false AND tenantcode = @tenantcode;", new { tenantcode }, tx))
+        //            subMap.TryAdd((Convert.ToInt32(r.parentcategorycode), NameKey((string)r.categoryname)),
+        //                          Convert.ToInt32(r.categorycode));
+
+        //        var uomMap = new Dictionary<string, int>();                    // name / shortname → ucode
+        //        foreach (var r in await db.QueryAsync(@"
+        //    SELECT ucode, name, shortname
+        //    FROM public.uom_master
+        //    WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;", new { tenantcode }, tx))
+        //        {
+        //            int code = Convert.ToInt32(r.ucode);
+        //            if (r.name != null) uomMap.TryAdd(NameKey((string)r.name), code);
+        //            if (r.shortname != null) uomMap.TryAdd(NameKey((string)r.shortname), code);
+        //        }
+
+        //        // ── existing item names (duplicate check) ──
+        //        var existing = new HashSet<string>();
+        //        if (skipDuplicates)
+        //        {
+        //            var names = await db.QueryAsync<string>(
+        //                "SELECT itemname FROM public.item_master WHERE tenantcode = @tenantcode AND deleted = false AND itemname IS NOT NULL;",
+        //                new { tenantcode }, tx);
+        //            foreach (var n in names) existing.Add(NameKey(n));
+        //        }
+
+        //        for (int r = 2; r <= rowCount; r++)
+        //        {
+        //            result.total_rows++;
+
+        //            bool blank = true;
+        //            for (int c = 1; c <= colCount; c++)
+        //                if (!string.IsNullOrWhiteSpace(ws.Cells[r, c].Text)) { blank = false; break; }
+        //            if (blank) { result.skipped_blank++; continue; }
+
+        //            var errs = new List<string>();
+
+        //            string? Cell(string f) =>
+        //                headers.TryGetValue(f, out var ci) && !string.IsNullOrWhiteSpace(ws.Cells[r, ci].Text)
+        //                    ? ws.Cells[r, ci].Text.Trim() : null;
+
+        //            decimal? Dec(string f)
+        //            {
+        //                var s = Cell(f);
+        //                if (s == null) return null;
+        //                s = s.Replace("%", "").Replace(",", "").Trim();
+        //                if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)) return d;
+        //                errs.Add($"{f}: '{s}' is not a number");
+        //                return null;
+        //            }
+
+        //            bool Bool(string f)
+        //            {
+        //                var s = Cell(f)?.ToLowerInvariant();
+        //                if (s == null) return false;
+        //                if (s is "true" or "yes" or "y" or "1") return true;
+        //                if (s is "false" or "no" or "n" or "0") return false;
+        //                errs.Add($"{f}: '{s}' must be Yes/No");
+        //                return false;
+        //            }
+
+        //            // ── required text ──
+        //            var itemname = Cell("itemname");
+        //            if (itemname == null) errs.Add("Item name is required");
+
+        //            // ── Category name → code ──
+        //            var catName = Cell("category");
+        //            int categorycode = 0;
+        //            if (catName == null) errs.Add("Category is required");
+        //            else if (!parentMap.TryGetValue(NameKey(catName), out categorycode))
+        //                errs.Add($"Category '{catName}' not found in master");
+
+        //            // ── Item type (sub-category) name → code, scoped to the category ──
+        //            var typeName = Cell("itemtype");
+        //            int subcategorycode = 0;
+        //            if (typeName == null) errs.Add("Item type is required");
+        //            else if (categorycode != 0 && !subMap.TryGetValue((categorycode, NameKey(typeName)), out subcategorycode))
+        //                errs.Add($"Item type '{typeName}' not found under category '{catName}'");
+
+        //            // ── UOM name → code ──
+        //            var uomName = Cell("uom");
+        //            int uomcode = 0;
+        //            if (uomName == null) errs.Add("UOM is required");
+        //            else if (!uomMap.TryGetValue(NameKey(uomName), out uomcode))
+        //                errs.Add($"UOM '{uomName}' not found in master");
+
+        //            // ── numbers / flags (blank = 0 / false, packsize blank = 1) ──
+        //            decimal purchaserate = Dec("purchaserate") ?? 0m;
+        //            decimal mrp = Dec("mrp") ?? 0m;
+        //            decimal gst = Dec("gst") ?? 0m;
+        //            decimal minstock = Dec("minstock") ?? 0m;
+        //            decimal reorderlevel = Dec("reorderlevel") ?? 0m;
+        //            decimal packsize = Dec("packsize") ?? 1m;
+        //            int hsncode = (int)(Dec("hsncode") ?? 0m);
+        //            int expiryalertdays = (int)(Dec("expiryalertdays") ?? 0m);
+        //            bool isexpiry = Bool("isexpiry");
+        //            bool isnarcotic = Bool("isnarcoticdrug");
+
+        //            if (packsize <= 0) errs.Add("Pack size must be greater than 0");
+
+        //            if (errs.Count > 0)
+        //            {
+        //                result.errors.Add(new ItemExcelRowError { row = r, message = string.Join("; ", errs) });
+        //                continue;
+        //            }
+
+        //            // ── duplicate check (DB + inside the file) ──
+        //            if (skipDuplicates)
+        //            {
+        //                var key = NameKey(itemname);
+        //                if (existing.Contains(key)) { result.skipped_duplicate++; continue; }
+        //                existing.Add(key);
+        //            }
+
+        //            try
+        //            {
+        //                await db.ExecuteAsync("SAVEPOINT row_sp;", transaction: tx);
+
+        //                await db.ExecuteAsync(@"
+        //            INSERT INTO public.item_master
+        //            (
+        //                itemname, shortname, description,
+        //                categorycode, subcategorycode, itemtype,
+        //                schedule, drugname, isnarcoticdrug,
+        //                purchaserate, salesrate, mrp,
+        //                uomcode, packsize, hsncode, gstpercentage,
+        //                minstock, reorderlevel, currentstock,
+        //                isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
+        //                brandcode, manufacturercode, taxcode, naturetype, ledgergroupcode,
+        //                isactive, deleted, createddate, usercode, tenantcode
+        //            )
+        //            VALUES
+        //            (
+        //                @itemname, @shortname, NULL,
+        //                @categorycode, @subcategorycode, @itemtype,
+        //                @schedule, @drugname, @isnarcoticdrug,
+        //                @purchaserate, @salesrate, @mrp,
+        //                @uomcode, @packsize, @hsncode, @gstpercentage,
+        //                @minstock, @reorderlevel, 0,
+        //                @isexpiry, @expiryalertdays, true, @isexpiry, false,
+        //                0, 0, 0, 0, 0,
+        //                true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
+        //            );",
+        //                    new
+        //                    {
+        //                        itemname,
+        //                        shortname = Cell("shortname") ?? itemname,
+        //                        categorycode,
+        //                        subcategorycode,
+        //                        itemtype = typeName,
+        //                        schedule = Cell("schedule"),
+        //                        drugname = Cell("drugname"),
+        //                        isnarcoticdrug = isnarcotic,
+        //                        purchaserate,
+        //                        salesrate = mrp,                 // template has no sales rate → defaults to MRP
+        //                        mrp,
+        //                        uomcode,
+        //                        packsize,
+        //                        hsncode,
+        //                        gstpercentage = gst,
+        //                        minstock,
+        //                        reorderlevel,
+        //                        isexpiry,
+        //                        expiryalertdays,
+        //                        usercode = (int)(usercode ?? 0),
+        //                        tenantcode
+        //                    }, tx);
+
+        //                await db.ExecuteAsync("RELEASE SAVEPOINT row_sp;", transaction: tx);
+        //                result.inserted++;
+        //            }
+        //            catch (Exception rowEx)
+        //            {
+        //                await db.ExecuteAsync("ROLLBACK TO SAVEPOINT row_sp;", transaction: tx);
+        //                result.errors.Add(new ItemExcelRowError { row = r, message = rowEx.Message });
+        //            }
+        //        }
+
+        //        tx.Commit();
+        //        return result;
+        //    }
+        //    catch
+        //    {
+        //        tx.Rollback();
+        //        throw;
+        //    }
+        //}
+        // ─── Minimal .xlsx reader (no external library) ─────────────────────────────────
+        // Returns: row number → (column number → text). Handles shared strings, inline strings,
+        // booleans and numbers. Reads the sheet named `preferredSheet`, else the first sheet.
+        private static SortedDictionary<int, Dictionary<int, string>> ReadXlsxRows(Stream input, string preferredSheet)
+        {
+            XNamespace ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
+            XNamespace rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+            XNamespace pns = "http://schemas.openxmlformats.org/package/2006/relationships";
+
+            var ms = new MemoryStream();
+            input.CopyTo(ms);
+            ms.Position = 0;
+
+            using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+
+            XDocument Load(string path)
+            {
+                var entry = zip.GetEntry(path.TrimStart('/'));
+                if (entry == null) throw new Exception($"Invalid Excel file: '{path}' not found.");
+                using var s = entry.Open();
+                return XDocument.Load(s);
+            }
+
+            // ── sheets list ──
+            var wb = Load("xl/workbook.xml");
+            var sheets = wb.Root!.Element(ns + "sheets")?.Elements(ns + "sheet").ToList()
+                         ?? throw new Exception("Excel file has no worksheets.");
+            if (sheets.Count == 0) throw new Exception("Excel file has no worksheets.");
+
+            var sheet = sheets.FirstOrDefault(s =>
+                            string.Equals((string?)s.Attribute("name"), preferredSheet, StringComparison.OrdinalIgnoreCase))
+                        ?? sheets[0];
+
+            string relId = (string?)sheet.Attribute(rns + "id") ?? throw new Exception("Invalid worksheet reference.");
+
+            var rels = Load("xl/_rels/workbook.xml.rels");
+            string target = rels.Root!.Elements(pns + "Relationship")
+                .Where(r => (string?)r.Attribute("Id") == relId)
+                .Select(r => (string?)r.Attribute("Target"))
+                .FirstOrDefault() ?? throw new Exception("Worksheet file not found.");
+
+            string sheetPath = target.StartsWith("/") ? target.TrimStart('/') : "xl/" + target;
+
+            // ── shared strings ──
+            var shared = new List<string>();
+            if (zip.GetEntry("xl/sharedStrings.xml") != null)
+            {
+                var ss = Load("xl/sharedStrings.xml");
+                foreach (var si in ss.Root!.Elements(ns + "si"))
+                {
+                    // concatenate all <t> except phonetic runs (<rPh>)
+                    var text = string.Concat(si.Descendants(ns + "t")
+                        .Where(t => t.Parent?.Name != ns + "rPh")
+                        .Select(t => t.Value));
+                    shared.Add(text);
+                }
+            }
+
+            // ── column letters → index (A=1, B=2, ... AA=27) ──
+            static int ColIndex(string cellRef)
+            {
+                int col = 0;
+                foreach (char ch in cellRef)
+                {
+                    if (!char.IsLetter(ch)) break;
+                    col = col * 26 + (char.ToUpperInvariant(ch) - 'A' + 1);
+                }
+                return col;
+            }
+
+            // ── read sheet ──
+            var result = new SortedDictionary<int, Dictionary<int, string>>();
+            var sheetDoc = Load(sheetPath);
+            var sheetData = sheetDoc.Root!.Element(ns + "sheetData");
+            if (sheetData == null) return result;
+
+            int rowSeq = 0;
+            foreach (var row in sheetData.Elements(ns + "row"))
+            {
+                rowSeq++;
+                int rowNo = int.TryParse((string?)row.Attribute("r"), out var rn) ? rn : rowSeq;
+                var cells = new Dictionary<int, string>();
+                int colSeq = 0;
+
+                foreach (var c in row.Elements(ns + "c"))
+                {
+                    colSeq++;
+                    string? cref = (string?)c.Attribute("r");
+                    int colNo = !string.IsNullOrEmpty(cref) ? ColIndex(cref) : colSeq;
+                    string type = (string?)c.Attribute("t") ?? "";
+                    string raw = c.Element(ns + "v")?.Value ?? "";
+                    string value;
+
+                    switch (type)
+                    {
+                        case "s":   // shared string
+                            value = int.TryParse(raw, out var idx) && idx >= 0 && idx < shared.Count ? shared[idx] : "";
+                            break;
+                        case "inlineStr":
+                            value = string.Concat(c.Descendants(ns + "t").Select(t => t.Value));
+                            break;
+                        case "b":   // boolean
+                            value = raw == "1" ? "true" : "false";
+                            break;
+                        case "e":   // error cell (#N/A etc.)
+                            value = "";
+                            break;
+                        default:    // number / formula string
+                            value = raw;
+                            break;
+                    }
+
+                    if (colNo > 0) cells[colNo] = value;
+                }
+
+                result[rowNo] = cells;
+            }
+
+            return result;
+        }
+        public async Task<ItemExcelUploadResult> UploadItemsFromExcel(
+    Stream stream, string tenantcode, long? usercode, bool skipDuplicates)
+        {
+            var result = new ItemExcelUploadResult();
+
+            // ── read the workbook (no external library) ──
+            var grid = ReadXlsxRows(stream, "Items");
+            if (grid.Count == 0) throw new Exception("Excel file is empty.");
+
+            int rowCount = grid.Keys.Max();
+            int colCount = grid.Values.Where(r => r.Count > 0).Select(r => r.Keys.Max()).DefaultIfEmpty(0).Max();
+            if (colCount == 0) throw new Exception("Excel file is empty.");
+
+            string CellText(int r, int c) =>
+                grid.TryGetValue(r, out var rw) && rw.TryGetValue(c, out var v) ? (v ?? "") : "";
+
+            // ── header row → field → column index ──
+            var headers = new Dictionary<string, int>();
+            for (int c = 1; c <= colCount; c++)
+            {
+                var raw = CellText(1, c).Trim();
+                if (string.IsNullOrEmpty(raw)) continue;
+                if (ItemHeaderMap.TryGetValue(NormHeader(raw), out var field)) headers[field] = c;
+                else result.ignored_columns.Add(raw);
+            }
+
+            // Only Item name is mandatory now
+            foreach (var req in new[] { "itemname" })
+                if (!headers.ContainsKey(req))
+                    throw new Exception($"Required column '{req}' is missing in row 1.");
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // ── load masters once (tenant wise) ──
+                // category name → parentcategorycode
+                var parentMap = new Dictionary<string, int>();
+                var parentRows = await db.QueryAsync<(int parentcategorycode, string parentcategoryname)>(@"
+    SELECT parentcategorycode, parentcategoryname
+    FROM public.parent_category_master
+    WHERE deleted = false AND tenantcode = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var p in parentRows)
+                    if (p.parentcategoryname != null)
+                        parentMap.TryAdd(NameKey(p.parentcategoryname), p.parentcategorycode);
+
+                // (parentcategorycode, item type name) → categorycode
+                var subMap = new Dictionary<(int, string), int>();
+                var subRows = await db.QueryAsync<(long categorycode, string categoryname, int parentcategorycode)>(@"
+    SELECT categorycode, categoryname, parentcategorycode
+    FROM public.category_master
+    WHERE deleted = false AND tenantcode = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var s in subRows)
+                {
+                    if (s.categoryname == null) continue;
+                    var key = (s.parentcategorycode, NameKey(s.categoryname));
+                    subMap.TryAdd(key, (int)s.categorycode);
+                }
+
+                // uom name / shortname → ucode
+                var uomMap = new Dictionary<string, int>();
+                var uomRows = await db.QueryAsync<(long ucode, string? name, string? shortname)>(@"
+    SELECT ucode, name, shortname
+    FROM public.uom_master
+    WHERE COALESCE(deleted, false) = false AND tenant_code = @tenantcode;",
+                    new { tenantcode }, tx);
+                foreach (var u in uomRows)
+                {
+                    int code = (int)u.ucode;
+                    if (u.name != null) uomMap.TryAdd(NameKey(u.name), code);
+                    if (u.shortname != null) uomMap.TryAdd(NameKey(u.shortname), code);
+                }
+
+                // ── existing item names (duplicate check) ──
+                var existing = new HashSet<string>();
+                if (skipDuplicates)
+                {
+                    var names = await db.QueryAsync<string>(
+                        "SELECT itemname FROM public.item_master WHERE tenantcode = @tenantcode AND deleted = false AND itemname IS NOT NULL;",
+                        new { tenantcode }, tx);
+                    foreach (var n in names) existing.Add(NameKey(n));
+                }
+
+                for (int r = 2; r <= rowCount; r++)
+                {
+                    result.total_rows++;
+
+                    bool blank = true;
+                    for (int c = 1; c <= colCount; c++)
+                        if (!string.IsNullOrWhiteSpace(CellText(r, c))) { blank = false; break; }
+                    if (blank) { result.skipped_blank++; continue; }
+
+                    var errs = new List<string>();
+
+                    string? Cell(string f)
+                    {
+                        if (!headers.TryGetValue(f, out var ci)) return null;
+                        var text = CellText(r, ci);
+                        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+                    }
+
+                    decimal? Dec(string f)
+                    {
+                        var s = Cell(f);
+                        if (s == null) return null;
+                        s = s.Replace("%", "").Replace(",", "").Trim();
+                        if (decimal.TryParse(s, NumberStyles.Any, CultureInfo.InvariantCulture, out var d)) return d;
+                        errs.Add($"{f}: '{s}' is not a number");
+                        return null;
+                    }
+
+                    bool Bool(string f)
+                    {
+                        var s = Cell(f)?.ToLowerInvariant();
+                        if (s == null) return false;
+                        if (s is "true" or "yes" or "y" or "1") return true;
+                        if (s is "false" or "no" or "n" or "0") return false;
+                        errs.Add($"{f}: '{s}' must be Yes/No");
+                        return false;
+                    }
+
+                    // ── required text ──
+                    var itemname = Cell("itemname");
+                    if (itemname == null) errs.Add("Item name is required");
+
+                    // ── Category: OPTIONAL. Validated only when a value is given ──
+                    var catName = Cell("category");
+                    int categorycode = 0;
+                    if (catName != null && !parentMap.TryGetValue(NameKey(catName), out categorycode))
+                        errs.Add($"Category '{catName}' not found in master");
+
+                    // ── Item type (sub-category): OPTIONAL. Validated only when a value is given
+                    //    and a valid category was resolved to scope it ──
+                    var typeName = Cell("itemtype");
+                    int subcategorycode = 0;
+                    if (typeName != null && categorycode != 0
+                        && !subMap.TryGetValue((categorycode, NameKey(typeName)), out subcategorycode))
+                        errs.Add($"Item type '{typeName}' not found under category '{catName}'");
+
+                    // ── UOM: OPTIONAL. Validated only when a value is given ──
+                    var uomName = Cell("uom");
+                    int uomcode = 0;
+                    if (uomName != null && !uomMap.TryGetValue(NameKey(uomName), out uomcode))
+                        errs.Add($"UOM '{uomName}' not found in master");
+
+                    // ── numbers / flags (blank = 0 / false, packsize blank = 1) ──
+                    decimal purchaserate = Dec("purchaserate") ?? 0m;
+                    decimal mrp = Dec("mrp") ?? 0m;
+                    decimal gst = Dec("gst") ?? 0m;
+
+                    // Excel stores a "12%"-formatted cell as 0.12 → convert back to 12
+                    if (gst > 0m && gst < 1m) gst *= 100m;
+                    gst = Math.Round(gst, 2);
+                    if (gst < 0m || gst > 100m)
+                        errs.Add($"gst: '{gst}' must be between 0 and 100");
+
+                    decimal minstock = Dec("minstock") ?? 0m;
+                    decimal reorderlevel = Dec("reorderlevel") ?? 0m;
+                    decimal packsize = Dec("packsize") ?? 1m;
+                    int hsncode = (int)(Dec("hsncode") ?? 0m);
+                    int expiryalertdays = (int)(Dec("expiryalertdays") ?? 0m);
+                    bool isexpiry = Bool("isexpiry");
+                    bool isnarcotic = Bool("isnarcoticdrug");
+
+                    if (packsize <= 0) errs.Add("Pack size must be greater than 0");
+
+                    if (errs.Count > 0)
+                    {
+                        result.errors.Add(new ItemExcelRowError { row = r, message = string.Join("; ", errs) });
+                        continue;
+                    }
+
+                    // ── duplicate check (DB + inside the file) ──
+                    if (skipDuplicates)
+                    {
+                        var key = NameKey(itemname);
+                        if (existing.Contains(key)) { result.skipped_duplicate++; continue; }
+                        existing.Add(key);
+                    }
+
+                    try
+                    {
+                        await db.ExecuteAsync("SAVEPOINT row_sp;", transaction: tx);
+
+                        await db.ExecuteAsync(@"
+            INSERT INTO public.item_master
+            (
+                itemname, shortname, description,
+                categorycode, subcategorycode, itemtype,
+                schedule, drugname, isnarcoticdrug,
+                purchaserate, salesrate, mrp,
+                uomcode, packsize, hsncode, gstpercentage,
+                minstock, reorderlevel, currentstock,
+                isexpiry, expiryalertdays, batchrequired, expiryrequired, serialrequired,
+                brandcode, manufacturercode, taxcode, naturetype, ledgergroupcode,
+                isactive, deleted, createddate, usercode, tenantcode
+            )
+            VALUES
+            (
+                @itemname, @shortname, '',
+                @categorycode, @subcategorycode, @itemtype,
+                @schedule, @drugname, @isnarcoticdrug,
+                @purchaserate, @salesrate, @mrp,
+                @uomcode, @packsize, @hsncode, @gstpercentage,
+                @minstock, @reorderlevel, 0,
+                @isexpiry, @expiryalertdays, true, @isexpiry, false,
+                0, 0, 0, 0, 0,
+                true, false, CURRENT_TIMESTAMP, @usercode, @tenantcode
+            );",
+                            new
+                            {
+                                itemname,
+                                shortname = Cell("shortname") ?? itemname,
+                                categorycode,
+                                subcategorycode,
+                                itemtype = typeName ?? "",
+                                schedule = Cell("schedule"),
+                                drugname = Cell("drugname"),
+                                isnarcoticdrug = isnarcotic,
+                                purchaserate,
+                                salesrate = mrp,
+                                mrp,
+                                uomcode,
+                                packsize,
+                                hsncode,
+                                gstpercentage = gst,
+                                minstock,
+                                reorderlevel,
+                                isexpiry,
+                                expiryalertdays,
+                                usercode = (int)(usercode ?? 0),
+                                tenantcode
+                            }, tx);
+
+                        await db.ExecuteAsync("RELEASE SAVEPOINT row_sp;", transaction: tx);
+                        result.inserted++;
+                    }
+                    catch (Exception rowEx)
+                    {
+                        await db.ExecuteAsync("ROLLBACK TO SAVEPOINT row_sp;", transaction: tx);
+                        result.errors.Add(new ItemExcelRowError { row = r, message = rowEx.Message });
+                    }
+                }
+
+                tx.Commit();
+                return result;
+            }
+            catch
+            {
+                tx.Rollback();
+                throw;
+            }
         }
     }
 }

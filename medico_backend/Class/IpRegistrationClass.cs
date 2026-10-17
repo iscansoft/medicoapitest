@@ -107,6 +107,7 @@ namespace medico_backend.Class
                     billing_type = req.billing_type,
                     bedcode = req.bedcode,
                     ip_status = "ADMITTED",
+                    isreimbursementpatient = req.isreimbursementpatient,
                     isinsurancepatient = req.isinsurancepatient,
                     insurance_company = req.insurance_company,
                     policyno = req.policyno,
@@ -131,7 +132,7 @@ namespace medico_backend.Class
                     INSERT INTO ip_registration
                     (ip_id, ip_no, custid, booking_id, op_id, dcode, referring_dcode, department_code,
                      admission_type, admission_reason, admitdate, expected_dischargedate,
-                     branchcode, blockcode, flrcode, wrdcode, rmtcode, billing_rmtcode, billing_type,bedcode, ip_status,
+                     branchcode, blockcode, flrcode, wrdcode, rmtcode, billing_rmtcode, billing_type,bedcode, ip_status,isreimbursementpatient,
                      isinsurancepatient, insurance_company, policyno, authorizationno, tpa_name,
                      insurance_approved_amount, insurance_status,
                      guardian_name, guardian_relation, guardian_contact,
@@ -140,7 +141,7 @@ namespace medico_backend.Class
                     VALUES
                     (@ip_id, @ip_no, @custid, @booking_id, @op_id, @dcode, @referring_dcode, @department_code,
                      @admission_type, @admission_reason, @admitdate, @expected_dischargedate,
-                     @branchcode, @blockcode, @flrcode, @wrdcode, @rmtcode,@billing_rmtcode, @billing_type, @bedcode, @ip_status,
+                     @branchcode, @blockcode, @flrcode, @wrdcode, @rmtcode,@billing_rmtcode, @billing_type, @bedcode, @ip_status,@isreimbursementpatient,
                      @isinsurancepatient, @insurance_company, @policyno, @authorizationno, @tpa_name,
                      @insurance_approved_amount, @insurance_status,
                      @guardian_name, @guardian_relation, @guardian_contact,
@@ -155,18 +156,30 @@ namespace medico_backend.Class
 
                 // in CreateIpRegistration, right after commit:
                 tx.Commit();
-                await _unbilledCls.RecalculateRoomRent(data.ip_id, tenant_code);
-                // ✅ NEW — add IP registration fee to unbilled charges
+                var rrResult = await _unbilledCls.RecalculateRoomRent(data.ip_id, tenant_code);
+                Console.WriteLine($"[ROOMRENT-CREATE] {rrResult}");
+                // ✅ NEW — reimbursement patient charge to unbilled
+                // ✅ Registration fee (+ reimbursement fee if reimbursement patient) → one unbilled line
                 var (regTcode, regRate, regAmount) = await GetIpRegistrationFee(db, tenant_code);
-                if (regAmount > 0)
+
+                double reimAmount = 0;
+                if (data.isreimbursementpatient)
+                {
+                    var (_, _, amt) = await GetIpReimbursementFee(db, tenant_code);
+                    reimAmount = amt;
+                }
+
+                double totalRegAmount = regAmount + reimAmount;
+
+                if (totalRegAmount > 0)
                 {
                     await _unbilledCls.AddIpRegistrationCharge(new AddUnbilledIpRegistrationRequest
                     {
                         ip_id = data.ip_id,
                         custid = data.custid,
-                        tcode = regTcode,
-                        rate = regRate,
-                        amount = regAmount,
+                        tcode = regTcode,          // registration tcode, so it shows as the registration charge
+                        rate = totalRegAmount,
+                        amount = totalRegAmount,
                         quantity = 1
                     }, tenant_code);
                 }
@@ -340,6 +353,7 @@ namespace medico_backend.Class
                 admission_reason           = @admission_reason,
                 admitdate                  = @admitdate,
                 expected_dischargedate     = @expected_dischargedate,
+                isreimbursementpatient     = @isreimbursementpatient,
                 isinsurancepatient         = @isinsurancepatient,
                 insurance_company          = @insurance_company,
                 policyno                   = @policyno,
@@ -371,6 +385,7 @@ namespace medico_backend.Class
                 req.admission_reason,
                 admitdate = req.admitdate ?? existing.admitdate,
                 req.expected_dischargedate,
+                req.isreimbursementpatient,
                 req.isinsurancepatient,
                 req.insurance_company,
                 req.policyno,
@@ -391,6 +406,25 @@ namespace medico_backend.Class
                 req.ip_id,
                 tenant_code
             });
+
+            if (rows > 0 && req.isreimbursementpatient && !existing.isreimbursementpatient)
+            {
+                var (_, _, reimAmount) = await GetIpReimbursementFee(db, tenant_code);
+                var (regTcode, _, _) = await GetIpRegistrationFee(db, tenant_code);
+
+                if (reimAmount > 0)
+                {
+                    await _unbilledCls.AddOrMergeIpRegistrationCharge(new AddUnbilledIpRegistrationRequest
+                    {
+                        ip_id = req.ip_id,
+                        custid = req.custid,
+                        tcode = regTcode,
+                        rate = reimAmount,
+                        amount = reimAmount,
+                        quantity = 1
+                    }, tenant_code);
+                }
+            }
 
             return rows > 0 ? "Success" : "Update failed";
         }
@@ -445,6 +479,27 @@ namespace medico_backend.Class
           WHERE TRIM(tenant_code) = TRIM(@tenant_code)
           AND   deleted = false
           AND   name ILIKE 'Registration%'
+          ORDER BY tcode
+          LIMIT 1",
+                new { tenant_code });
+
+            if (test == null)
+                return (null, 0, 0);
+
+            int tcode = (int)test.tcode;
+            double amount = test.amount != null ? (double)test.amount : 0;
+            return (tcode, amount, amount);
+        }
+        // ─────────────────────────────────────────
+        // RESOLVE IP REIMBURSEMENT FEE (from test_master)
+        // ─────────────────────────────────────────
+        private async Task<(int? tcode, double rate, double amount)> GetIpReimbursementFee(IDbConnection db, string tenant_code)
+        {
+            var test = await db.QueryFirstOrDefaultAsync(
+                @"SELECT tcode, amount FROM test_master
+          WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+          AND   deleted = false
+          AND   name ILIKE 'Reimbursement%'
           ORDER BY tcode
           LIMIT 1",
                 new { tenant_code });

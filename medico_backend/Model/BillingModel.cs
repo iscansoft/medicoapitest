@@ -57,8 +57,8 @@ namespace medico_backend.Model
         public double? pmc1 { get; set; }
         public double? pmc2 { get; set; }
         public double? pmc3 { get; set; }
-        public double? pmc1_amount { get; set; }   
-        public double? pmc2_amount { get; set; }   
+        public double? pmc1_amount { get; set; }
+        public double? pmc2_amount { get; set; }
         public double? pmc3_amount { get; set; }
         public bool? iscashbill { get; set; }
         public bool? iscreditbill { get; set; }
@@ -273,6 +273,9 @@ namespace medico_backend.Model
         public DateTime? counterdate { get; set; }
         public DateTime? fromdate { get; set; }
         public DateTime? todate { get; set; }
+        public string? shift_mode { get; set; }
+        public DateTime? planned_to { get; set; }
+        public string? close_type { get; set; }
         public string? tenant_code { get; set; }
     }
 
@@ -760,5 +763,122 @@ namespace medico_backend.Model
         public double? pmc2_amount { get; set; }
         public double? pmc3_amount { get; set; }
         public List<HmsBillLineResponse> items { get; set; } = new();
+    }
+    public class AutoBillOpRequest
+    {
+        public string op_id { get; set; } = string.Empty;   // op_registration.op_id (GUID text)
+        public int? enteredbhcode { get; set; }              // branch of the cash counter
+        public int? cntcode { get; set; }                    // cash counter code (must have an open shift)
+    }
+    public class HmsPayModeSourceRow
+    {
+        public string source { get; set; } = "";        // BILL | DUE | ADVANCE
+        public string paymode { get; set; } = "";       // CASH | CARD | UPI | CHEQUE | BANK | MIXED
+        public int receipt_count { get; set; }
+        public int bill_count { get; set; }
+        public double total_collected { get; set; }
+    }
+
+    public class HmsPayModeTotalRow
+    {
+        public string paymode { get; set; } = "";
+        public double bill_amount { get; set; }
+        public double due_amount { get; set; }
+        public double advance_amount { get; set; }
+        public double total { get; set; }
+    }
+
+    public class HmsPayModeCollectionResponse
+    {
+        public DateTime fromdate { get; set; }
+        public DateTime todate { get; set; }
+        public int? bhcode { get; set; }
+        public int? cntcode { get; set; }
+
+        public double bill_total { get; set; }          // collected at billing
+        public double due_total { get; set; }           // collected through due collection
+        public double advance_total { get; set; }       // advance deposits
+        public double grand_total { get; set; }         // bill + due + advance
+        public double advance_refunded { get; set; }    // refunds paid out
+        public double net_total { get; set; }           // grand_total - advance_refunded
+
+        public List<HmsPayModeTotalRow> by_paymode { get; set; } = new();     // one row per paymode
+        public List<HmsPayModeSourceRow> details { get; set; } = new();       // paymode x source
+    }
+    public class HmsOpCategoryAmountRow
+    {
+        public string category { get; set; } = "";
+        public int visit_count { get; set; }
+        public int bill_count { get; set; }
+        public int item_count { get; set; }
+        public double gross_amount { get; set; }
+        public double discount_amount { get; set; }
+        public double net_amount { get; set; }
+        public double collected_amount { get; set; }
+        public double due_amount { get; set; }
+    }
+
+    public class HmsOpServiceAmountRow
+    {
+        public int? service_id { get; set; }
+        public string service_name { get; set; } = "";
+        public int visit_count { get; set; }
+        public int item_count { get; set; }
+        public string tokens { get; set; } = "";
+        public double net_amount { get; set; }
+        public double collected_amount { get; set; }
+        public double due_amount { get; set; }
+    }
+
+    public class HmsOpVisitCategoryRow
+    {
+        public string op_id { get; set; } = "";
+        public string? op_no { get; set; }
+        public string? token_no { get; set; }
+        public DateTime? visit_date { get; set; }
+        public decimal? custid { get; set; }
+        public string? patient_name { get; set; }
+        public string bill_nos { get; set; } = "";
+        public Dictionary<string, double> net_by_category { get; set; } = new();
+        public Dictionary<string, double> collected_by_category { get; set; } = new();
+        public double net_amount { get; set; }
+        public double collected_amount { get; set; }
+        public double due_amount { get; set; }
+    }
+
+    public class HmsOpCategoryCollectionResponse
+    {
+        public DateTime fromdate { get; set; }
+        public DateTime todate { get; set; }
+        public int? bhcode { get; set; }
+        public int? cntcode { get; set; }
+        public int? dcode { get; set; }
+        public int total_visits { get; set; }
+        public double total_net { get; set; }
+        public double total_collected { get; set; }
+        public double total_due { get; set; }
+        public List<HmsOpCategoryAmountRow> categories { get; set; } = new();
+        public List<HmsOpServiceAmountRow> services { get; set; } = new();
+        public List<HmsOpVisitCategoryRow> visits { get; set; } = new();
+    }
+
+    // internal row used by the query
+    public class HmsOpCategoryLine
+    {
+        public string op_id { get; set; } = "";
+        public string? op_no { get; set; }
+        public string? token_no { get; set; }
+        public DateTime? visit_date { get; set; }
+        public string? patient_name { get; set; }
+        public decimal? custid { get; set; }
+        public string requestguid { get; set; } = "";
+        public string? bill_no { get; set; }
+        public string? item_name { get; set; }
+        public int? service_id { get; set; }
+        public string? service_name { get; set; }
+        public string category { get; set; } = "";
+        public double gross { get; set; }
+        public double net { get; set; }
+        public double paid { get; set; }
     }
 }

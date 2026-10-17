@@ -1410,7 +1410,7 @@ namespace medico_backend.InventoryController
             return Ok(new { status = "Success", data = data });
         }
 
-        [HttpDelete("deletesales")]
+        [HttpGet("deletesales")]
         public async Task<IActionResult> DeleteSales(long salescode)
         {
             try
@@ -1691,41 +1691,41 @@ namespace medico_backend.InventoryController
             }
         }
 
-        [HttpGet("pharmacy-queue")]
-        public async Task<IActionResult> GetPharmacyQueue(string? status = null)
-        {
-            try
-            {
-                var tenantcode = GetTenantCode();
-                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+        //[HttpGet("pharmacy-queue")]
+        //public async Task<IActionResult> GetPharmacyQueue(string? status = null)
+        //{
+        //    try
+        //    {
+        //        var tenantcode = GetTenantCode();
+        //        if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
 
-                var result = await itemclass.GetPharmacyQueue(tenantcode, status);
-                return Ok(new { Status = "Success", Data = result });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Status = "Failed", Message = ex.Message });
-            }
-        }
+        //        var result = await itemclass.GetPharmacyQueue(tenantcode, status);
+        //        return Ok(new { Status = "Success", Data = result });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return BadRequest(new { Status = "Failed", Message = ex.Message });
+        //    }
+        //}
 
         
-        [HttpGet("pharmacy-queue/by-custid")]
-        public async Task<IActionResult> GetPharmacyQueueByCustId(decimal custid, string? status = null)
-        {
-            try
-            {
-                var tenantcode = GetTenantCode();
-                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
-                if (custid <= 0) return BadRequest(new { Status = "Failed", Message = "custid is required" });
+        //[HttpGet("pharmacy-queue/by-custid")]
+        //public async Task<IActionResult> GetPharmacyQueueByCustId(decimal custid, string? status = null)
+        //{
+        //    try
+        //    {
+        //        var tenantcode = GetTenantCode();
+        //        if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+        //        if (custid <= 0) return BadRequest(new { Status = "Failed", Message = "custid is required" });
 
-                var result = await itemclass.GetPharmacyQueueByCustId(custid, tenantcode, status);
-                return Ok(new { Status = "Success", Data = result });
-            }
-            catch (Exception ex)
-            {
-                return BadRequest(new { Status = "Failed", Message = ex.Message });
-            }
-        }
+        //        var result = await itemclass.GetPharmacyQueueByCustId(custid, tenantcode, status);
+        //        return Ok(new { Status = "Success", Data = result });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return BadRequest(new { Status = "Failed", Message = ex.Message });
+        //    }
+        //}
 
         [HttpPost("pharmacy-queue/update-status")]
         public async Task<IActionResult> UpdatePharmacyQueueStatus([FromBody] UpdateQueueStatusRequest req)
@@ -2854,6 +2854,145 @@ namespace medico_backend.InventoryController
                 return result == null
                     ? NotFound(new { Status = "Failed", Message = "Purchase order not found" })
                     : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+        // ─── PHARMACY QUEUE: BILLED / UNBILLED ────────────────────────────────────────
+        [HttpPost("pharmacy-queue/mark-billed")]
+        public async Task<IActionResult> MarkQueueBilled([FromBody] MarkQueueBilledRequest req)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.MarkQueueBilled(req, tenantcode);
+                return result.StartsWith("Success")
+                    ? Ok(new { Status = "Success", Message = result })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+
+        [HttpPost("pharmacy-queue/unbill")]
+        public async Task<IActionResult> UnbillQueue([FromBody] UnbillQueueRequest req)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.UnbillQueue(req, tenantcode);
+                return result.StartsWith("Success")
+                    ? Ok(new { Status = "Success", Message = result })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+
+        // ─── SALES COUNTER SHIFT (same counter_timing table as HMS) ──────────────────
+        [HttpPost("opensalescounter")]
+        public async Task<IActionResult> OpenSalesCounter([FromBody] medico_backend.Model.HmsCounterTiming req)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var (status, session) = await itemclass.OpenSalesCounterShift(req, tenantcode);
+                return status == "SUCCESS"
+                    ? Ok(new { Status = "Success", Data = session })
+                    : BadRequest(new { Status = "Failed", Message = status });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+
+        [HttpPost("closesalescounter")]
+        public async Task<IActionResult> CloseSalesCounter([FromBody] medico_backend.Model.CloseCounterRequest req)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var status = await itemclass.CloseSalesCounterShift(req, tenantcode);
+                return status == "SUCCESS"
+                    ? Ok(new { Status = "Success", Message = "Counter shift closed" })
+                    : BadRequest(new { Status = "Failed", Message = status });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+
+        [HttpGet("getactivesalescounter")]
+        public async Task<IActionResult> GetActiveSalesCounter(int bhcode, int cntcode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetActiveSalesShift(bhcode, cntcode, tenantcode);
+                return Ok(new { Status = "Success", Data = result, IsOpen = result != null });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+        [HttpGet("pharmacy-queue")]
+        public async Task<IActionResult> GetPharmacyQueue(string? status = null, bool? billed = null)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetPharmacyQueue(tenantcode, status, billed);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+
+        [HttpGet("pharmacy-queue/by-custid")]
+        public async Task<IActionResult> GetPharmacyQueueByCustId(decimal custid, string? status = null, bool? billed = null)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+                if (custid <= 0) return BadRequest(new { Status = "Failed", Message = "custid is required" });
+
+                var result = await itemclass.GetPharmacyQueueByCustId(custid, tenantcode, status, billed);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
+        [HttpPost("upload-item-excel")]
+        public async Task<IActionResult> UploadItemExcel(IFormFile file, [FromQuery] bool skipduplicates = false)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (file == null || file.Length == 0)
+                    return BadRequest(new { Status = "Failed", Message = "No file uploaded." });
+
+                var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+                if (ext != ".xlsx")
+                    return BadRequest(new { Status = "Failed", Message = "Only .xlsx files are supported." });
+
+                long? usercode = long.TryParse(Request.Headers["usercode"].FirstOrDefault(), out var u) ? u : null;
+
+                using var stream = file.OpenReadStream();
+                var result = await itemclass.UploadItemsFromExcel(stream, tenantcode, usercode, skipduplicates);
+
+                return Ok(new
+                {
+                    Status = result.errors.Count == 0 ? "Success" : "PartialSuccess",
+                    Message = $"{result.inserted} item(s) uploaded, {result.errors.Count} row(s) failed.",
+                    Data = result
+                });
             }
             catch (Exception ex)
             {

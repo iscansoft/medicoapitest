@@ -19,6 +19,9 @@ namespace Medico_Backend.Model
         public DateTime? fromdate { get; set; }
 
         public DateTime? todate { get; set; }
+        public string? shift_mode { get; set; }
+        public DateTime? planned_to { get; set; }
+        public string? close_type { get; set; }
 
         public string? tenant_code { get; set; }
 

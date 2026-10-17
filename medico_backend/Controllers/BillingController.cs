@@ -269,5 +269,62 @@ namespace medico_backend.Controller
 
             return Ok(session);
         }
+        // POST /api/HmsBilling/auto-bill-op
+        [HttpPost("auto-bill-op")]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsBillResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> AutoBillOp([FromBody] AutoBillOpRequest request)
+        {
+            string tenantToken = GetTenantCode();
+            var (status, data) = await _billingService.AutoBillOpByOpId(request, tenantToken);
+
+            // Bill was committed but the re-read failed -> still a success, don't make the UI retry
+            if (status == "SUCCESS_FETCH_FAILED")
+                return Ok(new { message = "Bill created successfully. Please refresh the cash counter list." });
+
+            if (status != "SUCCESS")
+                return BadRequest(new { message = status });
+
+            return Ok(data);
+        }
+        // GET /api/HmsBilling/reports/paymode-collection?fromdate=2026-10-01&todate=2026-10-14&bhcode=1&cntcode=2
+        [HttpGet("reports/paymode-collection")]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsPayModeCollectionResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> GetPayModeCollection(
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] int? bhcode,
+            [FromQuery] int? cntcode)
+        {
+            if (fromdate == default || todate == default)
+                return BadRequest(new { message = "fromdate and todate are required." });
+            if (todate.Date < fromdate.Date)
+                return BadRequest(new { message = "todate cannot be earlier than fromdate." });
+
+            var result = await _billingService.GetPayModeCollectionReport(
+                fromdate, todate, bhcode, cntcode, GetTenantCode());
+            return Ok(result);
+        }
+        // GET /api/HmsBilling/reports/op-category-collection?fromdate=2026-10-01&todate=2026-10-14&bhcode=1&cntcode=2&dcode=5
+        [HttpGet("reports/op-category-collection")]
+        [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsOpCategoryCollectionResponse))]
+        [ProducesResponseType(StatusCodes.Status400BadRequest)]
+        public async Task<IActionResult> GetOpCategoryCollection(
+            [FromQuery] DateTime fromdate,
+            [FromQuery] DateTime todate,
+            [FromQuery] int? bhcode,
+            [FromQuery] int? cntcode,
+            [FromQuery] int? dcode)
+        {
+            if (fromdate == default || todate == default)
+                return BadRequest(new { message = "fromdate and todate are required." });
+            if (todate.Date < fromdate.Date)
+                return BadRequest(new { message = "todate cannot be earlier than fromdate." });
+
+            var result = await _billingService.GetOpCategoryCollectionReport(
+                fromdate, todate, bhcode, cntcode, dcode, GetTenantCode());
+            return Ok(result);
+        }
     }
 }

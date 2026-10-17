@@ -123,12 +123,12 @@ namespace medico_backend.Class
         (op_id, op_no, booking_id, booking_no, slot_detail_id, custid, dcode,
          department_code, visit_type, reg_type, visit_date,
          token_no, queue_no, visit_status, notes,
-         tenant_code,usercode, isdeleted, created_at, updated_at)
+         tenant_code,usercode,walkin_time, isdeleted, created_at, updated_at)
        VALUES
         (@op_id, @op_no, @booking_id, @booking_no, @slot_detail_id, @custid, @dcode,
          @department_code, @visit_type, @reg_type, @visit_date,
          @token_no, @queue_no, @visit_status, @notes,
-         @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)", new
+         @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)", new
                     {
                         data.op_id,
                         data.op_no,
@@ -147,6 +147,7 @@ namespace medico_backend.Class
                         data.notes,
                         data.tenant_code,
                         data.usercode,
+                        data.walkin_time,
                         data.isdeleted,
                         data.created_at,
                         data.updated_at
@@ -337,7 +338,7 @@ namespace medico_backend.Class
 SELECT
     o.op_id, o.op_no, o.booking_id, o.booking_no, o.slot_detail_id,
     o.custid, o.dcode, o.department_code, o.visit_type, o.reg_type,
-    o.visit_date, o.token_no, o.queue_no, o.visit_status, o.notes,
+    o.visit_date, o.token_no, o.queue_no, o.visit_status, o.notes,o.walkin_time,
     o.is_direct_walkin, o.duty_dcode, o.transferred_to_dcode, o.transfer_reason,
     o.is_dressing, o.tenant_code,o.usercode, o.isdeleted, o.created_at, o.updated_at,o.service_id,
     cl.name AS patient_name,
@@ -609,6 +610,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         service_id = req.service_id,       // NEW
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time = req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -629,12 +631,12 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                          reg_type, visit_date, token_no, queue_no, visit_status, notes,
                          is_direct_walkin, duty_dcode, is_dressing, service_id,
-                         tenant_code,usercode, isdeleted, created_at, updated_at)
+                         tenant_code,usercode, walkin_time,isdeleted, created_at, updated_at)
                         VALUES
                         (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                          @reg_type, @visit_date, @token_no, @queue_no, @visit_status, @notes,
                          @is_direct_walkin, @duty_dcode, @is_dressing, @service_id,
-                         @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                         @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)",
                                 new
                                 {
                                     noSlotData.op_id,
@@ -656,6 +658,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                     noSlotData.service_id,
                                     noSlotData.tenant_code,
                                     noSlotData.usercode,
+                                    noSlotData.walkin_time,
                                     noSlotData.isdeleted,
                                     noSlotData.created_at,
                                     noSlotData.updated_at
@@ -670,21 +673,25 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         }
                     }
 
-                    int? noSlotTcode; double noSlotRate; double noSlotAmount;
-                    if (svc != null)
-                        (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                    else
-                        (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    if (!isDressing)
                     {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        int? noSlotTcode; double noSlotRate; double noSlotAmount;
+                        if (svc != null)
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                        else
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = noSlotData.op_id.ToString(),
+                            custid = noSlotData.custid,
+                            tcode = noSlotTcode,
+                            rate = noSlotRate,
+                            amount = noSlotAmount,
+                            quantity = 1
+                        }, tenant_code);
+                    }
+
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}" +
                            (svc != null ? $"|ServiceId:{req.service_id}" : "");
@@ -740,6 +747,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     service_id = req.service_id,       // NEW
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -764,14 +772,14 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                         op_id, op_no, custid, dcode, department_code, slot_detail_id,
                         visit_type, reg_type, visit_date, token_no, queue_no, visit_status,
                         notes, is_direct_walkin, duty_dcode, is_dressing, service_id,
-                        tenant_code,usercode, isdeleted, created_at, updated_at
+                        tenant_code,usercode,walkin_time, isdeleted, created_at, updated_at
                     )
                     VALUES
                     (
                         @op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id,
                         @visit_type, @reg_type, @visit_date, @token_no, @queue_no, @visit_status,
                         @notes, @is_direct_walkin, @duty_dcode, @is_dressing, @service_id,
-                        @tenant_code,@usercode, @isdeleted, @created_at, @updated_at
+                        @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at
                     )",
                             new
                             {
@@ -794,6 +802,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                 data.service_id,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -808,21 +817,24 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     }
                 }
 
-                int? feeTcode2; double feeRate2; double feeAmount2;
-                if (svc != null)
-                    (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                else
-                    (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                if (!isDressing)
                 {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode2,
-                    rate = feeRate2,
-                    amount = feeAmount2,
-                    quantity = 1
-                }, tenant_code);
+                    int? feeTcode2; double feeRate2; double feeAmount2;
+                    if (svc != null)
+                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                    else
+                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+
+                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = data.op_id.ToString(),
+                        custid = data.custid,
+                        tcode = feeTcode2,
+                        rate = feeRate2,
+                        amount = feeAmount2,
+                        quantity = 1
+                    }, tenant_code);
+                }
 
                 await db.ExecuteAsync(@"
             UPDATE doctor_appointment_slot_details
@@ -951,6 +963,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                             duty_dcode = op.duty_dcode,
                             tenant_code = tenant_code,
                             usercode = req.usercode ?? op.usercode,
+                            walkin_time = op.walkin_time,
                             isdeleted = false,
                             created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                             updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -961,13 +974,13 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     (
                         op_id, op_no, custid, dcode, department_code, slot_detail_id,
                         visit_type, reg_type, visit_date, token_no, queue_no, visit_status,
-                        notes, is_direct_walkin, duty_dcode, tenant_code, usercode,isdeleted, created_at, updated_at
+                        notes, is_direct_walkin, duty_dcode, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at
                     )
                     VALUES
                     (
                         @op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id,
                         @visit_type, @reg_type, @visit_date, @token_no, @queue_no, @visit_status,
-                        @notes, @is_direct_walkin, @duty_dcode, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at
+                        @notes, @is_direct_walkin, @duty_dcode, @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at
                     )",
                             new
                             {
@@ -988,6 +1001,7 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                                 newOp.duty_dcode,
                                 newOp.tenant_code,
                                 newOp.usercode,
+                                newOp.walkin_time,
                                 newOp.isdeleted,
                                 newOp.created_at,
                                 newOp.updated_at
@@ -1094,6 +1108,7 @@ AND b.tenant_code = @tenant_code
             op.transferred_to_dcode,
             op.transfer_reason,
             op.usercode,
+            op.walkin_time,
             op.created_at         AS op_created_at,
             op.updated_at         AS op_updated_at,
             c.custcode,
@@ -1285,6 +1300,7 @@ AND b.tenant_code = @tenant_code
                         is_direct_walkin = true,
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time=req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1294,11 +1310,11 @@ AND b.tenant_code = @tenant_code
                 INSERT INTO op_registration
                 (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                  reg_type, visit_date, token_no, queue_no, is_dressing,
-                 visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                 visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                 VALUES
                 (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                  @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-                 @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                 @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
                         new
                         {
                             noSlotData.op_id,
@@ -1318,21 +1334,22 @@ AND b.tenant_code = @tenant_code
                             noSlotData.is_direct_walkin,
                             noSlotData.tenant_code,
                             noSlotData.usercode,
+                            noSlotData.walkin_time,
                             noSlotData.isdeleted,
                             noSlotData.created_at,
                             noSlotData.updated_at
                         });
-                    var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                    //var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
 
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                    {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                    //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    //{
+                    //    op_id = noSlotData.op_id.ToString(),
+                    //    custid = noSlotData.custid,
+                    //    tcode = noSlotTcode,
+                    //    rate = noSlotRate,
+                    //    amount = noSlotAmount,
+                    //    quantity = 1
+                    //}, tenant_code);
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}";
                 }
@@ -1390,6 +1407,7 @@ AND b.tenant_code = @tenant_code
                     is_direct_walkin = true,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1399,11 +1417,11 @@ AND b.tenant_code = @tenant_code
             INSERT INTO op_registration
             (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
              reg_type, visit_date, token_no, queue_no, is_dressing,
-             visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+             visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
             VALUES
             (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
              @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@isdeleted, @created_at, @updated_at)",
+             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
                     new
                     {
                         data.op_id,
@@ -1423,6 +1441,7 @@ AND b.tenant_code = @tenant_code
                         data.is_direct_walkin,
                         data.tenant_code,
                         data.usercode,
+                        data.walkin_time,
                         data.isdeleted,
                         data.created_at,
                         data.updated_at
@@ -1446,17 +1465,17 @@ AND b.tenant_code = @tenant_code
                     new { slot_detail_id = slot.slot_detail_id, tenant_code });
 
                 // ✅ NEW — add unbilled dressing charge
-                var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                //var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
 
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode,
-                    rate = feeRate,
-                    amount = feeAmount,
-                    quantity = 1
-                }, tenant_code);
+                //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                //{
+                //    op_id = data.op_id.ToString(),
+                //    custid = data.custid,
+                //    tcode = feeTcode,
+                //    rate = feeRate,
+                //    amount = feeAmount,
+                //    quantity = 1
+                //}, tenant_code);
 
                 return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{data.token_no}";
             }
@@ -1711,6 +1730,13 @@ AND b.tenant_code = @tenant_code
         // Separate from UpdateVisitStatus so cancel-specific
         // rules (blocked states, reason capture) live in one place.
         // ─────────────────────────────────────────
+        // ─────────────────────────────────────────
+        // CANCEL OP REGISTRATION
+        // Routing-aware cleanup:
+        //   auto_route_billing_after_register = true  → delete bill from cash counter
+        //                                               (+ clean unbilled rows)
+        //   otherwise (combo on/off, route off)       → delete from unbilling
+        // ─────────────────────────────────────────
         public async Task<string> CancelOp(CancelOpRequest req, string tenant_code)
         {
             try
@@ -1736,29 +1762,89 @@ AND b.tenant_code = @tenant_code
                 if (op.visit_status == "TRANSFERRED")
                     return "Cannot cancel a transferred visit";
 
+                // ── Read routing settings (same lookup pattern used elsewhere) ──
+                bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
+                    @"SELECT auto_route_billing_after_register FROM lab_settings
+              WHERE tenant_code = @tenant_code AND deleted = false
+              ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? false;
+
+                string opIdText = req.op_id.ToString();
+
+                // ── Guard: if routed to cash counter, block when money was already collected ──
+                if (routeToBilling)
+                {
+                    decimal paidTotal = await db.ExecuteScalarAsync<decimal?>(
+                        @"SELECT COALESCE(SUM(COALESCE(lrm.paidamount, 0)), 0)
+                  FROM lab_request_master lrm
+                  WHERE lrm.tenant_code = @tenant_code
+                  AND   COALESCE(lrm.isdeleted, false) = false
+                  AND   COALESCE(lrm.deleted, false)   = false
+                  AND   lrm.requestguid IN (
+                        SELECT billid FROM unbilledcharges
+                        WHERE opvisitid   = @opIdText
+                        AND   tenant_code = @tenant_code
+                        AND   billedstatus = true
+                        AND   billid IS NOT NULL)",
+                        new { tenant_code, opIdText }) ?? 0m;
+
+                    if (paidTotal > 0)
+                        return $"Cannot cancel: payment of {paidTotal} already collected in cash counter. Refund it first.";
+                }
+
+                // ── Cancel the OP itself ──
                 string notes = string.IsNullOrWhiteSpace(req.cancel_reason)
                     ? op.notes ?? string.Empty
                     : string.IsNullOrWhiteSpace(op.notes)
                         ? $"Cancelled. Reason: {req.cancel_reason}"
                         : $"{op.notes} | Cancelled. Reason: {req.cancel_reason}";
 
-                string sql = @"UPDATE op_registration
-                   SET visit_status = 'CANCELLED',
-                       notes        = @notes,
-                       updated_at   = now()
-                   WHERE op_id      = @op_id
-                   AND   tenant_code = @tenant_code
-                   AND   isdeleted   = false";
-
-                int rows = await db.ExecuteAsync(sql, new { req.op_id, notes, tenant_code });
+                int rows = await db.ExecuteAsync(
+                    @"UPDATE op_registration
+              SET visit_status = 'CANCELLED',
+                  notes        = @notes,
+                  updated_at   = now()
+              WHERE op_id      = @op_id
+              AND   tenant_code = @tenant_code
+              AND   isdeleted   = false",
+                    new { req.op_id, notes, tenant_code });
 
                 if (rows == 0)
                     return "Cancel failed";
 
-                // ✅ NEW — drop any pending unbilled fee (consultation/service) for this visit.
-                // Failure here shouldn't undo the cancel itself, so it's logged, not thrown.
-                var unbillRes = await _unbilledCls.DeleteUnbilledForOp(req.op_id.ToString(), tenant_code);
-                Console.WriteLine($"[CANCEL-OP] DeleteUnbilledForOp op_id={req.op_id} result={unbillRes}");
+                // ── Routing-based cleanup (failures logged, don't undo the cancel) ──
+                try
+                {
+                    if (routeToBilling)
+                    {
+                        // Charges were auto-billed → remove the bill from the cash counter
+                        // HOOK: if you have an HmsBillingClass method that deletes a bill
+                        // (receipts/ledger too), call it here instead of this SQL.
+                        int billRows = await db.ExecuteAsync(
+                            @"UPDATE lab_request_master
+                      SET deleted   = true,
+                          isdeleted = true
+                      WHERE tenant_code = @tenant_code
+                      AND   requestguid IN (
+                            SELECT billid FROM unbilledcharges
+                            WHERE opvisitid   = @opIdText
+                            AND   tenant_code = @tenant_code
+                            AND   billedstatus = true
+                            AND   billid IS NOT NULL)",
+                            new { tenant_code, opIdText });
+
+                        Console.WriteLine($"[CANCEL-OP] Cash counter bills deleted op_id={req.op_id} rows={billRows}");
+                    }
+
+                    // Always clean unbilledcharges for this visit
+                    // (route OFF → this is the main delete; route ON → removes the billed-link rows)
+                    var unbillRes = await _unbilledCls.DeleteUnbilledForOp(opIdText, tenant_code);
+                    Console.WriteLine($"[CANCEL-OP] DeleteUnbilledForOp op_id={req.op_id} routeToBilling={routeToBilling} result={unbillRes}");
+                }
+                catch (Exception cleanupEx)
+                {
+                    Console.WriteLine($"[CANCEL-OP] Cleanup failed op_id={req.op_id}: {cleanupEx.Message}");
+                }
 
                 return "Success";
             }
@@ -1879,6 +1965,7 @@ AND b.tenant_code = @tenant_code
                         service_id = req.service_id,
                         tenant_code = tenant_code,
                         usercode = req.usercode,
+                        walkin_time=req.walkin_time,
                         isdeleted = false,
                         created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                         updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -1898,11 +1985,11 @@ AND b.tenant_code = @tenant_code
                         INSERT INTO op_registration
                         (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                          reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                         visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                         visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                         VALUES
                         (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                          @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                         @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                         @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode,@walkin_time, @isdeleted, @created_at, @updated_at)",
                                 new
                                 {
                                     noSlotData.op_id,
@@ -1923,6 +2010,7 @@ AND b.tenant_code = @tenant_code
                                     noSlotData.is_direct_walkin,
                                     noSlotData.tenant_code,
                                     noSlotData.usercode,
+                                    noSlotData.walkin_time,
                                     noSlotData.isdeleted,
                                     noSlotData.created_at,
                                     noSlotData.updated_at
@@ -1933,17 +2021,20 @@ AND b.tenant_code = @tenant_code
                         catch { tx.Rollback(); throw; }
                     }
 
-                    var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    if (!isDressing)
                     {
-                        op_id = noSlotData.op_id.ToString(),
-                        custid = noSlotData.custid,
-                        tcode = noSlotTcode,
-                        rate = noSlotRate,
-                        amount = noSlotAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = noSlotData.op_id.ToString(),
+                            custid = noSlotData.custid,
+                            tcode = noSlotTcode,
+                            rate = noSlotRate,
+                            amount = noSlotAmount,
+                            quantity = 1
+                        }, tenant_code);
+                    }
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}|ServiceId:{req.service_id}";
                 }
@@ -1981,6 +2072,7 @@ AND b.tenant_code = @tenant_code
                     service_id = req.service_id,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -2003,11 +2095,11 @@ AND b.tenant_code = @tenant_code
                     INSERT INTO op_registration
                     (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                      reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                     visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                     visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                     VALUES
                     (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                      @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                     @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @isdeleted, @created_at, @updated_at)",
+                     @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
                             new
                             {
                                 data.op_id,
@@ -2028,6 +2120,7 @@ AND b.tenant_code = @tenant_code
                                 data.is_direct_walkin,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -2038,17 +2131,20 @@ AND b.tenant_code = @tenant_code
                     catch { tx.Rollback(); throw; }
                 }
 
-                var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-
-                await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                if (!isDressing)
                 {
-                    op_id = data.op_id.ToString(),
-                    custid = data.custid,
-                    tcode = feeTcode,
-                    rate = feeRate,
-                    amount = feeAmount,
-                    quantity = 1
-                }, tenant_code);
+                    var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+
+                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    {
+                        op_id = data.op_id.ToString(),
+                        custid = data.custid,
+                        tcode = feeTcode,
+                        rate = feeRate,
+                        amount = feeAmount,
+                        quantity = 1
+                    }, tenant_code);
+                }
 
                 await db.ExecuteAsync(@"
             UPDATE doctor_appointment_slot_details
@@ -2199,6 +2295,7 @@ AND b.tenant_code = @tenant_code
                     service_id = primaryType == "CONSULTATION" ? null : req.primary_service_id,
                     tenant_code = tenant_code,
                     usercode = req.usercode,
+                    walkin_time=req.walkin_time,
                     isdeleted = false,
                     created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
                     updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
@@ -2262,11 +2359,11 @@ AND b.tenant_code = @tenant_code
                             INSERT INTO op_registration
                             (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
                              reg_type, visit_date, token_no, queue_no, is_dressing, service_id,
-                             visit_status, notes, is_direct_walkin, tenant_code, usercode,isdeleted, created_at, updated_at)
+                             visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
                             VALUES
                             (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
                              @reg_type, @visit_date, @token_no, @queue_no, @is_dressing, @service_id,
-                             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@isdeleted, @created_at, @updated_at)",
+                             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
                             new
                             {
                                 data.op_id,
@@ -2287,6 +2384,7 @@ AND b.tenant_code = @tenant_code
                                 data.is_direct_walkin,
                                 data.tenant_code,
                                 data.usercode,
+                                data.walkin_time,
                                 data.isdeleted,
                                 data.created_at,
                                 data.updated_at
@@ -2339,13 +2437,8 @@ AND b.tenant_code = @tenant_code
 
                 async Task FlushDressing()
                 {
-                    if (primaryDressingDeferred)
-                    {
-                        await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
-                        primaryDressingDeferred = false;
-                    }
-                    foreach (var d in deferredDressing)
-                        await _unbilledCls.AddVisitAdditionalCharge(d, "DRESSING", tenant_code);
+                    // Dressing charges are intentionally NOT pushed to unbilledcharges.
+                    primaryDressingDeferred = false;
                     deferredDressing.Clear();
                 }
 
@@ -2360,7 +2453,7 @@ AND b.tenant_code = @tenant_code
     primaryType == "CONSULTATION" ? "CONSULTATION"
     : primaryType == "DRESSING"   ? "Dressing"
     : primarySvc!.service_name
-}; 
+};
 
                 foreach (var item in req.additional_items ?? new())
                 {
@@ -2627,6 +2720,17 @@ AND b.tenant_code = @tenant_code
                 return ex.Message;
             }
         }
-    }
+        // null/empty is allowed (field optional); otherwise name must exist for this tenant
+        private async Task<string?> ValidateWalkinTime(IDbConnection db, string? walkin_time, string tenant_code)
+        {
+            if (string.IsNullOrWhiteSpace(walkin_time)) return null;
 
+            return await db.ExecuteScalarAsync<string?>(
+                @"SELECT status_name FROM op_status_master
+          WHERE tenant_code = @tenant_code AND deleted = false AND is_active = true
+          AND LOWER(status_name) = LOWER(@walkin_time) LIMIT 1",
+                new { tenant_code, walkin_time = walkin_time.Trim() });
+        }
+
+    }
 }

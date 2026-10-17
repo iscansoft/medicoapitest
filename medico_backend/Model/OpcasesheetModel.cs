@@ -154,6 +154,11 @@ namespace medico_backend.Model
         public string afternoon { get; set; } = "0";
         public string evening { get; set; } = "0";
         public string night { get; set; } = "0";
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+        public string? dose_unit { get; set; }
         public bool before_food { get; set; } = false;
         public bool after_food { get; set; } = false;
         public int? days { get; set; }
@@ -342,6 +347,11 @@ namespace medico_backend.Model
         public string afternoon { get; set; } = "0";
         public string evening { get; set; } = "0";
         public string night { get; set; } = "0";
+        public string? morning_dose { get; set; }
+        public string? afternoon_dose { get; set; }
+        public string? evening_dose { get; set; }
+        public string? night_dose { get; set; }
+        public string? dose_unit { get; set; }
         public bool before_food { get; set; } = false;
         public bool after_food { get; set; } = false;
         public int? days { get; set; }
@@ -443,7 +453,7 @@ namespace medico_backend.Model
         // Prescription
         public CaseSheetPrescriptionViewModel? prescription { get; set; }
 
-
+        public List<CaseSheetPrescriptionViewModel> prescription_list { get; set; } = new();
         // Investigation
         public CaseSheetInvestigationViewModel? investigation { get; set; }
     }
@@ -523,5 +533,13 @@ namespace medico_backend.Model
         public string doctor_name { get; set; } = string.Empty;
         public int? dcode { get; set; }
         public string? notes { get; set; }
+    }
+    public class SavePrescriptionOnlyRequest
+    {
+        public string? op_id { get; set; }
+        public string? ip_id { get; set; }
+        public decimal custid { get; set; }
+        public int dcode { get; set; }
+        public CaseSheetPrescriptionRequest prescription { get; set; } = new();
     }
 }

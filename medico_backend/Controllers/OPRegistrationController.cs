@@ -270,5 +270,6 @@ namespace medico_backend.Controllers
 
             return Ok(new { Status = "Error", Message = res });
         }
+
     }
 }

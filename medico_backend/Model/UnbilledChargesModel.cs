@@ -75,4 +75,23 @@ namespace medico_backend.Model
         public double quantity { get; set; } = 1;
         public string? particulars { get; set; }
     }
+    public class DiscardUnbilledChargesRequest
+    {
+        // Send one id or many. A single id is just a list of one.
+        public List<string> unbilledids { get; set; } = new();
+    }
+
+    public class DiscardUnbilledResult
+    {
+        public int requested { get; set; }
+        public int discarded { get; set; }
+        public List<string> discarded_ids { get; set; } = new();
+        public List<DiscardSkipped> skipped { get; set; } = new();
+    }
+
+    public class DiscardSkipped
+    {
+        public string unbilledid { get; set; } = string.Empty;
+        public string reason { get; set; } = string.Empty;
+    }
 }

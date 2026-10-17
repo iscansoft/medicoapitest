@@ -30,6 +30,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public decimal temperature { get; set; }
             public string unit { get; set; } = "F";
@@ -79,6 +80,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public string io_type { get; set; } = "INPUT";
             public string particulars { get; set; } = string.Empty;
@@ -124,10 +126,11 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public string service_name { get; set; } = string.Empty;   // resolved against test_master
             public string? action { get; set; }
-            public decimal quantity { get; set; } = 1;                  // NEW — used to compute the unbilled amount
+            public decimal quantity { get; set; } = 1;                  // used to compute the unbilled amount
             public string? remarks { get; set; }
         }
 
@@ -170,6 +173,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public string medicine_name { get; set; } = string.Empty;
             public decimal? dose { get; set; }
@@ -217,6 +221,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public string note { get; set; } = string.Empty;
         }
@@ -248,9 +253,10 @@ namespace medico_backend.Model
             public List<NurseServiceModel> service { get; set; } = new();
             public List<NurseMedicineModel> medicine { get; set; } = new();
             public List<NurseOtherModel> other { get; set; } = new();
-            public List<NurseVisitingDoctorModel> visiting_doctor { get; set; } = new();   // NEW
-            public List<NurseScheduleModel> schedule { get; set; } = new();               // NEW
+            public List<NurseVisitingDoctorModel> visiting_doctor { get; set; } = new();
+            public List<NurseScheduleModel> schedule { get; set; } = new();
         }
+
         // ─────────────────────────────────────────
         // 7. VISITING DOCTOR LIST
         // ─────────────────────────────────────────
@@ -280,6 +286,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public string doctor_name { get; set; } = string.Empty;
             public string? specialization { get; set; }
@@ -331,6 +338,7 @@ namespace medico_backend.Model
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
             public string shift { get; set; } = "MORNING";
             public DateOnly scheduled_date { get; set; } = DateOnly.FromDateTime(DateTime.UtcNow);
             public TimeOnly scheduled_time { get; set; }
@@ -352,6 +360,30 @@ namespace medico_backend.Model
             public string? instructions { get; set; }
             public string status { get; set; } = "PENDING";
             public string? remarks { get; set; }
+        }
+
+        // ─────────────────────────────────────────
+        // 9. AUTHORIZATION (single authorize button for the whole chart)
+        // ─────────────────────────────────────────
+        [Table("ip_nurse_note_authorization")]
+        public class NurseNoteAuthorizationModel
+        {
+            [ExplicitKey] public Guid auth_id { get; set; } = Guid.NewGuid();
+            public Guid ip_id { get; set; }
+            public decimal? custid { get; set; }
+            public bool is_authorized { get; set; }
+            public int? authorized_by { get; set; }
+            public DateTime? authorized_at { get; set; }
+            public int? updated_by { get; set; }
+            public DateTime? updated_at { get; set; }
+            public string tenant_code { get; set; } = string.Empty;
+        }
+
+        public class AuthorizeNurseNotesRequest
+        {
+            public Guid ip_id { get; set; }
+            public decimal? custid { get; set; }
+            public int usercode { get; set; }                       // CHANGED — now read from body
         }
     }
 }
