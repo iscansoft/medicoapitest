@@ -2604,6 +2604,8 @@ namespace medico_backend.Model
 
         public decimal balanceamount { get; set; }
 
+        public string? token_no { get; set; }
+
 
 
         // Category-wise OP amounts

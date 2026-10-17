@@ -13882,7 +13882,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) AS totalamount,
 
-                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(op.token_no, '') AS token_no,
+
+COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
 
                         COALESCE(
 
@@ -14222,7 +14224,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
 
-                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(op.token_no, '') AS token_no,
+
+COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
 
                         COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
 
@@ -14550,7 +14554,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         COALESCE(NULLIF(uc_agg.total_uc, 0) + NULLIF(lrm_agg.total_lrm, 0), uc_agg.total_uc + lrm_agg.total_lrm, COALESCE(NULLIF(dm.opcharge, 0), 0)) AS totalamount,
 
-                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(op.token_no, '') AS token_no,
+
+COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
 
                         COALESCE(
 
@@ -14890,7 +14896,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
 
-                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
+                        COALESCE(op.token_no, '') AS token_no,
+
+COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
 
                         COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
 
