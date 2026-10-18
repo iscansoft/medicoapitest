@@ -1,8 +1,69 @@
 ﻿using Dapper;
+using System;
 using System.Data;
 
 namespace medico_backend.Services
 {
+    public static class AppTimeZoneHelper
+    {
+        public static readonly TimeZoneInfo LocalAppTimeZone = ResolveAppTimeZone();
+
+        private static TimeZoneInfo ResolveAppTimeZone()
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+            }
+            catch
+            {
+                try
+                {
+                    return TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+                }
+                catch
+                {
+                    return TimeZoneInfo.CreateCustomTimeZone("IST", TimeSpan.FromHours(5.5), "India Standard Time", "India Standard Time");
+                }
+            }
+        }
+
+        public static DateTime ToLocalTimeSafe(DateTime dt)
+        {
+            if (dt == default || dt == DateTime.MinValue || dt == DateTime.MaxValue)
+                return dt;
+
+            DateTime utcDt = dt.Kind == DateTimeKind.Utc
+                ? dt
+                : DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+
+            return TimeZoneInfo.ConvertTimeFromUtc(utcDt, LocalAppTimeZone);
+        }
+
+        public static DateTime? ToLocalTimeSafe(DateTime? dt)
+        {
+            if (!dt.HasValue) return null;
+            return ToLocalTimeSafe(dt.Value);
+        }
+
+        public static DateTime ToUtcFromLocal(DateTime localDt)
+        {
+            if (localDt == default || localDt == DateTime.MinValue || localDt == DateTime.MaxValue)
+                return localDt;
+
+            DateTime unspec = localDt.Kind == DateTimeKind.Unspecified
+                ? localDt
+                : DateTime.SpecifyKind(localDt, DateTimeKind.Unspecified);
+
+            return TimeZoneInfo.ConvertTimeToUtc(unspec, LocalAppTimeZone);
+        }
+
+        public static DateTime? ToUtcFromLocal(DateTime? localDt)
+        {
+            if (!localDt.HasValue) return null;
+            return ToUtcFromLocal(localDt.Value);
+        }
+    }
+
     // Ensures every DateTime written to Postgres 'timestamptz' columns is UTC.
     public class DateTimeUtcHandler : SqlMapper.TypeHandler<DateTime>
     {
@@ -12,8 +73,6 @@ namespace medico_backend.Services
             {
                 DateTimeKind.Utc => value,
                 DateTimeKind.Local => value.ToUniversalTime(),
-                // Unspecified: assume it was already UTC (common when read from DB
-                // or built via `new DateTime(...)`), just tag it correctly.
                 _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
             };
         }

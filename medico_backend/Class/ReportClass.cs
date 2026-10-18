@@ -1,4 +1,4 @@
-using Amazon.Runtime;
+﻿using Amazon.Runtime;
 
 using Amazon.S3.Model;
 
@@ -164,11 +164,8 @@ namespace medico_backend.Class
 
                             AND COALESCE(lrm.deleted, false) = false
 
-                            AND lrm.requestdatetime >= @fromdate
-
-                            AND lrm.requestdatetime <  @todate + INTERVAL '1 day'
-
-
+                            AND lrm.requestdatetime >= @fromUtc
+                            AND lrm.requestdatetime < @toUtc
 
                         ORDER BY lrm.requestdatetime;
 
@@ -176,13 +173,18 @@ namespace medico_backend.Class
 
 
 
+                    var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                    var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                     var statementRows = (await db.QueryAsync<StatementsModel>(
 
                                 sql,
 
-                                new { fromdate, todate, tenant_code }
+                                new { fromUtc, toUtc, tenant_code }
 
                             )).ToList();
+
+                    statementRows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -374,37 +376,25 @@ namespace medico_backend.Class
 
       AND COALESCE(lrm.deleted,false) = false
 
-      AND lrm.requestdatetime >= @fromdate
+      AND lrm.requestdatetime >= @fromUtc
+                            AND lrm.requestdatetime < @toUtc
 
-      AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
-
-
-      AND (
-
-            lrm.totalamount
-
-            - COALESCE(lrm.paidamount,0)
-
-            - 0
-
-            - 0
-
-          ) > 0
+                        ORDER BY lrm.requestdatetime";
 
 
 
-    ORDER BY lrm.requestdatetime";
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                    var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
 
-
-
-                var rows = (await db.QueryAsync<StatementsModel>(
+                    var rows = (await db.QueryAsync<StatementsModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code }))
+                    new { fromUtc, toUtc, tenant_code }))
 
                     .ToList();
+
+                    rows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -574,35 +564,25 @@ namespace medico_backend.Class
 
       AND COALESCE(lrm.deleted,false) = false
 
-      AND lrm.requestdatetime >= @fromdate
+      AND lrm.requestdatetime >= @fromUtc
+                            AND lrm.requestdatetime < @toUtc
 
-      AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
-
-
-      AND (
-
-            COALESCE(lrm.discountamount,0)
-
-            + COALESCE(lrm.ourdiscount,0)
-
-            + COALESCE(lrm.specialdiscount,0)
-
-          ) > 0
+                        ORDER BY lrm.requestdatetime";
 
 
 
-    ORDER BY lrm.requestdatetime";
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                    var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
 
-
-
-                var rows = (await db.QueryAsync<StatementsModel>(
+                    var rows = (await db.QueryAsync<StatementsModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code }))
+                    new { fromUtc, toUtc, tenant_code }))
 
                     .ToList();
+
+                    rows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -746,21 +726,25 @@ namespace medico_backend.Class
 
       AND COALESCE(lrm.deleted, false) = false
 
-      AND lrm.requestdatetime >= @fromdate
+      AND lrm.requestdatetime >= @fromUtc
+                            AND lrm.requestdatetime < @toUtc
 
-      AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
-    ORDER BY referral, date, patientname";
-
+                        ORDER BY referral, date, patientname";
 
 
-                var rows = (await db.QueryAsync<ReferralStatementModel>(
+
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                    var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
+                    var rows = (await db.QueryAsync<ReferralStatementModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code }))
+                    new { fromUtc, toUtc, tenant_code }))
 
                     .ToList();
+
+                    rows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -906,21 +890,25 @@ namespace medico_backend.Class
 
       AND COALESCE(lrm.deleted, false) = false
 
-      AND lrm.requestdatetime >= @fromdate
+      AND lrm.requestdatetime >= @fromUtc
+                            AND lrm.requestdatetime < @toUtc
 
-      AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
-    ORDER BY groupname, date, patientname";
-
+                        ORDER BY groupname, date, patientname";
 
 
-                var rows = (await db.QueryAsync<GroupStatementModel>(
+
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                    var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
+                    var rows = (await db.QueryAsync<GroupStatementModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code }))
+                    new { fromUtc, toUtc, tenant_code }))
 
                     .ToList();
+
+                    rows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -3416,9 +3404,9 @@ namespace medico_backend.Class
 
                         AdmissionNo = (string)(ipReg?.ip_no ?? ipReg?.ip_id?.ToString() ?? (string)(rm.opvisitid ?? "")),
 
-                        AdmissionDate = ipReg?.admitdate != null ? (DateTime?)Convert.ToDateTime(ipReg.admitdate) : null,
+                        AdmissionDate = ipReg?.admitdate != null ? AppTimeZoneHelper.ToLocalTimeSafe((DateTime)Convert.ToDateTime(ipReg.admitdate)) : null,
 
-                        DischargeDate = ipReg?.dischargedate != null ? (DateTime?)Convert.ToDateTime(ipReg.dischargedate) : null,
+                        DischargeDate = ipReg?.dischargedate != null ? AppTimeZoneHelper.ToLocalTimeSafe((DateTime)Convert.ToDateTime(ipReg.dischargedate)) : null,
 
                         BedNo = (string)(ipReg?.bedname ?? "-"),
 
@@ -3430,7 +3418,7 @@ namespace medico_backend.Class
 
                         ReceiptNo = (string)(rm.receiptsnoprint ?? receiptGuid),
 
-                        ReceiptDate = Convert.ToDateTime(rm.receiptdate),
+                        ReceiptDate = AppTimeZoneHelper.ToLocalTimeSafe(Convert.ToDateTime(rm.receiptdate)),
 
                         ReceiptType = "ADVANCE",
 
@@ -3760,9 +3748,9 @@ namespace medico_backend.Class
 
                         AdmissionNo = (string)(ipReg?.ip_no ?? ipReg?.ip_id?.ToString() ?? (string)(rm.opvisitid ?? "")),
 
-                        AdmissionDate = ipReg?.admitdate != null ? (DateTime?)Convert.ToDateTime(ipReg.admitdate) : null,
+                        AdmissionDate = ipReg?.admitdate != null ? AppTimeZoneHelper.ToLocalTimeSafe((DateTime)Convert.ToDateTime(ipReg.admitdate)) : null,
 
-                        DischargeDate = ipReg?.dischargedate != null ? (DateTime?)Convert.ToDateTime(ipReg.dischargedate) : null,
+                        DischargeDate = ipReg?.dischargedate != null ? AppTimeZoneHelper.ToLocalTimeSafe((DateTime)Convert.ToDateTime(ipReg.dischargedate)) : null,
 
                         BedNo = (string)(ipReg?.bedname ?? "-"),
 
@@ -3774,7 +3762,7 @@ namespace medico_backend.Class
 
                         ReceiptNo = (string)(rm.receiptsnoprint ?? receiptGuid),
 
-                        ReceiptDate = Convert.ToDateTime(rm.receiptdate),
+                        ReceiptDate = AppTimeZoneHelper.ToLocalTimeSafe(Convert.ToDateTime(rm.receiptdate)),
 
                         ReceiptType = "ADVANCE_REFUND",
 
@@ -3794,7 +3782,7 @@ namespace medico_backend.Class
 
                         OriginalReceiptNo = (string)(origAdv?.receiptsnoprint ?? ""),
 
-                        OriginalReceiptDate = origAdv?.receiptdate != null ? (DateTime?)Convert.ToDateTime(origAdv.receiptdate) : null,
+                        OriginalReceiptDate = origAdv?.receiptdate != null ? AppTimeZoneHelper.ToLocalTimeSafe((DateTime)Convert.ToDateTime(origAdv.receiptdate)) : null,
 
                         OriginalDepositAmount = origAdv?.original_deposit != null ? Convert.ToDecimal(origAdv.original_deposit) : 0m,
 
@@ -4054,37 +4042,9 @@ namespace medico_backend.Class
 
                 // ✅ Convert UTC timestamps to system local timezone
 
-                var localZone = TimeZoneInfo.Local;
-
-                if (bill.BillDate != default)
-
-                {
-
-                    var utcBillDate = bill.BillDate.Kind == DateTimeKind.Utc
-
-                        ? bill.BillDate
-
-                        : DateTime.SpecifyKind(bill.BillDate, DateTimeKind.Utc);
-
-                    bill.BillDate = TimeZoneInfo.ConvertTimeFromUtc(utcBillDate, localZone);
-
-                }
-
-
-
-                if (bill.CreatedTime != default)
-
-                {
-
-                    var utcCreatedTime = bill.CreatedTime.Kind == DateTimeKind.Utc
-
-                        ? bill.CreatedTime
-
-                        : DateTime.SpecifyKind(bill.CreatedTime, DateTimeKind.Utc);
-
-                    bill.CreatedTime = TimeZoneInfo.ConvertTimeFromUtc(utcCreatedTime, localZone);
-
-                }
+                // Convert UTC timestamps to local application timezone
+                bill.BillDate = AppTimeZoneHelper.ToLocalTimeSafe(bill.BillDate);
+                bill.CreatedTime = AppTimeZoneHelper.ToLocalTimeSafe(bill.CreatedTime);
 
 
 
@@ -4546,7 +4506,9 @@ namespace medico_backend.Class
 
 
 
-                    bill.LabName = companyInfo?.legal_name ?? string.Empty;
+                                        bill.BillDate = AppTimeZoneHelper.ToLocalTimeSafe(bill.BillDate);
+                    bill.CreatedTime = AppTimeZoneHelper.ToLocalTimeSafe(bill.CreatedTime);
+bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
                     bill.Address = companyInfo?.address_line1 ?? string.Empty;
 
@@ -4858,10 +4820,8 @@ namespace medico_backend.Class
 
                   AND COALESCE(lrm.deleted, false) = false
 
-                  AND lrm.requestdatetime >= @fromdate
-
-                  AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
+                  AND lrm.requestdatetime >= @fromUtc
+                  AND lrm.requestdatetime < @toUtc
                   AND (@gcode IS NULL OR @gcode = '' OR @gcode = '0' OR tm.gcode::text = @gcode);
 
             ";
@@ -4872,7 +4832,7 @@ namespace medico_backend.Class
 
                         billsSql,
 
-                        new { fromdate = fromdate.Value, todate = todate.Value, gcode, tenant_code }
+                        new { fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Value.Date), toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Value.Date.AddDays(1)), gcode, tenant_code }
 
                     )).Select(b => new {
 
@@ -4886,7 +4846,7 @@ namespace medico_backend.Class
 
                             RequestSnoPrint = b.requestsnoprint,
 
-                            BillDate = b.billdate,
+                            BillDate = AppTimeZoneHelper.ToLocalTimeSafe((DateTime)b.billdate),
 
                             PatientName = b.patientname,
 
@@ -4910,7 +4870,7 @@ namespace medico_backend.Class
 
                             CreatedBy = b.createdby,
 
-                            CreatedTime = b.createdtime,
+                            CreatedTime = AppTimeZoneHelper.ToLocalTimeSafe((DateTime)b.createdtime),
 
                             TotalAmount = b.totalamount ?? 0,
 
@@ -4998,7 +4958,7 @@ namespace medico_backend.Class
 
                         itemsSql,
 
-                        new { fromdate = fromdate.Value, todate = todate.Value, gcode, tenant_code }
+                        new { fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Value.Date), toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Value.Date.AddDays(1)), gcode, tenant_code }
 
                     )).ToList();
 
@@ -5086,7 +5046,7 @@ namespace medico_backend.Class
 
                         multiSubParamsSql,
 
-                        new { fromdate = fromdate.Value, todate = todate.Value, gcode, tenant_code }
+                        new { fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Value.Date), toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Value.Date.AddDays(1)), gcode, tenant_code }
 
                     )).ToList();
 
@@ -5770,15 +5730,9 @@ namespace medico_backend.Class
 
 
 
-                CollectedOn = SafeDate(firstCulture, "samplereceiveddate") ?? DateTime.Now,
-
-                ReceivedOn = SafeDate(headerDict, "receivedon") ?? DateTime.Now,
-
-                ReportedOn = GetDynVal(lastAuth, "culturereporteddate") is DateTime repDt
-
-                                  ? repDt : DateTime.Now,
-
-
+                CollectedOn = AppTimeZoneHelper.ToLocalTimeSafe(SafeDate(firstCulture, "samplereceiveddate")) ?? AppTimeZoneHelper.ToLocalTimeSafe(DateTime.UtcNow),
+                ReceivedOn = AppTimeZoneHelper.ToLocalTimeSafe(SafeDate(headerDict, "receivedon")) ?? AppTimeZoneHelper.ToLocalTimeSafe(DateTime.UtcNow),
+                ReportedOn = AppTimeZoneHelper.ToLocalTimeSafe(GetDynVal(lastAuth, "culturereporteddate") is DateTime repDt ? repDt : DateTime.UtcNow),
 
                 Barcode = headerDict.TryGetValue("barcode", out var bc) ? bc?.ToString() ?? "" : "",
 
@@ -6041,39 +5995,9 @@ namespace medico_backend.Class
 
 
         private static DateTime? ToLocalReportTime(DateTime? dt, DateTime baseRef)
-
         {
-
             if (!dt.HasValue || dt.Value == DateTime.MinValue) return dt;
-
-            DateTime val = dt.Value;
-
-            if (val.Kind == DateTimeKind.Utc)
-
-            {
-
-                return val.ToLocalTime();
-
-            }
-
-            if (baseRef != DateTime.MinValue && val < baseRef.AddMinutes(-30))
-
-            {
-
-                try
-
-                {
-
-                    return TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(val, DateTimeKind.Utc), TimeZoneInfo.Local);
-
-                }
-
-                catch { }
-
-            }
-
-            return val;
-
+            return AppTimeZoneHelper.ToLocalTimeSafe(dt.Value);
         }
 
 
@@ -9147,6 +9071,11 @@ WHERE lrd.requestguid::text = @requestguid::text
                 var casesheet = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
 
                     mainSql, new { sheet_id = sheet_id.ToString(), tenant_code });
+                if (casesheet != null)
+                {
+                    casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
+                    casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
+                }
 
 
 
@@ -9635,6 +9564,11 @@ WHERE lrd.requestguid::text = @requestguid::text
                 var casesheet = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
 
                     mainSql, new { sheet_id = sheet_id.ToString(), tenant_code });
+                if (casesheet != null)
+                {
+                    casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
+                    casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
+                }
 
 
 
@@ -12471,6 +12405,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                             foreach (var advItem in advancesList)
 
                             {
+                                advItem.Date = AppTimeZoneHelper.ToLocalTimeSafe(advItem.Date);
 
                                 advItem.BalanceAmount = Math.Max(0m, advItem.DepositAmount - advItem.AdjustedAmount - advItem.RefundAmount);
 
@@ -12612,7 +12547,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     CreatedBy = header.CreatedBy ?? "",
 
-                    CreatedTime = header.CreatedTime != null ? (DateTime?)Convert.ToDateTime(header.CreatedTime) : DateTime.Now,
+                    CreatedTime = AppTimeZoneHelper.ToLocalTimeSafe(header.CreatedTime != null ? (DateTime?)Convert.ToDateTime(header.CreatedTime) : DateTime.UtcNow),
 
                     billauthorizedby = null,
 
@@ -13542,23 +13477,24 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                       AND COALESCE(lrm.deleted, false) = false
 
-                      AND lrm.requestdatetime >= @fromdate
-
-                      AND lrm.requestdatetime < @todate + INTERVAL '1 day'
-
+                      AND lrm.requestdatetime >= @fromUtc
+                      AND lrm.requestdatetime < @toUtc
                     ORDER BY lrm.requestdatetime;
 
                 ";
 
 
 
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                 var rows = (await db.QueryAsync<DailyBillReportModel>(
-
                     sql,
-
-                    new { fromdate, todate, tenant_code }))
+                    new { fromUtc, toUtc, tenant_code }))
 
                     .ToList();
+
+                rows.ForEach(r => r.date = AppTimeZoneHelper.ToLocalTimeSafe(r.date));
 
 
 
@@ -14052,23 +13988,22 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                     WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
 
-                      AND op.visit_date >= @fromdate
-
-                      AND op.visit_date < @todate + INTERVAL '1 day'
-
-                      AND COALESCE(op.isdeleted, false) = false
-
+                      AND op.visit_date >= @fromUtc
+                      AND op.visit_date < @toUtc
                     ORDER BY op.visit_date;
 
                 ";
 
 
 
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                 var rows = (await db.QueryAsync<DailyBillReportModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code },
+                    new { fromUtc, toUtc, tenant_code },
 
                     commandTimeout: 120))
 
@@ -14079,6 +14014,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 foreach (var row in rows)
 
                 {
+                    row.date = AppTimeZoneHelper.ToLocalTimeSafe(row.date);
 
                     row.service_amount += row.other_amount;
 
@@ -14394,11 +14330,14 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
 
 
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                 var rows = (await db.QueryAsync<DailyBillReportModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code },
+                    new { fromUtc, toUtc, tenant_code },
 
                     commandTimeout: 120))
 
@@ -14409,6 +14348,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 foreach (var row in rows)
 
                 {
+                    row.date = AppTimeZoneHelper.ToLocalTimeSafe(row.date);
 
                     row.service_amount += row.other_amount;
 
@@ -14724,23 +14664,22 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                     WHERE (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
 
-                      AND op.visit_date >= @fromdate
-
-                      AND op.visit_date < @todate + INTERVAL '1 day'
-
-                      AND COALESCE(op.isdeleted, false) = false
-
+                      AND op.visit_date >= @fromUtc
+                      AND op.visit_date < @toUtc
                     ORDER BY dm.doctorfullname, op.visit_date;
 
                 ";
 
 
 
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                 var rows = (await db.QueryAsync<DailyBillReportModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code },
+                    new { fromUtc, toUtc, tenant_code },
 
                     commandTimeout: 120))
 
@@ -14751,6 +14690,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 foreach (var row in rows)
 
                 {
+                    row.date = AppTimeZoneHelper.ToLocalTimeSafe(row.date);
 
                     row.service_amount += row.other_amount;
 
@@ -15076,23 +15016,22 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
 
-                      AND ip.admitdate >= @fromdate
-
-                      AND ip.admitdate < @todate + INTERVAL '1 day'
-
-                      AND COALESCE(ip.isdeleted, false) = false
-
+                      AND ip.admitdate >= @fromUtc
+                      AND ip.admitdate < @toUtc
                     ORDER BY dm.doctorfullname, ip.admitdate;
 
                 ";
 
 
 
+                var fromUtc = AppTimeZoneHelper.ToUtcFromLocal(fromdate.Date);
+                var toUtc = AppTimeZoneHelper.ToUtcFromLocal(todate.Date.AddDays(1));
+
                 var rows = (await db.QueryAsync<DailyBillReportModel>(
 
                     sql,
 
-                    new { fromdate, todate, tenant_code },
+                    new { fromUtc, toUtc, tenant_code },
 
                     commandTimeout: 120))
 
@@ -15103,6 +15042,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 foreach (var row in rows)
 
                 {
+                    row.date = AppTimeZoneHelper.ToLocalTimeSafe(row.date);
 
                     row.service_amount += row.other_amount;
 
@@ -15349,6 +15289,10 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 if (master == null)
 
                     return null;
+                master.billdate = AppTimeZoneHelper.ToLocalTimeSafe(master.billdate);
+                master.invoicedate = AppTimeZoneHelper.ToLocalTimeSafe(master.invoicedate);
+                master.createddate = AppTimeZoneHelper.ToLocalTimeSafe(master.createddate);
+                master.modifieddate = AppTimeZoneHelper.ToLocalTimeSafe(master.modifieddate);
 
 
 
@@ -16720,9 +16664,9 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
 
 
-                DateTime fDate = fromDate.Date;
+                DateTime fDate = AppTimeZoneHelper.ToUtcFromLocal(fromDate.Date);
 
-                DateTime tDate = toDate.Date.AddDays(1).AddTicks(-1);
+                DateTime tDate = AppTimeZoneHelper.ToUtcFromLocal(toDate.Date.AddDays(1));
 
 
 
@@ -16864,7 +16808,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND COALESCE(op.isdeleted, false) = false
 
-                          AND op.visit_date >= @fDate AND op.visit_date <= @tDate
+                          AND op.visit_date >= @fDate AND op.visit_date < @tDate
 
                           AND (@search IS NULL OR @search = '' 
 
@@ -17032,7 +16976,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND COALESCE(ip.isdeleted, false) = false
 
-                          AND ip.admitdate >= @fDate AND ip.admitdate <= @tDate
+                          AND ip.admitdate >= @fDate AND ip.admitdate < @tDate
 
                           AND (@search IS NULL OR @search = '' 
 
@@ -17146,7 +17090,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND COALESCE(lrm.deleted, false) = false
 
-                          AND lrm.requestdatetime >= @fDate AND lrm.requestdatetime <= @tDate
+                          AND lrm.requestdatetime >= @fDate AND lrm.requestdatetime < @tDate
 
                           AND (@search IS NULL OR @search = '' 
 
@@ -17199,6 +17143,11 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                     .ToList();
 
 
+
+                rows.ForEach(r => {
+                    r.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(r.VisitDate);
+                    r.DischargeDate = AppTimeZoneHelper.ToLocalTimeSafe(r.DischargeDate);
+                });
 
                 var summary = new ConsolidatedListsSummaryDto
 
