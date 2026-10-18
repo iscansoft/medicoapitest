@@ -10,6 +10,7 @@ using Medico_Backend.Class;
 using Medico_Backend.Controllers;
 using Medico_Backend.Handlers;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.IdentityModel.Tokens;
 using Minio;
 using System.Text;
@@ -39,10 +40,11 @@ builder.WebHost.ConfigureKestrel(options =>
 });
 
 // 2. Multipart form parsing limit
-builder.Services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
+builder.Services.Configure<FormOptions>(options =>
 {
-    options.MultipartBodyLengthLimit = 100 * 1024 * 1024;
+    options.MultipartBodyLengthLimit = 100 * 1024 * 1024; // 100 MB
     options.ValueLengthLimit = int.MaxValue;
+    options.ValueCountLimit = 4096; // FIX: Allow more form values
     options.MultipartHeadersLengthLimit = int.MaxValue;
 });
 
