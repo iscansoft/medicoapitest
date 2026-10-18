@@ -805,6 +805,13 @@ namespace medico_backend.Model
         public List<HmsPayModeTotalRow> by_paymode { get; set; } = new();     // one row per paymode
         public List<HmsPayModeSourceRow> details { get; set; } = new();       // paymode x source
     }
+    public class HmsOpPaymodeAmount
+    {
+        public string paymode { get; set; } = "";
+        public decimal? pmcode { get; set; }
+        public double amount { get; set; }
+    }
+
     public class HmsOpCategoryAmountRow
     {
         public string category { get; set; } = "";
@@ -816,6 +823,7 @@ namespace medico_backend.Model
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
+        public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
     }
 
     public class HmsOpServiceAmountRow
@@ -828,6 +836,7 @@ namespace medico_backend.Model
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
+        public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
     }
 
     public class HmsOpVisitCategoryRow
@@ -841,6 +850,7 @@ namespace medico_backend.Model
         public string bill_nos { get; set; } = "";
         public Dictionary<string, double> net_by_category { get; set; } = new();
         public Dictionary<string, double> collected_by_category { get; set; } = new();
+        public Dictionary<string, double> collected_by_paymode { get; set; } = new();
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
@@ -857,12 +867,13 @@ namespace medico_backend.Model
         public double total_net { get; set; }
         public double total_collected { get; set; }
         public double total_due { get; set; }
+        public List<HmsOpPaymodeAmount> paymode_totals { get; set; } = new();
         public List<HmsOpCategoryAmountRow> categories { get; set; } = new();
         public List<HmsOpServiceAmountRow> services { get; set; } = new();
         public List<HmsOpVisitCategoryRow> visits { get; set; } = new();
     }
 
-    // internal row used by the query
+    // internal rows used by the query
     public class HmsOpCategoryLine
     {
         public string op_id { get; set; } = "";
@@ -880,5 +891,14 @@ namespace medico_backend.Model
         public double gross { get; set; }
         public double net { get; set; }
         public double paid { get; set; }
+        public double ratio { get; set; }
+    }
+
+    public class HmsOpBillPayRow
+    {
+        public string requestguid { get; set; } = "";
+        public string paymode { get; set; } = "";
+        public decimal? pmcode { get; set; }
+        public double amount { get; set; }
     }
 }
