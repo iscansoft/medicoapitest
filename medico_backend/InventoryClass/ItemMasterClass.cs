@@ -522,7 +522,107 @@ namespace medico_backend.InventoryClass
                 }
             }
         }
+        // Undo the stock effect of OLD purchase detail rows
+        private async Task ReversePurchaseStock(IDbConnection db, IDbTransaction tx,
+            IEnumerable<purchase_detail> oldDetails, string tenantcode)
+        {
+            foreach (var old in oldDetails)
+            {
+                decimal qty = old.packg > 0 ? old.packg : old.quantity * old.packsize;
+                if (qty <= 0) continue;
 
+                var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
+            SELECT stockcode, closingstock, unitcost
+            FROM stock_master
+            WHERE itemcode = @itemcode
+              AND warehousecode = @warehousecode
+              AND batchno = @batchno
+              AND tenantcode = @tenantcode
+              AND deleted = false
+            FOR UPDATE;",
+                    new { old.itemcode, old.warehousecode, old.batchno, tenantcode }, tx);
+
+                if (stock == null) continue;   // nothing to reverse (legacy row)
+
+                if (stock.closingstock < qty)
+                    throw new Exception(
+                        $"Cannot update purchase: item {old.itemcode}, batch {old.batchno} " +
+                        $"has only {stock.closingstock} in stock, but {qty} must be reversed (already sold/issued).");
+
+                await db.ExecuteAsync(@"
+            UPDATE stock_master
+            SET purchasedqty = purchasedqty - @qty,
+                closingstock = closingstock - @qty,
+                stockvalue   = (closingstock - @qty) * unitcost,
+                modifieddate = CURRENT_TIMESTAMP
+            WHERE stockcode = @stockcode;",
+                    new { qty, stockcode = stock.stockcode }, tx);
+            }
+        }
+
+        // Apply NEW purchase detail row to stock (same logic as InsertPurchase)
+        private async Task ApplyPurchaseStock(IDbConnection db, IDbTransaction tx,
+            purchase_detail item, purchase_master master)
+        {
+            if (item.packsize <= 0)
+                throw new Exception($"Invalid packsize for item {item.itemcode}: packsize must be greater than 0");
+
+            decimal unitPrice = item.rate / item.packsize;
+            decimal mrpUnit = item.mrp / item.packsize;
+
+            var stockcode = await db.ExecuteScalarAsync<long?>(@"
+        SELECT stockcode FROM stock_master
+        WHERE itemcode = @itemcode
+          AND warehousecode = @warehousecode
+          AND batchno = @batchno
+          AND tenantcode = @tenantcode
+          AND deleted = false
+        FOR UPDATE;",
+                new { item.itemcode, item.warehousecode, item.batchno, tenantcode = master.tenantcode }, tx);
+
+            if (stockcode.HasValue)
+            {
+                await db.ExecuteAsync(@"
+            UPDATE stock_master
+            SET purchasedqty = purchasedqty + @packg,
+                closingstock = closingstock + @packg,
+                unitcost     = @unitPrice,
+                mrpunit      = @mrpUnit,
+                stockvalue   = (closingstock + @packg) * @unitPrice,
+                modifieddate = CURRENT_TIMESTAMP
+            WHERE stockcode = @stockcode;",
+                    new { stockcode = stockcode.Value, item.packg, unitPrice, mrpUnit }, tx);
+            }
+            else
+            {
+                await db.ExecuteAsync(@"
+            INSERT INTO stock_master
+            (itemcode, warehousecode, branchcode, openingstock, purchasedqty, soldqty,
+             damagedqty, returnqty, closingstock, unitcost, mrpunit, stockvalue,
+             batchno, manufacturingdate, expirydate, isactive, deleted, createddate,
+             usercode, tenantcode, companycode)
+            VALUES
+            (@itemcode, @warehousecode, @branchcode, 0, @packg, 0,
+             0, 0, @packg, @unitPrice, @mrpUnit, (@packg * @unitPrice),
+             @batchno, @manufacturingdate, @expirydate, true, false, CURRENT_TIMESTAMP,
+             @usercode, @tenantcode, @companycode);",
+                    new
+                    {
+                        item.itemcode,
+                        item.warehousecode,
+                        branchcode = master.branchcode,
+                        item.packg,
+                        unitPrice,
+                        mrpUnit,
+                        item.batchno,
+                        item.manufacturingdate,
+                        item.expirydate,
+                        usercode = master.usercode,
+                        tenantcode = master.tenantcode,
+                        companycode = master.companycode
+                    }, tx);
+            }
+        }
         public async Task<long> UpdatePurchase(purchase_request request)
         {
             using (IDbConnection db = new NpgsqlConnection(con))
@@ -533,36 +633,41 @@ namespace medico_backend.InventoryClass
                 {
                     try
                     {
+                        string tenantcode = request.master.tenantcode;
+
+                        // ─────────────────────────────────────────────
+                        // 1. Update purchase master
+                        // ─────────────────────────────────────────────
                         string masterQuery = @"
-                UPDATE public.purchase_master
-                SET
-                    billno                 = @billno,
-                    billdate               = @billdate,
-                    invoiceno              = @invoiceno,
-                    invoicedate            = @invoicedate,
-                    vendorcode             = @vendorcode,
-                    grossamount            = @grossamount,
-                    overalldiscount        = @overalldiscount,
-                    discountamount         = @discountamount,
-                    totalamount            = @totalamount,
-                    taxamount              = @taxamount,
-                    netamount              = @netamount,
-                    transportationcharges  = @transportationcharges,
-                    roundoff               = @roundoff,
-                    paymentmode            = @paymentmode,
-                    paymentstatus          = @paymentstatus,
-                    currencycode           = @currencycode,
-                    isactive               = @isactive,
-                    deleted                = @deleted,
-                    remarks                = @remarks,
-                    modifieddate           = CURRENT_TIMESTAMP,
-                    usercode               = @usercode,
-                    tenantcode             = @tenantcode,
-                    branchcode             = @branchcode,
-                    companycode            = @companycode,
-                    grncode                = @grncode
-                WHERE purchasecode = @purchasecode
-                  AND tenantcode = @tenantcode;";
+                    UPDATE public.purchase_master
+                    SET
+                        billno                 = @billno,
+                        billdate               = @billdate,
+                        invoiceno              = @invoiceno,
+                        invoicedate            = @invoicedate,
+                        vendorcode             = @vendorcode,
+                        grossamount            = @grossamount,
+                        overalldiscount        = @overalldiscount,
+                        discountamount         = @discountamount,
+                        totalamount            = @totalamount,
+                        taxamount              = @taxamount,
+                        netamount              = @netamount,
+                        transportationcharges  = @transportationcharges,
+                        roundoff               = @roundoff,
+                        paymentmode            = @paymentmode,
+                        paymentstatus          = @paymentstatus,
+                        currencycode           = @currencycode,
+                        isactive               = @isactive,
+                        deleted                = @deleted,
+                        remarks                = @remarks,
+                        modifieddate           = CURRENT_TIMESTAMP,
+                        usercode               = @usercode,
+                        tenantcode             = @tenantcode,
+                        branchcode             = @branchcode,
+                        companycode            = @companycode,
+                        grncode                = @grncode
+                    WHERE purchasecode = @purchasecode
+                      AND tenantcode = @tenantcode;";
 
                         int masterRows = await db.ExecuteAsync(
                             masterQuery,
@@ -572,46 +677,66 @@ namespace medico_backend.InventoryClass
                         if (masterRows == 0)
                             throw new Exception("Purchase record not found.");
 
+                        // ─────────────────────────────────────────────
+                        // 2. Reverse the stock effect of the OLD details
+                        // ─────────────────────────────────────────────
+                        var oldDetails = (await db.QueryAsync<purchase_detail>(@"
+                    SELECT itemcode, warehousecode, batchno, quantity, packsize, packg
+                    FROM public.purchase_detail
+                    WHERE purchasecode = @purchasecode
+                      AND tenantcode = @tenantcode;",
+                            new
+                            {
+                                purchasecode = request.master.purchasecode,
+                                tenantcode
+                            },
+                            transaction)).ToList();
+
+                        await ReversePurchaseStock(db, transaction, oldDetails, tenantcode);
+
+                        // ─────────────────────────────────────────────
+                        // 3. Delete old details
+                        // ─────────────────────────────────────────────
                         await db.ExecuteAsync(
                             @"DELETE FROM public.purchase_detail
                       WHERE purchasecode = @purchasecode;",
-                            new
-                            {
-                                purchasecode = request.master.purchasecode
-                            },
+                            new { purchasecode = request.master.purchasecode },
                             transaction);
 
+                        // ─────────────────────────────────────────────
+                        // 4. Insert new details + apply to stock
+                        // ─────────────────────────────────────────────
                         string detailQuery = @"
-               INSERT INTO public.purchase_detail
-    (
-        purchasecode, itemcode, quantity, freequantity, uomcode, rate,
-        discountpercentage, discountamount, taxpercentage, taxamount,
-        amount, totalamount, batchno, manufacturingdate, expirydate,
-        orderedqty, receivedqty, rejectedqty, warehousecode,
-        packaging, manufacturercode,
-        packsize, packg, mrp,
-        tenantcode
-    )
-    VALUES
-    (
-        @purchasecode, @itemcode, @quantity, @freequantity, @uomcode, @rate,
-        @discountpercentage, @discountamount, @taxpercentage, @taxamount,
-        @amount, @totalamount, @batchno, @manufacturingdate, @expirydate,
-        @orderedqty, @receivedqty, @rejectedqty, @warehousecode,
-        @packaging, @manufacturercode,
-        @packsize, @packg, @mrp,
-        @tenantcode
-    );";
+                    INSERT INTO public.purchase_detail
+                    (
+                        purchasecode, itemcode, quantity, freequantity, uomcode, rate,
+                        discountpercentage, discountamount, taxpercentage, taxamount,
+                        amount, totalamount, batchno, manufacturingdate, expirydate,
+                        orderedqty, receivedqty, rejectedqty, warehousecode,
+                        packaging, manufacturercode,
+                        packsize, packg, mrp,
+                        tenantcode
+                    )
+                    VALUES
+                    (
+                        @purchasecode, @itemcode, @quantity, @freequantity, @uomcode, @rate,
+                        @discountpercentage, @discountamount, @taxpercentage, @taxamount,
+                        @amount, @totalamount, @batchno, @manufacturingdate, @expirydate,
+                        @orderedqty, @receivedqty, @rejectedqty, @warehousecode,
+                        @packaging, @manufacturercode,
+                        @packsize, @packg, @mrp,
+                        @tenantcode
+                    );";
 
                         foreach (var item in request.details)
                         {
                             item.purchasecode = request.master.purchasecode;
-                            item.packg = item.quantity * item.packsize;
+                            item.tenantcode = tenantcode;
+                            item.packg = item.quantity * item.packsize;   // total units = qty * packsize
 
-                            await db.ExecuteAsync(
-                                detailQuery,
-                                item,
-                                transaction);
+                            await db.ExecuteAsync(detailQuery, item, transaction);
+
+                            await ApplyPurchaseStock(db, transaction, item, request.master);
                         }
 
                         transaction.Commit();
@@ -8530,6 +8655,29 @@ AND deleted = false;";
                 tx.Rollback();
                 throw;
             }
+        }
+        public async Task<sales_request?> GetSalesByCode(long salescode, string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+
+            var master = await conn.QueryFirstOrDefaultAsync<sales_master>(@"
+        SELECT * FROM sales_master
+        WHERE salescode = @salescode
+          AND tenantcode = @tenantcode
+          AND deleted = false;",
+                new { salescode, tenantcode });
+
+            if (master == null) return null;
+
+            var details = (await conn.QueryAsync<sales_detail>(@"
+        SELECT * FROM sales_detail
+        WHERE salescode = @salescode
+          AND tenantcode = @tenantcode
+        ORDER BY salesdetailcode;",
+                new { salescode, tenantcode })).ToList();
+
+            return new sales_request { master = master, details = details };
         }
     }
 }

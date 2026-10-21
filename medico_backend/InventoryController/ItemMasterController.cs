@@ -2999,6 +2999,24 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        [HttpGet("getsalesbycode")]
+        public async Task<IActionResult> GetSalesByCode(long salescode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetSalesByCode(salescode, tenantcode);
+                return result == null
+                    ? NotFound(new { Status = "Failed", Message = "Sales record not found" })
+                    : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     

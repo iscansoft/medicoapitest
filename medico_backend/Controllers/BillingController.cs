@@ -306,7 +306,16 @@ namespace medico_backend.Controller
                 fromdate, todate, bhcode, cntcode, GetTenantCode());
             return Ok(result);
         }
-        // GET /api/HmsBilling/reports/op-category-collection?fromdate=2026-10-01&todate=2026-10-14&bhcode=1&cntcode=2&dcode=5
+        // Reads tenant code from the request header only (no JWT / "SYSTEM" fallback)
+        private string? GetTenantFromHeader()
+        {
+            if (Request.Headers.TryGetValue("tenant_code", out var v) && !string.IsNullOrWhiteSpace(v))
+                return v.ToString().Trim();
+            return null;
+        }
+
+        // GET /api/HmsBilling/reports/op-category-collection?fromdate=2026-10-18&todate=2026-10-18&bhcode=1&cntcode=2&dcode=5
+        // Header: tenant_code: TEN123
         [HttpGet("reports/op-category-collection")]
         [ProducesResponseType(StatusCodes.Status200OK, Type = typeof(HmsOpCategoryCollectionResponse))]
         [ProducesResponseType(StatusCodes.Status400BadRequest)]
@@ -317,13 +326,17 @@ namespace medico_backend.Controller
             [FromQuery] int? cntcode,
             [FromQuery] int? dcode)
         {
+            var tenant = GetTenantFromHeader();
+            if (string.IsNullOrEmpty(tenant))
+                return BadRequest(new { message = "tenant_code header is required." });
+
             if (fromdate == default || todate == default)
                 return BadRequest(new { message = "fromdate and todate are required." });
             if (todate.Date < fromdate.Date)
                 return BadRequest(new { message = "todate cannot be earlier than fromdate." });
 
             var result = await _billingService.GetOpCategoryCollectionReport(
-                fromdate, todate, bhcode, cntcode, dcode, GetTenantCode());
+                fromdate, todate, bhcode, cntcode, dcode, tenant);
             return Ok(result);
         }
     }

@@ -1944,8 +1944,29 @@ namespace medico_backend.Class
                 return ($"AutoBillOpByOpId error: {ex.Message}", null);
             }
         }
+        public static class HmsOpCategories
+        {
+            public const string Consultation = "CONSULTATION";
+            public const string Dressing = "DRESSING";
+            public const string Observation = "OBSERVATION";
+            public const string Service = "SERVICE";
+            public const string Physio = "PHYSIO";
+            public const string Lab = "LAB";
+            public const string Scan = "SCAN";
+            public const string Ecg = "ECG";
+            public const string Echo = "ECHO";
+
+            // Display order in the report (same as before)
+            public static readonly string[] Order =
+            {
+        Consultation, Dressing, Observation, Service, Physio, Lab, Scan, Ecg, Echo
+    };
+
+            // Shown only when at least one item exists
+            public static readonly HashSet<string> Optional = new() { Echo };
+        }
         public async Task<HmsPayModeCollectionResponse> GetPayModeCollectionReport(
-    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, string tenantCode)
+     DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, string tenantCode)
         {
             using var db = GetConnection();
 
@@ -2036,14 +2057,23 @@ namespace medico_backend.Class
             };
         }
         public async Task<HmsOpCategoryCollectionResponse> GetOpCategoryCollectionReport(
-    DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
+DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
         {
+            if (string.IsNullOrWhiteSpace(tenantCode))
+                throw new ArgumentException("tenant_code is required.", nameof(tenantCode));
+
             using var db = GetConnection();
 
             var p = new DynamicParameters();
             p.Add("t", tenantCode);
-            p.Add("from", fromdate.Date);
-            p.Add("to", todate.Date.AddDays(1));   // exclusive
+
+            // Bill-date window: IST day boundaries converted to UTC (bills are stored with DateTime.UtcNow)
+            var fromUtc = TimeZoneInfo.ConvertTimeToUtc(
+                DateTime.SpecifyKind(fromdate.Date, DateTimeKind.Unspecified), Tz);
+            var toUtc = TimeZoneInfo.ConvertTimeToUtc(
+                DateTime.SpecifyKind(todate.Date.AddDays(1), DateTimeKind.Unspecified), Tz);
+            p.Add("fromUtc", fromUtc);
+            p.Add("toUtc", toUtc);
 
             string extra = "";
             if (bhcode.HasValue) { extra += " AND lrm.enteredbhcode = @bh "; p.Add("bh", bhcode.Value); }
@@ -2053,10 +2083,10 @@ namespace medico_backend.Class
             string sql = $@"
     WITH base AS (
         SELECT
-            op.op_id::text                                   AS op_id,
-            op.op_no,
+            COALESCE(op.op_id::text, 'BILL-' || lrm.requestguid) AS op_id,
+            COALESCE(op.op_no, 'NO VISIT')                   AS op_no,
             op.token_no,
-            op.visit_date::timestamp                         AS visit_date,
+            COALESCE(op.visit_date::timestamp, lrm.requestdatetime::timestamp) AS visit_date,
             lrm.name                                         AS patient_name,
             lrm.custid                                       AS custid,
             lrm.requestguid                                  AS requestguid,
@@ -2065,6 +2095,7 @@ namespace medico_backend.Class
             COALESCE(lrm.paidamount, 0)                      AS bill_paid,
             UPPER(COALESCE(lrd.chargetype, ''))              AS chargetype,
             COALESCE(NULLIF(lrd.item_name, ''), tm.name, '') AS item_name,
+            COALESCE(tm.name, '')                            AS test_name,
             COALESCE(lrd.testamount, 0)                      AS gross,
             COALESCE(lrd.newamount, lrd.testamount, 0)       AS line_net,
             COALESCE(gm.name, '')                            AS groupname,
@@ -2074,7 +2105,7 @@ namespace medico_backend.Class
             SUM(COALESCE(lrd.newamount, lrd.testamount, 0))
                 OVER (PARTITION BY lrm.requestguid)          AS bill_lines_total
         FROM lab_request_master lrm
-        INNER JOIN op_registration op
+        LEFT JOIN op_registration op
                 ON op.op_id::text   = COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, ''))
                AND op.tenant_code   = lrm.tenant_code
                AND COALESCE(op.isdeleted, false) = false
@@ -2098,23 +2129,46 @@ namespace medico_backend.Class
           AND lrm.bill_category = 'HMS'
           AND COALESCE(lrm.isdeleted, false) = false
           AND COALESCE(lrm.deleted, false)   = false
-          AND op.visit_date >= @from AND op.visit_date < @to
+          AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
           {extra}
     ),
     cat AS (
         SELECT b.*,
             CASE
-                WHEN b.chargetype = 'CONSULTATION' THEN 'CONSULTATION'
+                -- OBSERVATION: chargetype OBS*, or item name that STARTS with observation
+                WHEN b.chargetype LIKE 'OBS%'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'observation%'
+                     OR LOWER(TRIM(b.item_name)) = 'obs'                                THEN 'OBSERVATION'
+
+                -- DRESSING / CONSULTATION / SERVICE: unchanged (name matching kept)
                 WHEN b.chargetype = 'DRESSING'
-                     OR LOWER(b.item_name) LIKE 'dressing%' THEN 'DRESSING'
-                WHEN b.chargetype = 'SERVICE'
-                     OR b.service_id IS NOT NULL THEN 'SERVICE'
-                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'physio|fisho|therap' THEN 'PHYSIO'
-                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'echo|doppler' THEN 'ECHO'
-                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'ecg|electrocardio' THEN 'ECG'
-                WHEN LOWER(b.groupname || ' ' || b.item_name) ~ 'x-?ray|radio' THEN 'XRAY'
+                     OR LOWER(b.item_name || ' ' || b.test_name) LIKE '%dressing%'      THEN 'DRESSING'
+
+                WHEN b.chargetype = 'CONSULTATION'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'consultation%'
+                     OR LOWER(TRIM(b.test_name)) LIKE 'consultation%'                   THEN 'CONSULTATION'
+
+                                -- PHYSIO / ECG / ECHO: chargetype, group, or item name that STARTS with the word
+                WHEN b.chargetype IN ('PHYSIO', 'PHYSIOTHERAPY', 'FISHO')
+                     OR LOWER(b.groupname) ~ 'physio|fisho'
+                     OR LOWER(TRIM(b.item_name)) ~ '^(physio|fisho)'                    THEN 'PHYSIO'
+
+                WHEN b.chargetype = 'ECG'
+                     OR LOWER(b.groupname) ~ 'ecg|electrocardio'
+                     OR LOWER(TRIM(b.item_name)) ~ '^(ecg|electrocardio)'               THEN 'ECG'
+
+                WHEN b.chargetype = 'ECHO'
+                     OR LOWER(b.groupname) ~ 'echo|doppler'
+                     OR LOWER(TRIM(b.item_name)) ~ '^(echo|doppler)'                    THEN 'ECHO'
+
+                WHEN b.service_id IS NOT NULL OR b.chargetype = 'SERVICE'               THEN 'SERVICE'
+
+                -- SCAN: isscan flag, chargetype or group only
                 WHEN b.isscan
-                     OR LOWER(b.groupname || ' ' || b.item_name) ~ 'scan|usg|ultrasound|\m(ct|mri)\M' THEN 'SCAN'
+                     OR b.chargetype = 'SCAN'
+                     OR LOWER(b.groupname)
+                        ~ 'x-?ray|radio|scan|usg|ultrasound|\m(ct|mri)\M'               THEN 'SCAN'
+
                 ELSE 'LAB'
             END AS category,
             CASE WHEN b.bill_lines_total > 0 THEN b.line_net / b.bill_lines_total ELSE 0 END AS ratio
@@ -2124,17 +2178,75 @@ namespace medico_backend.Class
            item_name, service_id, service_name, category,
            gross::float8                 AS gross,
            (bill_total * ratio)::float8  AS net,
-           (bill_paid  * ratio)::float8  AS paid
+           (bill_paid  * ratio)::float8  AS paid,
+           ratio::float8                 AS ratio
     FROM cat
     ORDER BY visit_date, op_no";
 
             var lines = (await db.QueryAsync<HmsOpCategoryLine>(sql, p, commandTimeout: 60)).ToList();
 
+            // ── Payments per bill per paymode ──────────────────────────────────────
+            var billGuids = lines.Select(l => l.requestguid).Distinct().ToArray();
+            var payRows = billGuids.Length == 0
+                ? new List<HmsOpBillPayRow>()
+                : (await db.QueryAsync<HmsOpBillPayRow>(@"
+            SELECT
+                bcb.request_guid AS requestguid,
+                CASE WHEN UPPER(COALESCE(bcb.collection_type, '')) = 'ADVANCE'
+                     THEN 'ADVANCE ADJUSTED'
+                     ELSE UPPER(COALESCE(NULLIF(TRIM(pm.name), ''),
+                                         NULLIF(TRIM(bcb.collection_type), ''),
+                                         'UNSPECIFIED')) END AS paymode,
+                MAX(CASE WHEN UPPER(COALESCE(bcb.collection_type, '')) = 'ADVANCE'
+                         THEN NULL ELSE bcb.pmcode END)      AS pmcode,
+                COALESCE(SUM(bcb.collectedamount), 0)::float8 AS amount
+            FROM balancecollectionby bcb
+            LEFT JOIN paymode_master pm
+                   ON pm.pmcode = bcb.pmcode
+                  AND pm.tenant_code = bcb.tenant_code
+                  AND COALESCE(pm.deleted, false) = false
+            WHERE bcb.tenant_code = @t
+              AND COALESCE(bcb.deleted, false) = false
+              AND bcb.request_guid = ANY(@guids)
+            GROUP BY 1, 2",
+                    new { t = tenantCode, guids = billGuids })).ToList();
+
+            var payByBill = payRows.ToLookup(x => x.requestguid);
+            var billPaid = lines.GroupBy(l => l.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.paid));
+            var billKnown = payRows.GroupBy(x => x.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.amount));
+
             double R(double v) => Math.Round(v, 2);
 
-            // ── Category summary ─────────────────────────────────────────────
-            var order = new[] { "CONSULTATION", "DRESSING", "SERVICE", "LAB", "SCAN", "PHYSIO", "ECG", "XRAY", "ECHO" };
-            var optional = new HashSet<string> { "XRAY", "ECHO" };
+            IEnumerable<(string paymode, decimal? pmcode, double amount)> Split(HmsOpCategoryLine l)
+            {
+                double paidTotal = billPaid.TryGetValue(l.requestguid, out var pt) ? pt : 0;
+                double known = billKnown.TryGetValue(l.requestguid, out var k) ? k : 0;
+                double scale = (known > paidTotal + 0.01 && known > 0) ? paidTotal / known : 1.0;
+
+                foreach (var pr in payByBill[l.requestguid])
+                    yield return (pr.paymode, pr.pmcode, pr.amount * scale * l.ratio);
+
+                double unspecified = paidTotal - known * scale;
+                if (unspecified > 0.01)
+                    yield return ("UNSPECIFIED", null, unspecified * l.ratio);
+            }
+
+            List<HmsOpPaymodeAmount> Agg(IEnumerable<HmsOpCategoryLine> src) =>
+                src.SelectMany(Split)
+                   .GroupBy(x => x.paymode)
+                   .Select(g => new HmsOpPaymodeAmount
+                   {
+                       paymode = g.Key,
+                       pmcode = g.Select(x => x.pmcode).FirstOrDefault(x => x.HasValue),
+                       amount = R(g.Sum(x => x.amount))
+                   })
+                   .Where(x => x.amount > 0.004)
+                   .OrderByDescending(x => x.amount)
+                   .ToList();
+
+            // ── Category summary ───────────────────────────────────────────────────
+            var order = HmsOpCategories.Order;
+            var optional = HmsOpCategories.Optional;
 
             var categories = order
                 .Select(c =>
@@ -2151,13 +2263,14 @@ namespace medico_backend.Class
                         discount_amount = R(Math.Max(gross - net, 0)),
                         net_amount = R(net),
                         collected_amount = R(paid),
-                        due_amount = R(Math.Max(net - paid, 0))
+                        due_amount = R(Math.Max(net - paid, 0)),
+                        paymodes = Agg(g)
                     };
                 })
                 .Where(r => !optional.Contains(r.category) || r.item_count > 0)
                 .ToList();
 
-            // ── Per-service breakdown (service master) ───────────────────────
+            // ── Per-service breakdown ──────────────────────────────────────────────
             var services = lines
                 .Where(l => l.category == "SERVICE")
                 .GroupBy(l => new { l.service_id, name = l.service_name ?? l.item_name ?? "Service" })
@@ -2175,13 +2288,14 @@ namespace medico_backend.Class
                                                     .Distinct().Take(50)),
                         net_amount = R(net),
                         collected_amount = R(paid),
-                        due_amount = R(Math.Max(net - paid, 0))
+                        due_amount = R(Math.Max(net - paid, 0)),
+                        paymodes = Agg(g)
                     };
                 })
                 .OrderByDescending(s => s.net_amount)
                 .ToList();
 
-            // ── Per-visit rows ───────────────────────────────────────────────
+            // ── Per-visit rows ─────────────────────────────────────────────────────
             var visits = lines
                 .GroupBy(l => l.op_id)
                 .Select(g =>
@@ -2204,6 +2318,7 @@ namespace medico_backend.Class
                         row.net_by_category[c] = R(cl.Sum(x => x.net));
                         row.collected_by_category[c] = R(cl.Sum(x => x.paid));
                     }
+                    foreach (var pm in Agg(g)) row.collected_by_paymode[pm.paymode] = pm.amount;
                     row.net_amount = R(g.Sum(x => x.net));
                     row.collected_amount = R(g.Sum(x => x.paid));
                     row.due_amount = R(Math.Max(row.net_amount - row.collected_amount, 0));
@@ -2225,6 +2340,7 @@ namespace medico_backend.Class
                 total_net = R(totalNet),
                 total_collected = R(totalPaid),
                 total_due = R(Math.Max(totalNet - totalPaid, 0)),
+                paymode_totals = Agg(lines),
                 categories = categories,
                 services = services,
                 visits = visits
