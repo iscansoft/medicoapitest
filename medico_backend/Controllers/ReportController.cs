@@ -271,6 +271,85 @@ namespace medico_backend.Controllers
         }
 
         [AllowAnonymous]
+        [HttpGet("getprescription")]
+        [HttpGet("getdoctorprescription")]
+        public async Task<IActionResult> GetDoctorPrescription(
+            [FromQuery] Guid? pr_id = null,
+            [FromQuery] string? pr_code = null,
+            [FromQuery] Guid? sheet_id = null,
+            [FromQuery] Guid? op_id = null,
+            [FromQuery] Guid? ip_id = null,
+            [FromQuery] decimal? custid = null,
+            [FromQuery] bool? isletterhead = false,
+            [FromQuery] string? format = null,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null)
+        {
+            string t = !string.IsNullOrEmpty(tenantcode) ? tenantcode : (!string.IsNullOrEmpty(tenant_code) ? tenant_code : T);
+            if (string.IsNullOrWhiteSpace(t))
+                return BadRequest(new { success = false, message = "tenant_code header or query parameter is required." });
+
+            var res = await _reportClass.DoctorPrescriptionPDF(pr_id, pr_code, sheet_id, op_id, ip_id, custid, t, isletterhead);
+            if (res == null) return NotFound("Prescription report not found.");
+
+            if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
+            return Ok(res);
+        }
+
+        [AllowAnonymous]
+        [HttpPost("getprescription")]
+        [HttpPost("getdoctorprescription")]
+        public async Task<IActionResult> PostDoctorPrescription([FromBody] DoctorPrescriptionReportApiRequest req)
+        {
+            string t = !string.IsNullOrEmpty(req.tenantcode) ? req.tenantcode : (!string.IsNullOrEmpty(req.tenant_code) ? req.tenant_code : T);
+            if (string.IsNullOrWhiteSpace(t))
+                t = !string.IsNullOrWhiteSpace(req.TenantId) ? req.TenantId : "0036";
+
+            // If caller provided full CasesheetData directly in request body, forward directly to ReportingServer
+            if (req.CasesheetData != null)
+            {
+                var resDirect = await _reportClass.DoctorPrescriptionDirectPDF(req);
+                if (string.Equals(req.format, "pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    try
+                    {
+                        var clean = resDirect.Trim('"', ' ', '\r', '\n');
+                        var bytes = Convert.FromBase64String(clean);
+                        return File(bytes, "application/pdf");
+                    }
+                    catch { }
+                }
+                return Ok(resDirect);
+            }
+
+            var res = await _reportClass.DoctorPrescriptionPDF(req.pr_id, req.pr_code, req.sheet_id, req.op_id, req.ip_id, req.custid, t, req.IsLetterhead);
+            if (res == null) return NotFound("Prescription report not found.");
+
+            if (string.Equals(req.format, "pdf", StringComparison.OrdinalIgnoreCase) || 
+                (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
+            {
+                try
+                {
+                    var clean = res.Trim('"', ' ', '\r', '\n');
+                    var bytes = Convert.FromBase64String(clean);
+                    return File(bytes, "application/pdf");
+                }
+                catch { }
+            }
+            return Ok(res);
+        }
+
+        [AllowAnonymous]
         [HttpGet("getipcasesheet")]
         public async Task<IActionResult> GetIPCasesheet([FromQuery] Guid sheet_id, [FromQuery] bool? isletterhead = false, [FromQuery] string? format = null)
         {

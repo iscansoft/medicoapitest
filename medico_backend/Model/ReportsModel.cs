@@ -2490,6 +2490,15 @@ namespace medico_backend.Model
 
         public bool? IsInvestigationUrgent { get; set; }
 
+        // Prescription specifics
+        public string? PrNo { get; set; }
+        public string? PrescriptionNo { get; set; }
+        public string? bp { get; set; }
+        public string? pulse { get; set; }
+        public string? temp { get; set; }
+        public string? height { get; set; }
+        public string? weight { get; set; }
+
     }
 
 
@@ -2536,13 +2545,34 @@ namespace medico_backend.Model
 
 
 
-    public class CasesheetPrescriptionItemDto
+        public class DoctorPrescriptionReportApiRequest : CasesheetReportRequest
+    {
+        public Guid? pr_id { get; set; }
+        public string? pr_code { get; set; }
+        public Guid? sheet_id { get; set; }
+        public Guid? op_id { get; set; }
+        public Guid? ip_id { get; set; }
+        public decimal? custid { get; set; }
+        public string? format { get; set; }
+        public string? tenantcode { get; set; }
+        public string? tenant_code { get; set; }
+    }
+
+    public class DoctorPrescriptionRequest : CasesheetReportRequest { }
+
+public class CasesheetPrescriptionItemDto
 
     {
 
         public int Sno { get; set; }
 
         public string DrugName { get; set; } = "";
+
+        public string? GenericName { get; set; }
+
+        public string? Composition { get; set; }
+
+        public string? MedicineName { get; set; }
 
         public string Morning { get; set; } = "0";
 
