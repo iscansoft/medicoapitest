@@ -1457,7 +1457,62 @@ ORDER BY im.created_at DESC;";
             }
             return result;
         }
+        // ─────────────────────────────────────────────────────────
+        // GET LAST VISIT PRESCRIPTION (by patient)
+        // Finds the patient's most recent visit that has a prescription
+        // and returns all prescriptions of that visit.
+        // Optional exclude_op_id / exclude_ip_id skip the current visit.
+        // ─────────────────────────────────────────────────────────
+        public async Task<LastVisitPrescriptionViewModel?> GetLastVisitPrescription(
+            decimal custid, string tenant_code,
+            string? exclude_op_id = null, string? exclude_ip_id = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
 
+            var last = await db.QueryFirstOrDefaultAsync(
+                @"SELECT p.op_id, p.ip_id,
+                 p.visit_date::timestamp AS visit_date,
+                 p.dcode,
+                 d.name AS doctor_name
+          FROM   op_prescription_master p
+          LEFT JOIN doctor_master d
+                 ON d.dcode = p.dcode AND d.tenant_code = p.tenant_code
+          WHERE  p.custid      = @custid
+          AND    p.tenant_code = @tenant_code
+          AND    p.isdeleted   = false
+          AND    (@exclude_op_id IS NULL
+                  OR p.op_id IS DISTINCT FROM CAST(@exclude_op_id AS uuid))
+          AND    (@exclude_ip_id IS NULL
+                  OR p.ip_id IS DISTINCT FROM CAST(@exclude_ip_id AS uuid))
+          ORDER  BY p.visit_date DESC, p.created_at DESC
+          LIMIT  1",
+                new
+                {
+                    custid,
+                    tenant_code,
+                    exclude_op_id = string.IsNullOrWhiteSpace(exclude_op_id) ? null : exclude_op_id,
+                    exclude_ip_id = string.IsNullOrWhiteSpace(exclude_ip_id) ? null : exclude_ip_id
+                });
+
+            if (last == null) return null;
+
+            string? opId = last.op_id?.ToString();
+            string? ipId = last.ip_id?.ToString();
+
+            // reuse existing method: all prescriptions (with items) of that visit
+            var list = await GetPrescriptionList(opId, ipId, tenant_code);
+
+            return new LastVisitPrescriptionViewModel
+            {
+                custid = custid,
+                op_id = opId,
+                ip_id = ipId,
+                visit_date = last.visit_date,
+                dcode = (int)last.dcode,
+                doctor_name = last.doctor_name,
+                prescription_list = list
+            };
+        }
 
 
     }

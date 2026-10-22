@@ -542,4 +542,16 @@ namespace medico_backend.Model
         public int dcode { get; set; }
         public CaseSheetPrescriptionRequest prescription { get; set; } = new();
     }
+    public class LastVisitPrescriptionViewModel
+    {
+        public decimal custid { get; set; }
+        public string? op_id { get; set; }
+        public string? ip_id { get; set; }
+        public DateTime? visit_date { get; set; }
+        public int dcode { get; set; }
+        public string? doctor_name { get; set; }
+
+        // all prescriptions of that visit, newest first
+        public List<CaseSheetPrescriptionViewModel> prescription_list { get; set; } = new();
+    }
 }

@@ -326,5 +326,30 @@ namespace medico_backend.Controllers
             var tenant = Request.Headers["tenant_code"].ToString();
             return Ok(await cls.GetPrescriptionList(op_id, ip_id, tenant));
         }
+        // ─────────────────────────────────────────────────────────
+        // GET api/CaseSheet/prescription/last-visit?custid=1001
+        // Optional: &exclude_op_id=<uuid>  or  &exclude_ip_id=<uuid>
+        // Returns the patient's last visit prescription(s).
+        // ─────────────────────────────────────────────────────────
+        [HttpGet("prescription/last-visit")]
+        public async Task<IActionResult> GetLastVisitPrescription(
+            [FromQuery] decimal custid,
+            [FromQuery] string? exclude_op_id,
+            [FromQuery] string? exclude_ip_id)
+        {
+            var tenant = Request.Headers["tenant_code"].ToString();
+            if (string.IsNullOrWhiteSpace(tenant))
+                return BadRequest("tenant_code header is required");
+
+            if (custid <= 0)
+                return BadRequest("custid is required");
+
+            var data = await cls.GetLastVisitPrescription(custid, tenant, exclude_op_id, exclude_ip_id);
+
+            if (data == null)
+                return NotFound("No previous prescription found for this patient");
+
+            return Ok(data);
+        }
     }
 }
