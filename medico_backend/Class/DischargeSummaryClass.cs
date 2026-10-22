@@ -301,39 +301,81 @@ namespace medico_backend.Class
             var master = await db.QueryFirstOrDefaultAsync<DischargeSummaryModel.pds_master>(
                 masterSql, new { tenant_code, parsedPdsId, patcode_or_pdsid });
 
-            if (master == null)
+            string lookupCode = master != null && !string.IsNullOrWhiteSpace(master.patcode) ? master.patcode : patcode_or_pdsid;
+            long lookupCustid = master != null ? master.custid : 0;
+            if (lookupCustid == 0 && long.TryParse(patcode_or_pdsid, out var parsedCustid))
             {
-                // Try fetch patient info from ip_registration or customer_master
-                string patSql = @"
+                lookupCustid = parsedCustid;
+            }
+            int? lookupDcode = master?.dcode;
+
+            // 1. Try fetch demography from ip_registration
+            string ipDemoSql = @"
+                SELECT 
+                    COALESCE(NULLIF(cm.name, ''), '') AS patientname,
+                    COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(cm.bhcustcode::text, ''), NULLIF(cm.custid::text, ''), NULLIF(ip.ip_no, ''), '') AS patientid,
+                    COALESCE(NULLIF(cm.gender, ''), '') AS gender,
+                    COALESCE(
+                        NULLIF(TRIM(CONCAT(NULLIF(cm.ageyears::text, ''), ' Y / ', NULLIF(cm.agemonths::text, ''), ' M / ', NULLIF(cm.agedays::text, ''), ' D')), 'Y /  M /  D'),
+                        ''
+                    ) AS age,
+                    COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS mobileno,
+                    COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), '') AS doctorname,
+                    COALESCE(NULLIF(bm.bedname, ''), NULLIF(ip.bedcode::text, ''), '') AS bedno,
+                    ip.admitdate AS admissiondate,
+                    ip.dischargedate AS dischargedate,
+                    ip.custid AS custid,
+                    ip.dcode AS dcode,
+                    ip.ip_no AS ipno
+                FROM ip_registration ip
+                LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
+                LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(@lookupDcode, ip.dcode)
+                LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = @tenant_code OR bm.tenant_code IS NULL)
+                WHERE (ip.ip_no = @lookupCode OR ip.ip_id::text = @lookupCode OR ip.custid::text = @lookupCode OR (@lookupCustid > 0 AND ip.custid = @lookupCustid))
+                  AND ip.tenant_code = @tenant_code 
+                  AND COALESCE(ip.isdeleted, false) = false
+                ORDER BY ip.admitdate DESC NULLS LAST
+                LIMIT 1";
+
+            var demo = await db.QueryFirstOrDefaultAsync<dynamic>(ipDemoSql, new { lookupCode, lookupCustid, lookupDcode, tenant_code });
+
+            // 2. If not found in ip_registration, try customer_master
+            if (demo == null)
+            {
+                string custDemoSql = @"
                     SELECT 
-                        c.name AS PatientName,
-                        COALESCE(NULLIF(c.custcode::text, ''), NULLIF(c.bhcustcode::text, ''), c.custid::text) AS PatientId,
-                        c.gender,
-                        CONCAT(c.ageyears, ' Y / ', c.agemonths, ' M / ', c.agedays, ' D') AS Age,
-                        c.mobile AS MobileNo,
-                        ip.admitdate AS AdmissionDate,
-                        ip.dischargedate AS DischargeDate,
-                        COALESCE(bm.bedname, ip.bedcode::text) AS BedNo,
-                        COALESCE(dm.doctorfullname, dm.name) AS DoctorName,
-                        c.custid,
-                        ip.dcode
+                        c.name AS patientname,
+                        COALESCE(NULLIF(c.custcode::text, ''), NULLIF(c.bhcustcode::text, ''), c.custid::text) AS patientid,
+                        c.gender AS gender,
+                        COALESCE(NULLIF(TRIM(CONCAT(NULLIF(c.ageyears::text, ''), ' Y / ', NULLIF(c.agemonths::text, ''), ' M / ', NULLIF(c.agedays::text, ''), ' D')), 'Y /  M /  D'), '') AS age,
+                        COALESCE(NULLIF(c.mobile, ''), NULLIF(c.phone, ''), '') AS mobileno,
+                        COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), '') AS doctorname,
+                        c.custid AS custid,
+                        @lookupDcode AS dcode
                     FROM customerdb.customer_master c
-                    LEFT JOIN ip_registration ip ON (ip.custid = c.custid OR ip.ip_no = @patcode_or_pdsid) AND ip.tenant_code = @tenant_code AND ip.isdeleted = false
-                    LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
-                    LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = @tenant_code
-                    WHERE (c.custcode = @patcode_or_pdsid OR c.bhcustcode = @patcode_or_pdsid OR c.customermanualcode = @patcode_or_pdsid OR c.custid::text = @patcode_or_pdsid OR ip.ip_no = @patcode_or_pdsid)
+                    LEFT JOIN doctor_master dm ON dm.dcode = @lookupDcode
+                    WHERE (c.custid::text = @lookupCode OR c.custcode = @lookupCode OR c.bhcustcode = @lookupCode OR c.customermanualcode = @lookupCode OR (@lookupCustid > 0 AND c.custid = @lookupCustid))
                     LIMIT 1";
 
-                var patInfo = await db.QueryFirstOrDefaultAsync<dynamic>(patSql, new { patcode_or_pdsid, tenant_code });
+                demo = await db.QueryFirstOrDefaultAsync<dynamic>(custDemoSql, new { lookupCode, lookupCustid, lookupDcode, tenant_code });
+            }
 
+            if (master == null)
+            {
                 var emptyMaster = new DischargeSummaryModel.pds_master
                 {
                     pds_id = Guid.NewGuid(),
-                    patcode = patcode_or_pdsid,
-                    custid = patInfo != null ? (patInfo.custid ?? 0) : 0,
-                    dcode = patInfo != null ? patInfo.dcode : null,
-                    admission_date = patInfo != null ? patInfo.admissiondate : null,
-                    discharge_date = patInfo != null ? patInfo.dischargedate : null,
+                    patcode = !string.IsNullOrWhiteSpace(lookupCode) ? lookupCode : (demo != null ? (string?)demo.patientid ?? "" : patcode_or_pdsid),
+                    custid = demo != null && demo.custid != null ? (long)demo.custid : lookupCustid,
+                    dcode = demo != null && demo.dcode != null ? (int?)demo.dcode : lookupDcode,
+                    patient_name = demo != null ? (string?)demo.patientname ?? "" : "",
+                    gender = demo != null ? (string?)demo.gender ?? "" : "",
+                    age = demo != null ? (string?)demo.age ?? "" : "",
+                    mobile_no = demo != null ? (string?)demo.mobileno ?? "" : "",
+                    doctor_name = demo != null ? (string?)demo.doctorname ?? "" : "",
+                    bed_no = demo != null ? (string?)demo.bedno ?? "" : "",
+                    admission_date = demo != null && demo.admissiondate != null ? (DateTime?)demo.admissiondate : null,
+                    discharge_date = demo != null && demo.dischargedate != null ? (DateTime?)demo.dischargedate : null,
                     tenant_code = tenant_code
                 };
 
@@ -341,39 +383,18 @@ namespace medico_backend.Class
                 {
                     Master = emptyMaster,
                     Details = new List<DischargeSummaryModel.pds_detail>(),
-                    PatientName = patInfo != null ? (patInfo.patientname ?? "") : "",
-                    PatientId = patInfo != null ? (patInfo.patientid ?? "") : patcode_or_pdsid,
-                    Gender = patInfo != null ? (patInfo.gender ?? "") : "",
-                    Age = patInfo != null ? (patInfo.age ?? "") : "",
-                    MobileNo = patInfo != null ? (patInfo.mobileno ?? "") : "",
-                    DoctorName = patInfo != null ? (patInfo.doctorname ?? "") : "",
-                    BedNo = patInfo != null ? (patInfo.bedno ?? "") : ""
+                    PatientName = emptyMaster.patient_name,
+                    PatientId = !string.IsNullOrWhiteSpace(emptyMaster.patcode) ? emptyMaster.patcode : patcode_or_pdsid,
+                    Gender = emptyMaster.gender,
+                    Age = emptyMaster.age,
+                    MobileNo = emptyMaster.mobile_no,
+                    DoctorName = emptyMaster.doctor_name,
+                    BedNo = emptyMaster.bed_no
                 };
             }
 
             var detailSql = "SELECT * FROM pds_detail WHERE (pds_id = @pds_id OR pdsid = @pds_id) AND tenant_code = @tenant_code ORDER BY sort_order, category_name";
             var details = (await db.QueryAsync<DischargeSummaryModel.pds_detail>(detailSql, new { pds_id = master.pds_id, tenant_code })).ToList();
-
-            // Fetch demography
-            string demoSql = @"
-                SELECT 
-                    c.name AS PatientName,
-                    COALESCE(NULLIF(c.custcode::text, ''), NULLIF(c.bhcustcode::text, ''), c.custid::text) AS PatientId,
-                    c.gender,
-                    CONCAT(c.ageyears, ' Y / ', c.agemonths, ' M / ', c.agedays, ' D') AS Age,
-                    c.mobile AS MobileNo,
-                    COALESCE(dm.doctorfullname, dm.name) AS DoctorName,
-                    COALESCE(bm.bedname, ip.bedcode::text) AS BedNo,
-                    ip.admitdate AS AdmissionDate,
-                    ip.dischargedate AS DischargeDate
-                FROM customerdb.customer_master c
-                LEFT JOIN ip_registration ip ON (ip.custid = c.custid OR ip.ip_no = @patcode) AND ip.tenant_code = @tenant_code AND ip.isdeleted = false
-                LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = @tenant_code
-                LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(@dcode, ip.dcode)
-                WHERE (c.custid = @custid OR c.custcode = @patcode OR c.bhcustcode = @patcode OR c.customermanualcode = @patcode OR c.custid::text = @patcode)
-                LIMIT 1";
-
-            var demo = await db.QueryFirstOrDefaultAsync<dynamic>(demoSql, new { master.custid, master.patcode, master.dcode, tenant_code });
 
             string finalName = !string.IsNullOrWhiteSpace(master.patient_name) ? master.patient_name : ((string?)demo?.patientname ?? "");
             string finalId = !string.IsNullOrWhiteSpace(master.patcode) ? master.patcode : ((string?)demo?.patientid ?? "");
@@ -391,6 +412,14 @@ namespace medico_backend.Class
             {
                 master.discharge_date = demo.dischargedate;
             }
+
+            // Sync master fields if they were empty
+            if (string.IsNullOrWhiteSpace(master.patient_name) && !string.IsNullOrWhiteSpace(finalName)) master.patient_name = finalName;
+            if (string.IsNullOrWhiteSpace(master.gender) && !string.IsNullOrWhiteSpace(finalGender)) master.gender = finalGender;
+            if (string.IsNullOrWhiteSpace(master.age) && !string.IsNullOrWhiteSpace(finalAge)) master.age = finalAge;
+            if (string.IsNullOrWhiteSpace(master.mobile_no) && !string.IsNullOrWhiteSpace(finalMobile)) master.mobile_no = finalMobile;
+            if (string.IsNullOrWhiteSpace(master.doctor_name) && !string.IsNullOrWhiteSpace(finalDoctor)) master.doctor_name = finalDoctor;
+            if (string.IsNullOrWhiteSpace(master.bed_no) && !string.IsNullOrWhiteSpace(finalBed)) master.bed_no = finalBed;
 
             return new DischargeSummaryModel.PatientDischargeSummaryResponse
             {
@@ -537,11 +566,18 @@ namespace medico_backend.Class
             }
 
             // Fetch tenant info
-            var tenantSql = @"SELECT legal_name AS CompanyName, 
-                                     CONCAT_WS(', ', NULLIF(address_line1, ''), NULLIF(address_line2, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(pincode, '')) AS CompanyAddress,
-                                     contact_number AS CompanyContactNo, contact_email AS CompanyEmail
+            var tenantSql = @"SELECT 
+                                legal_name,
+                                tenant_name,
+                                CONCAT_WS(', ', NULLIF(address_line1, ''), NULLIF(address_line2, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(pincode, '')) AS address_line1,
+                                contact_number,
+                                contact_email
                               FROM mastertenant.tenants WHERE tenant_code = @tenant_code LIMIT 1";
-            var tenantInfo = await db.QueryFirstOrDefaultAsync<dynamic>(tenantSql, new { tenant_code });
+            var tInfo = await db.QueryFirstOrDefaultAsync<TenantModel>(tenantSql, new { tenant_code });
+            string compName = !string.IsNullOrWhiteSpace(tInfo?.legal_name) ? tInfo.legal_name : (!string.IsNullOrWhiteSpace(tInfo?.tenant_name) ? tInfo.tenant_name : "");
+            string compAddress = tInfo?.address_line1 ?? "";
+            string compContact = tInfo?.contact_number ?? "";
+            string compEmail = tInfo?.contact_email ?? "";
 
             // Fetch Lab Setting header & footer image toggles
             var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
@@ -627,22 +663,22 @@ namespace medico_backend.Class
             var payload = new
             {
                 pds_id = pds.Master.pds_id,
-                patcode = pds.Master.patcode,
-                patient_name = pds.PatientName,
-                patient_id = pds.PatientId,
-                gender = pds.Gender,
-                age = pds.Age,
-                mobile_no = pds.MobileNo,
-                doctor_name = pds.DoctorName,
-                bed_no = pds.BedNo,
+                patcode = !string.IsNullOrWhiteSpace(pds.Master.patcode) ? pds.Master.patcode : pds.PatientId,
+                patient_name = !string.IsNullOrWhiteSpace(pds.PatientName) ? pds.PatientName : pds.Master.patient_name,
+                patient_id = !string.IsNullOrWhiteSpace(pds.PatientId) ? pds.PatientId : (!string.IsNullOrWhiteSpace(pds.Master.patcode) ? pds.Master.patcode : pds.Master.custid.ToString()),
+                gender = !string.IsNullOrWhiteSpace(pds.Gender) ? pds.Gender : pds.Master.gender,
+                age = !string.IsNullOrWhiteSpace(pds.Age) ? pds.Age : pds.Master.age,
+                mobile_no = !string.IsNullOrWhiteSpace(pds.MobileNo) ? pds.MobileNo : pds.Master.mobile_no,
+                doctor_name = !string.IsNullOrWhiteSpace(pds.DoctorName) ? pds.DoctorName : pds.Master.doctor_name,
+                bed_no = !string.IsNullOrWhiteSpace(pds.BedNo) ? pds.BedNo : pds.Master.bed_no,
                 admission_date = pds.Master.admission_date ?? pds.Master.created_at,
                 discharge_date = pds.Master.discharge_date,
                 discharge_type = pds.Master.discharge_type,
                 overall_notes = pds.Master.overall_notes,
-                company_name = tenantInfo?.companyname ?? "",
-                company_address = tenantInfo?.companyaddress ?? "",
-                company_contact = tenantInfo?.companycontactno ?? "",
-                company_email = tenantInfo?.companyemail ?? "",
+                company_name = compName,
+                company_address = compAddress,
+                company_contact = compContact,
+                company_email = compEmail,
                 details = pds.Details.Select(d => new
                 {
                     category_id = d.category_id,
