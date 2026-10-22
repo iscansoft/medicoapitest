@@ -10058,17 +10058,11 @@ WHERE lrd.requestguid::text = @requestguid::text
             {
                 using IDbConnection db = new NpgsqlConnection(_conn);
 
-                // 1. Collect all candidate GUIDs (callers often pass op_id or sheet_id into pr_id)
-                var candidateGuids = new List<Guid>();
-                if (pr_id.HasValue && pr_id.Value != Guid.Empty) candidateGuids.Add(pr_id.Value);
-                if (op_id.HasValue && op_id.Value != Guid.Empty && !candidateGuids.Contains(op_id.Value)) candidateGuids.Add(op_id.Value);
-                if (sheet_id.HasValue && sheet_id.Value != Guid.Empty && !candidateGuids.Contains(sheet_id.Value)) candidateGuids.Add(sheet_id.Value);
-                if (ip_id.HasValue && ip_id.Value != Guid.Empty && !candidateGuids.Contains(ip_id.Value)) candidateGuids.Add(ip_id.Value);
-
+                // 1. Locate the exact prescription master record
                 OpPrescriptionMasterModel? presMst = null;
 
-                // A. Search op_prescription_master matching any candidate GUID across pr_id, op_id, sheet_id, ip_id
-                foreach (var g in candidateGuids)
+                // Priority A: Search by exact pr_id first
+                if (pr_id.HasValue && pr_id.Value != Guid.Empty)
                 {
                     presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
                         @"SELECT 
@@ -10077,14 +10071,13 @@ WHERE lrd.requestguid::text = @requestguid::text
                             pr_date::timestamp AS pr_date,
                             topremarks, bottonremarks, is_dispensed, tenant_code, isdeleted, created_at, updated_at
                           FROM op_prescription_master 
-                          WHERE (pr_id = @g OR op_id = @g OR sheet_id = @g OR ip_id = @g)
+                          WHERE pr_id = @pr_id
                             AND COALESCE(isdeleted, false) = false 
                           ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END), created_at DESC 
-                          LIMIT 1", new { g, tenant_code });
-                    if (presMst != null) break;
+                          LIMIT 1", new { pr_id = pr_id.Value, tenant_code });
                 }
 
-                // B. Search by pr_code
+                // Priority B: Search by pr_code
                 if (presMst == null && !string.IsNullOrWhiteSpace(pr_code))
                 {
                     presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
@@ -10099,8 +10092,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                           LIMIT 1", new { pr_code = pr_code.Trim(), tenant_code });
                 }
 
-                // C. Search by custid
-                if (presMst == null && custid.HasValue && custid.Value > 0)
+                // Priority C: If pr_id was provided but not found directly in op_prescription_master (caller may have passed sheet_id or op_id in pr_id)
+                if (presMst == null && pr_id.HasValue && pr_id.Value != Guid.Empty)
                 {
                     presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
                         @"SELECT 
@@ -10109,9 +10102,60 @@ WHERE lrd.requestguid::text = @requestguid::text
                             pr_date::timestamp AS pr_date,
                             topremarks, bottonremarks, is_dispensed, tenant_code, isdeleted, created_at, updated_at
                           FROM op_prescription_master 
-                          WHERE custid = @custid AND COALESCE(isdeleted, false) = false 
+                          WHERE (sheet_id = @g OR op_id = @g OR ip_id = @g)
+                            AND COALESCE(isdeleted, false) = false 
                           ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END), created_at DESC 
-                          LIMIT 1", new { custid = custid.Value, tenant_code });
+                          LIMIT 1", new { g = pr_id.Value, tenant_code });
+                }
+
+                // Priority D: If explicit sheet_id / op_id / ip_id were provided
+                if (presMst == null && sheet_id.HasValue && sheet_id.Value != Guid.Empty)
+                {
+                    presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
+                        @"SELECT 
+                            pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
+                            visit_date::timestamp AS visit_date,
+                            pr_date::timestamp AS pr_date,
+                            topremarks, bottonremarks, is_dispensed, tenant_code, isdeleted, created_at, updated_at
+                          FROM op_prescription_master 
+                          WHERE sheet_id = @sheet_id AND COALESCE(isdeleted, false) = false 
+                          ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END), created_at DESC 
+                          LIMIT 1", new { sheet_id = sheet_id.Value, tenant_code });
+                }
+
+                if (presMst == null && op_id.HasValue && op_id.Value != Guid.Empty)
+                {
+                    presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
+                        @"SELECT 
+                            pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
+                            visit_date::timestamp AS visit_date,
+                            pr_date::timestamp AS pr_date,
+                            topremarks, bottonremarks, is_dispensed, tenant_code, isdeleted, created_at, updated_at
+                          FROM op_prescription_master 
+                          WHERE op_id = @op_id AND COALESCE(isdeleted, false) = false 
+                          ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END), created_at DESC 
+                          LIMIT 1", new { op_id = op_id.Value, tenant_code });
+                }
+
+                if (presMst == null && ip_id.HasValue && ip_id.Value != Guid.Empty)
+                {
+                    presMst = await db.QueryFirstOrDefaultAsync<OpPrescriptionMasterModel>(
+                        @"SELECT 
+                            pr_id, pr_code, sheet_id, op_id, ip_id, custid, dcode,
+                            visit_date::timestamp AS visit_date,
+                            pr_date::timestamp AS pr_date,
+                            topremarks, bottonremarks, is_dispensed, tenant_code, isdeleted, created_at, updated_at
+                          FROM op_prescription_master 
+                          WHERE ip_id = @ip_id AND COALESCE(isdeleted, false) = false 
+                          ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END), created_at DESC 
+                          LIMIT 1", new { ip_id = ip_id.Value, tenant_code });
+                }
+
+                // Determine target prescription GUID - strictly for this prescription
+                Guid? targetPrId = presMst?.pr_id ?? (pr_id.HasValue && pr_id.Value != Guid.Empty ? pr_id.Value : null);
+                if (targetPrId == null && presMst == null)
+                {
+                    throw new Exception("Prescription record not found.");
                 }
 
                 if (presMst != null && !string.IsNullOrWhiteSpace(presMst.tenant_code))
@@ -10133,36 +10177,6 @@ WHERE lrd.requestguid::text = @requestguid::text
                     ? presMst.custid
                     : (custid.HasValue && custid.Value > 0 ? custid.Value : 0);
                 int effectiveDcode = presMst?.dcode ?? 0;
-
-                // If effectiveOpId is still empty, check if any candidate GUID matches op_registration
-                if (effectiveOpId == Guid.Empty)
-                {
-                    foreach (var g in candidateGuids)
-                    {
-                        var opCheck = await db.QueryFirstOrDefaultAsync<Guid?>(
-                            "SELECT op_id FROM op_registration WHERE op_id = @g LIMIT 1", new { g });
-                        if (opCheck.HasValue && opCheck.Value != Guid.Empty)
-                        {
-                            effectiveOpId = opCheck.Value;
-                            break;
-                        }
-                    }
-                }
-
-                // If effectiveSheetId is still empty, check if any candidate GUID matches op_case_sheet
-                if (effectiveSheetId == Guid.Empty)
-                {
-                    foreach (var g in candidateGuids)
-                    {
-                        var csCheck = await db.QueryFirstOrDefaultAsync<Guid?>(
-                            "SELECT sheet_id FROM op_case_sheet WHERE sheet_id = @g OR op_id = @g LIMIT 1", new { g });
-                        if (csCheck.HasValue && csCheck.Value != Guid.Empty)
-                        {
-                            effectiveSheetId = csCheck.Value;
-                            break;
-                        }
-                    }
-                }
 
                 // 3. Fetch Casesheet / Patient details
                 CasesheetReportPdfModel? casesheet = null;
@@ -10268,8 +10282,8 @@ WHERE lrd.requestguid::text = @requestguid::text
                             CONCAT_WS(', ', NULLIF(c.street, ''), NULLIF(c.city, ''), NULLIF(c.state, ''), NULLIF(c.zipcode, '')) AS Address,
                             c.ageyears, c.agemonths, c.agedays,
                             COALESCE(NULLIF(c.custcode::text, ''), NULLIF(c.bhcustcode::text, ''), NULLIF(c.customermanualcode::text, ''), c.custid::text, '') AS PatientId,
-                            opr.op_no AS VisitNo,
-                            COALESCE(opr.visit_date::timestamp, CURRENT_TIMESTAMP)::timestamp AS VisitDate,
+                            NULL AS VisitNo,
+                            CURRENT_TIMESTAMP::timestamp AS VisitDate,
                             dm.doctorfullname AS DoctorName,
                             bm.name AS BranchName,
                             t.legal_name AS CompanyName,
@@ -10277,16 +10291,14 @@ WHERE lrd.requestguid::text = @requestguid::text
                             t.contact_number AS CompanyContactNo,
                             t.contact_email AS CompanyEmail
                         FROM customerdb.customer_master c
-                        LEFT JOIN op_registration opr ON opr.custid = c.custid AND COALESCE(opr.isdeleted, false) = false
-                        LEFT JOIN doctor_master dm ON dm.dcode = opr.dcode
-                        LEFT JOIN mastertenant.tenants t ON t.tenant_code = COALESCE(c.tenant_code, @tenant_code)
+                        LEFT JOIN doctor_master dm ON dm.dcode = @dcode
+                        LEFT JOIN mastertenant.tenants t ON t.tenant_code = @tenant_code
                         LEFT JOIN mastertenant.branch_master bm ON bm.bh_code = c.bhcode
                         WHERE c.custid = @custid
-                        ORDER BY opr.visit_date DESC
                         LIMIT 1";
 
                     casesheet = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-                        custSql, new { custid = effectiveCustId, tenant_code });
+                        custSql, new { custid = effectiveCustId, dcode = effectiveDcode, tenant_code });
                 }
 
                 if (casesheet == null)
@@ -10305,6 +10317,10 @@ WHERE lrd.requestguid::text = @requestguid::text
                 if (string.IsNullOrWhiteSpace(prNoVal) && presMst != null)
                 {
                     prNoVal = presMst.pr_id.ToString().Substring(0, 8).ToUpper();
+                }
+                if (string.IsNullOrWhiteSpace(prNoVal) && targetPrId.HasValue)
+                {
+                    prNoVal = targetPrId.Value.ToString().Substring(0, 8).ToUpper();
                 }
                 if (string.IsNullOrWhiteSpace(prNoVal) && !string.IsNullOrWhiteSpace(casesheet.VisitNo))
                 {
@@ -10363,15 +10379,17 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     casesheet.topremarks = presMst.topremarks;
                     casesheet.bottonremarks = presMst.bottonremarks;
-                    if (string.IsNullOrWhiteSpace(casesheet.Advise))
+                    if (!string.IsNullOrWhiteSpace(presMst.bottonremarks))
                     {
-                        casesheet.Advise = !string.IsNullOrWhiteSpace(presMst.bottonremarks) 
-                            ? presMst.bottonremarks 
-                            : presMst.topremarks;
+                        casesheet.Advise = presMst.bottonremarks;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(presMst.topremarks))
+                    {
+                        casesheet.Advise = presMst.topremarks;
                     }
                 }
 
-                // 4. Prescription items list
+                // 4. Prescription items list: strictly for targetPrId! Never mix past/other prescriptions.
                 string presSql = @"
                     SELECT 
                         sno, 
@@ -10390,31 +10408,17 @@ WHERE lrd.requestguid::text = @requestguid::text
                         route AS Route, 
                         notes AS Notes
                     FROM op_prescription_detail
-                    WHERE (
-                        (@pr_id IS NOT NULL AND pr_id = CAST(@pr_id AS uuid))
-                        OR (@pr_code IS NOT NULL AND pr_code = @pr_code)
-                        OR (@sheet_id IS NOT NULL AND pr_id IN (
-                            SELECT pr_id FROM op_prescription_master 
-                            WHERE sheet_id = CAST(@sheet_id AS uuid) AND COALESCE(isdeleted, false) = false
-                        ))
-                        OR (@op_id IS NOT NULL AND pr_id IN (
-                            SELECT pr_id FROM op_prescription_master 
-                            WHERE op_id = CAST(@op_id AS uuid) AND COALESCE(isdeleted, false) = false
-                        ))
-                    )
-                    AND COALESCE(isdeleted, false) = false
+                    WHERE pr_id = CAST(@pr_id AS uuid)
+                      AND COALESCE(isdeleted, false) = false
                     ORDER BY sno";
 
                 casesheet.PrescriptionList = (await db.QueryAsync<CasesheetPrescriptionItemDto>(
                     presSql, new 
                     { 
-                        pr_id = presMst != null ? presMst.pr_id.ToString() : (pr_id.HasValue ? pr_id.Value.ToString() : null), 
-                        pr_code = presMst != null ? presMst.pr_code : pr_code,
-                        sheet_id = effectiveSheetId != Guid.Empty ? effectiveSheetId.ToString() : null, 
-                        op_id = effectiveOpId != Guid.Empty ? effectiveOpId.ToString() : null
+                        pr_id = targetPrId.Value.ToString()
                     })).ToList();
 
-                // 5. Vitals
+                // 5. Vitals strictly for this visit - DO NOT fallback to past client visits
                 CasesheetReportPdfModel? vitals = null;
                 if (effectiveOpId != Guid.Empty)
                 {
@@ -10425,20 +10429,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                         WHERE op_id = CAST(@op_id AS uuid) AND COALESCE(isdeleted, false) = false
                         LIMIT 1";
                     vitals = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-                        vitalsSql, new { op_id = effectiveOpId });
-                }
-
-                if (vitals == null && casesheet.custid > 0)
-                {
-                    string fallbackVitalsSql = @"
-                        SELECT 
-                            height_cm, weight_kg, bmi, temperature_f, pulse_rate, respiratory_rate, bp_systolic, bp_diastolic, spo2
-                        FROM patient_vitals
-                        WHERE custid = @custid AND COALESCE(isdeleted, false) = false
-                        ORDER BY created_at DESC
-                        LIMIT 1";
-                    vitals = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-                        fallbackVitalsSql, new { custid = casesheet.custid });
+                        vitalsSql, new { op_id = effectiveOpId.ToString() });
                 }
 
                 if (vitals != null)
