@@ -793,18 +793,18 @@ WHERE  testresultid = @Id
             if (isUpdate)
             {
                 await db.ExecuteAsync(@"
-            UPDATE lab_result_master
-            SET    resultdatetime = @Now,
-                   entereddate    = @Now
-            WHERE  resultguid::text = @ResultGUIDText
-              AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
-                    new
-                    {
-                        Now = DateTime.UtcNow,
-                        ResultGUID = Guid.Parse(resultGuid),
-                        TenantCode = tenantCode
-                    },
-                    transaction);
+                UPDATE lab_result_master
+                SET    resultdatetime = @Now,
+                       entereddate    = @Now
+                WHERE  resultguid = @ResultGUID
+                  AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
+                new
+                {
+                    Now = DateTime.UtcNow,
+                    ResultGUID = Guid.Parse(resultGuid),
+                    TenantCode = tenantCode
+                },
+                transaction);
             }
             else
             {
@@ -1066,8 +1066,8 @@ WHERE  testresultid = @Id
                        calculatedformula = @CalculatedFormula,
                        fromtcode         = @FromTCode,
                        fromtestresultid  = @FromTestResultID
-                WHERE  testresultid::text = @TestResultIDText
-                  AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
+                    WHERE  testresultid = @TestResultID
+      AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
                         new
                         {
                             TestResultID = labId,
@@ -1129,18 +1129,18 @@ WHERE  testresultid = @Id
                        criticalhightype                 = @CriticalHighType,
                        criticalhighrange                = @CriticalHighRange,
                        image_path                       = COALESCE(@ImagePath, image_path)
-                WHERE  testresultid::text = @TestResultIDText
-                  AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
+                    WHERE  testresultid = @TestResultID
+      AND  (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL)",
                         propsParam, transaction);
 
                     await db.ExecuteAsync(@"
-                DELETE FROM lab_result_textnormalvalues
-                WHERE  testresultid::text = @IdText AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);
-                DELETE FROM lab_result_detailednormalvalues
-                WHERE  testresultid::text = @IdText AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);
-                DELETE FROM lab_result_calculatedformula
-                WHERE  testresultid::text = @IdText AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);",
-                        new { Id = labId, TenantCode = tenantCode }, transaction);
+    DELETE FROM lab_result_textnormalvalues
+    WHERE  testresultid = @Id AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);
+    DELETE FROM lab_result_detailednormalvalues
+    WHERE  testresultid = @Id AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);
+    DELETE FROM lab_result_calculatedformula
+    WHERE  testresultid = @Id AND (tenant_code = @TenantCode OR tenant_code = '0' OR tenant_code IS NULL);",
+    new { Id = labId, TenantCode = tenantCode }, transaction);
                 }
                 else
                 {
