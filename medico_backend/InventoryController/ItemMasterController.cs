@@ -3017,6 +3017,146 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        // ─── DUE COLLECTION ───────────────────────────────────────────────────────────
+
+        [HttpGet("getpendingdues")]
+        public async Task<IActionResult> GetPendingDues(string? patientid = null, string? mobileno = null)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (string.IsNullOrWhiteSpace(patientid) && string.IsNullOrWhiteSpace(mobileno))
+                    return BadRequest(new { Status = "Failed", Message = "patientid or mobileno is required." });
+
+                var result = await itemclass.GetPendingDues(tenantcode, patientid, mobileno);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpPost("insertduecollection")]
+        public async Task<IActionResult> InsertDueCollection([FromBody] due_collection_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null)
+                    return BadRequest(new { Status = "Failed", Message = "Due collection request is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one bill is required." });
+
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+
+                var result = await itemclass.InsertDueCollection(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Due collection saved successfully",
+                    DueCollectionCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpPost("updateduecollection")]
+        public async Task<IActionResult> UpdateDueCollection([FromBody] due_collection_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null || request.master == null || request.master.duecollectioncode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid duecollectioncode is required." });
+
+                if (request.details == null || !request.details.Any())
+                    return BadRequest(new { Status = "Failed", Message = "At least one bill is required." });
+
+                request.master.tenantcode = tenantcode;
+                foreach (var d in request.details) d.tenantcode = tenantcode;
+
+                var result = await itemclass.UpdateDueCollection(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = "Due collection updated successfully",
+                    DueCollectionCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("deleteduecollection")]
+        public async Task<IActionResult> DeleteDueCollection(long duecollectioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.DeleteDueCollection(duecollectioncode, tenantcode);
+                return result == "Success"
+                    ? Ok(new { Status = "Success", Message = "Due collection deleted successfully" })
+                    : BadRequest(new { Status = "Failed", Message = "Due collection not found" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getallduecollections")]
+        public async Task<IActionResult> GetAllDueCollections()
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetAllDueCollections(tenantcode);
+                return Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [HttpGet("getduecollectionbycode")]
+        public async Task<IActionResult> GetDueCollectionByCode(long duecollectioncode)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.GetDueCollectionByCode(duecollectioncode, tenantcode);
+                return result == null
+                    ? NotFound(new { Status = "Failed", Message = "Due collection not found" })
+                    : Ok(new { Status = "Success", Data = result });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
     

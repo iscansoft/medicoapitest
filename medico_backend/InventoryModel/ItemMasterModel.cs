@@ -1378,5 +1378,89 @@ public long? customercode { get; set; }
         public int row { get; set; }
         public string message { get; set; } = string.Empty;
     }
+    // ─── DUE COLLECTION ──────────────────────────────────────────────────────────
+    public class due_collection_master
+    {
+        public long duecollectioncode { get; set; }
+        public string? requestno { get; set; }
+        public DateTime requestdate { get; set; } = DateTime.Now;
+
+        // Patient
+        public string? patientid { get; set; }
+        public string? patientname { get; set; }
+        public string? mobileno { get; set; }
+        public string? address { get; set; }
+        public decimal? custid { get; set; }
+
+        // Totals (server calculated)
+        public int totalbills { get; set; }
+        public decimal totaldueamount { get; set; }
+        public decimal totalcollectedamount { get; set; }
+        public decimal totalremainingamount { get; set; }
+
+        // Payment
+        public string? paymentmode { get; set; }
+        public string? chequeno { get; set; }
+        public string? accountno { get; set; }
+        public string? referenceno { get; set; }
+
+        public string? remarks { get; set; }
+        public string? status { get; set; }
+
+        public bool isactive { get; set; } = true;
+        public bool deleted { get; set; } = false;
+        public DateTime createddate { get; set; }
+        public DateTime? modifieddate { get; set; }
+        public long? usercode { get; set; }
+        public string? tenantcode { get; set; }
+        public string? branchcode { get; set; }
+        public string? companycode { get; set; }
+
+        // Counter shift (optional)
+        public int? bh_code { get; set; }
+        public decimal? cntcode { get; set; }
+        public string? cnttid { get; set; }
+    }
+
+    public class due_collection_detail
+    {
+        public long duecollectiondetailcode { get; set; }
+        public long duecollectioncode { get; set; }
+
+        public long salescode { get; set; }          // client sends this
+        public string? billno { get; set; }          // filled by server
+        public DateTime? billdate { get; set; }      // filled by server
+
+        public decimal billamount { get; set; }              // server
+        public decimal previouslypaidamount { get; set; }    // server
+        public decimal dueamount { get; set; }               // server (balance before)
+        public decimal collectedamount { get; set; }         // client sends this
+        public decimal remainingamount { get; set; }         // server (balance after)
+        public string? paymentstatus { get; set; }           // server: PARTIAL / PAID
+
+        public string? remarks { get; set; }
+        public string? tenantcode { get; set; }
+    }
+
+    public class due_collection_request
+    {
+        public due_collection_master master { get; set; } = new();
+        public List<due_collection_detail> details { get; set; } = new();
+    }
+
+    // Pending bills lookup result (for the "select bills to collect" grid)
+    public class due_pending_bill
+    {
+        public long salescode { get; set; }
+        public string? billno { get; set; }
+        public DateTime billdate { get; set; }
+        public string? patientid { get; set; }
+        public string? patientname { get; set; }
+        public string? mobileno { get; set; }
+        public decimal billamount { get; set; }
+        public decimal paidamount { get; set; }
+        public decimal remainingamount { get; set; }
+        public string? paymentstatus { get; set; }
+    }
 }
 
