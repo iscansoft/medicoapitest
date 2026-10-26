@@ -3019,18 +3019,27 @@ namespace medico_backend.InventoryController
         }
         // ─── DUE COLLECTION ───────────────────────────────────────────────────────────
 
+        // salestype = OP | IP | COUNTER (omit for all)
         [HttpGet("getpendingdues")]
-        public async Task<IActionResult> GetPendingDues(string? patientid = null, string? mobileno = null)
+        public async Task<IActionResult> GetPendingDues(
+            string? patientid = null, string? mobileno = null, string? salestype = null,
+            string? patientname = null, string? billno = null,
+            DateTime? fromdate = null, DateTime? todate = null)
         {
             try
             {
                 var tenantcode = GetTenantCode();
                 if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
 
-                if (string.IsNullOrWhiteSpace(patientid) && string.IsNullOrWhiteSpace(mobileno))
-                    return BadRequest(new { Status = "Failed", Message = "patientid or mobileno is required." });
+                bool noFilter = string.IsNullOrWhiteSpace(patientid) && string.IsNullOrWhiteSpace(mobileno)
+                             && string.IsNullOrWhiteSpace(salestype) && string.IsNullOrWhiteSpace(patientname)
+                             && string.IsNullOrWhiteSpace(billno) && fromdate == null && todate == null;
 
-                var result = await itemclass.GetPendingDues(tenantcode, patientid, mobileno);
+                if (noFilter)
+                    return BadRequest(new { Status = "Failed", Message = "Provide at least one filter (patientid, mobileno, salestype, patientname, billno or date range)." });
+
+                var result = await itemclass.GetPendingDues(
+                    tenantcode, patientid, mobileno, salestype, patientname, billno, fromdate, todate);
                 return Ok(new { Status = "Success", Data = result });
             }
             catch (Exception ex)
@@ -3063,6 +3072,52 @@ namespace medico_backend.InventoryController
                     Status = "Success",
                     Message = "Due collection saved successfully",
                     DueCollectionCode = result
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        // NEW — bulk collection
+        [HttpPost("insertbulkduecollection")]
+        public async Task<IActionResult> InsertBulkDueCollection([FromBody] due_bulk_collection_request request)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                if (request == null)
+                    return BadRequest(new { Status = "Failed", Message = "Request is required." });
+
+                bool hasMode = (request.items != null && request.items.Any())
+                            || request.collectfull
+                            || request.totalamount > 0;
+                if (!hasMode)
+                    return BadRequest(new { Status = "Failed", Message = "Provide items, or collectfull = true, or totalamount > 0." });
+
+                bool hasScope = (request.items != null && request.items.Any())
+                             || (request.salescodes != null && request.salescodes.Any())
+                             || !string.IsNullOrWhiteSpace(request.patientid)
+                             || !string.IsNullOrWhiteSpace(request.mobileno)
+                             || !string.IsNullOrWhiteSpace(request.patientname)
+                             || !string.IsNullOrWhiteSpace(request.billno)
+                             || !string.IsNullOrWhiteSpace(request.salestype)
+                             || request.fromdate != null || request.todate != null;
+                if (!hasScope)
+                    return BadRequest(new { Status = "Failed", Message = "Specify which bills: salescodes / items or at least one filter." });
+
+                request.tenantcode = tenantcode;
+
+                var result = await itemclass.InsertBulkDueCollection(request);
+
+                return Ok(new
+                {
+                    Status = "Success",
+                    Message = $"{result.Count} due collection(s) created, total collected {result.Sum(r => r.collected)}",
+                    Data = result
                 });
             }
             catch (Exception ex)
@@ -3122,15 +3177,17 @@ namespace medico_backend.InventoryController
             }
         }
 
+        // salestype = OP | IP | COUNTER (omit for all), optional date range
         [HttpGet("getallduecollections")]
-        public async Task<IActionResult> GetAllDueCollections()
+        public async Task<IActionResult> GetAllDueCollections(
+            string? salestype = null, DateTime? fromdate = null, DateTime? todate = null)
         {
             try
             {
                 var tenantcode = GetTenantCode();
                 if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
 
-                var result = await itemclass.GetAllDueCollections(tenantcode);
+                var result = await itemclass.GetAllDueCollections(tenantcode, salestype, fromdate, todate);
                 return Ok(new { Status = "Success", Data = result });
             }
             catch (Exception ex)

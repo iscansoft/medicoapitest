@@ -824,6 +824,8 @@ namespace medico_backend.Model
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
         public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
+
+
     }
 
     public class HmsOpServiceAmountRow

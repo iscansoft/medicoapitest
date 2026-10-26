@@ -8681,18 +8681,42 @@ AND deleted = false;";
         }
         // ─── DUE COLLECTION ─────────────────────────────────────────────────────────────
 
-        // Status values written back to sales_master.paymentstatus
         private const string SalesStatusDue = "DUE";
         private const string SalesStatusPartial = "PARTIAL";
         private const string SalesStatusPaid = "PAID";
 
-        // Bills that still have a balance are those with one of these statuses
         private static readonly string[] OpenDueStatuses = { "DUE", "PARTIAL", "PENDING", "UNPAID" };
+
+        // Same rule is used in SQL below — keep both in sync
+        private static string ClassifySalesType(string? s)
+        {
+            var u = (s ?? "").Trim().ToUpperInvariant();
+            if (u is "OP" or "OPD" or "OUTPATIENT") return "OP";
+            if (u is "IP" or "IPD" or "INPATIENT") return "IP";
+            return "COUNTER";
+        }
+
+        // null/ALL => no restriction, MIXED => bulk across types, else OP/IP/COUNTER
+        private static string? NormalizeDueType(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            var u = s.Trim().ToUpperInvariant();
+            if (u == "ALL") return null;
+            if (u == "MIXED") return "MIXED";
+            return ClassifySalesType(u);
+        }
+
+        private const string SalesTypeCaseSql = @"
+    CASE
+        WHEN UPPER(TRIM(COALESCE(sm.salestype,''))) IN ('OP','OPD','OUTPATIENT') THEN 'OP'
+        WHEN UPPER(TRIM(COALESCE(sm.salestype,''))) IN ('IP','IPD','INPATIENT')  THEN 'IP'
+        ELSE 'COUNTER'
+    END";
 
         private async Task<string> GetNextDueRequestNo(IDbConnection db, IDbTransaction tx, string tenantcode)
         {
             int year = DateTime.Now.Year;
-            string yearPrefix = "DUE" + year;   // DUE2026
+            string yearPrefix = "DUE" + year;
 
             await db.ExecuteAsync(
                 "SELECT pg_advisory_xact_lock(hashtext(@lockkey));",
@@ -8706,10 +8730,9 @@ AND deleted = false;";
           AND SUBSTRING(requestno FROM LENGTH(@yearPrefix) + 1) ~ '^[0-9]+$';",
                 new { tenantcode, yearPrefix }, tx);
 
-            return yearPrefix + ((maxSeq ?? 0) + 1).ToString("D4");   // DUE20260001
+            return yearPrefix + ((maxSeq ?? 0) + 1).ToString("D4");
         }
 
-        // Amount already collected against a bill through (non-deleted) due collections
         private async Task<decimal> GetCollectedForBill(IDbConnection db, IDbTransaction? tx, long salescode, string tenantcode)
         {
             return await db.ExecuteScalarAsync<decimal>(@"
@@ -8722,7 +8745,6 @@ AND deleted = false;";
                 new { salescode, tenantcode }, tx);
         }
 
-        // Re-computes sales_master.paymentstatus from what has been collected
         private async Task RefreshSalesPaymentStatus(IDbConnection db, IDbTransaction tx, long salescode, string tenantcode)
         {
             decimal net = await db.ExecuteScalarAsync<decimal>(@"
@@ -8743,11 +8765,12 @@ AND deleted = false;";
                 new { status, salescode, tenantcode }, tx);
         }
 
-        // Validates every bill, writes the detail rows, returns the totals
         private async Task<(int bills, decimal due, decimal collected, decimal remaining)> ApplyDueDetails(
             IDbConnection db, IDbTransaction tx, long duecollectioncode, due_collection_request request)
         {
             string tenantcode = request.master.tenantcode!;
+            string? masterType = NormalizeDueType(request.master.salestype);
+            bool enforceType = masterType is "OP" or "IP" or "COUNTER";
 
             if (request.details.GroupBy(d => d.salescode).Any(g => g.Count() > 1))
                 throw new Exception("The same bill cannot be added more than once.");
@@ -8759,9 +8782,8 @@ AND deleted = false;";
                 if (item.collectedamount <= 0)
                     throw new Exception($"Collected amount must be greater than zero (salescode {item.salescode}).");
 
-                // Lock the bill so two cashiers can't collect on it at the same time
                 var bill = await db.QueryFirstOrDefaultAsync<sales_master>(@"
-            SELECT salescode, billno, billdate, netamount, patientid, paymentstatus
+            SELECT salescode, billno, billdate, netamount, patientid, paymentstatus, salestype
             FROM public.sales_master
             WHERE salescode = @salescode
               AND tenantcode = @tenantcode
@@ -8771,6 +8793,11 @@ AND deleted = false;";
 
                 if (bill == null)
                     throw new Exception($"Sales bill {item.salescode} not found.");
+
+                string billType = ClassifySalesType(bill.salestype);
+
+                if (enforceType && billType != masterType)
+                    throw new Exception($"Bill {bill.billno} is a {billType} bill but this collection is for {masterType}.");
 
                 if (!string.IsNullOrWhiteSpace(request.master.patientid)
                     && !string.Equals(bill.patientid, request.master.patientid, StringComparison.OrdinalIgnoreCase))
@@ -8793,14 +8820,14 @@ AND deleted = false;";
                 await db.ExecuteAsync(@"
             INSERT INTO public.due_collection_detail
             (
-                duecollectioncode, salescode, billno, billdate,
+                duecollectioncode, salescode, billno, billdate, salestype,
                 billamount, previouslypaidamount, dueamount,
                 collectedamount, remainingamount, paymentstatus,
                 remarks, tenantcode
             )
             VALUES
             (
-                @duecollectioncode, @salescode, @billno, @billdate,
+                @duecollectioncode, @salescode, @billno, @billdate, @salestype,
                 @billamount, @previouslypaidamount, @dueamount,
                 @collectedamount, @remainingamount, @paymentstatus,
                 @remarks, @tenantcode
@@ -8811,6 +8838,7 @@ AND deleted = false;";
                         item.salescode,
                         billno = bill.billno,
                         billdate = bill.billdate,
+                        salestype = billType,
                         billamount = bill.netamount,
                         previouslypaidamount = previouslyPaid,
                         dueamount = dueBefore,
@@ -8829,6 +8857,58 @@ AND deleted = false;";
             return (request.details.Count, totalDue, totalCollected, totalRemaining);
         }
 
+        // Shared by single + bulk insert. Runs inside the caller's transaction (no commit here).
+        private async Task<long> CreateDueCollectionTx(IDbConnection db, IDbTransaction tx, due_collection_request request)
+        {
+            string tenantcode = request.master.tenantcode!;
+            request.master.salestype = NormalizeDueType(request.master.salestype);
+            request.master.requestno = await GetNextDueRequestNo(db, tx, tenantcode);
+
+            long code = await db.ExecuteScalarAsync<long>(@"
+        INSERT INTO public.due_collection_master
+        (
+            requestno, requestdate, salestype,
+            patientid, patientname, mobileno, address, custid,
+            totalbills, totaldueamount, totalcollectedamount, totalremainingamount,
+            paymentmode, chequeno, accountno, referenceno,
+            remarks, status,
+            isactive, deleted, createddate,
+            usercode, tenantcode, branchcode, companycode,
+            bh_code, cntcode, cnttid
+        )
+        VALUES
+        (
+            @requestno, @requestdate, @salestype,
+            @patientid, @patientname, @mobileno, @address, @custid,
+            0, 0, 0, 0,
+            @paymentmode, @chequeno, @accountno, @referenceno,
+            @remarks, 'COMPLETED',
+            true, false, CURRENT_TIMESTAMP,
+            @usercode, @tenantcode, @branchcode, @companycode,
+            @bh_code, @cntcode, @cnttid
+        )
+        RETURNING duecollectioncode;",
+                request.master, tx);
+
+            var t = await ApplyDueDetails(db, tx, code, request);
+
+            await db.ExecuteAsync(@"
+        UPDATE public.due_collection_master
+        SET totalbills = @bills, totaldueamount = @due,
+            totalcollectedamount = @collected, totalremainingamount = @remaining
+        WHERE duecollectioncode = @code;",
+                new { t.bills, t.due, t.collected, t.remaining, code }, tx);
+
+            request.master.duecollectioncode = code;
+            request.master.totalbills = t.bills;
+            request.master.totalcollectedamount = t.collected;
+
+            foreach (var salescode in request.details.Select(d => d.salescode).Distinct())
+                await RefreshSalesPaymentStatus(db, tx, salescode, tenantcode);
+
+            return code;
+        }
+
         // ─── INSERT ─────────────────────────────────────────────────────────────────
         public async Task<long> InsertDueCollection(due_collection_request request)
         {
@@ -8841,47 +8921,7 @@ AND deleted = false;";
                 if (request.details == null || request.details.Count == 0)
                     throw new Exception("At least one bill is required.");
 
-                string tenantcode = request.master.tenantcode!;
-                request.master.requestno = await GetNextDueRequestNo(db, tx, tenantcode);
-
-                long code = await db.ExecuteScalarAsync<long>(@"
-            INSERT INTO public.due_collection_master
-            (
-                requestno, requestdate,
-                patientid, patientname, mobileno, address, custid,
-                totalbills, totaldueamount, totalcollectedamount, totalremainingamount,
-                paymentmode, chequeno, accountno, referenceno,
-                remarks, status,
-                isactive, deleted, createddate,
-                usercode, tenantcode, branchcode, companycode,
-                bh_code, cntcode, cnttid
-            )
-            VALUES
-            (
-                @requestno, @requestdate,
-                @patientid, @patientname, @mobileno, @address, @custid,
-                0, 0, 0, 0,
-                @paymentmode, @chequeno, @accountno, @referenceno,
-                @remarks, 'COMPLETED',
-                true, false, CURRENT_TIMESTAMP,
-                @usercode, @tenantcode, @branchcode, @companycode,
-                @bh_code, @cntcode, @cnttid
-            )
-            RETURNING duecollectioncode;",
-                    request.master, tx);
-
-                var t = await ApplyDueDetails(db, tx, code, request);
-
-                await db.ExecuteAsync(@"
-            UPDATE public.due_collection_master
-            SET totalbills = @bills, totaldueamount = @due,
-                totalcollectedamount = @collected, totalremainingamount = @remaining
-            WHERE duecollectioncode = @code;",
-                    new { t.bills, t.due, t.collected, t.remaining, code }, tx);
-
-                foreach (var salescode in request.details.Select(d => d.salescode).Distinct())
-                    await RefreshSalesPaymentStatus(db, tx, salescode, tenantcode);
-
+                long code = await CreateDueCollectionTx(db, tx, request);
                 tx.Commit();
                 return code;
             }
@@ -8908,7 +8948,6 @@ AND deleted = false;";
                 if (request.details == null || request.details.Count == 0)
                     throw new Exception("At least one bill is required.");
 
-                // Lock the header
                 var existing = await db.ExecuteScalarAsync<long?>(@"
             SELECT duecollectioncode FROM public.due_collection_master
             WHERE duecollectioncode = @code AND tenantcode = @tenantcode AND deleted = false
@@ -8917,20 +8956,21 @@ AND deleted = false;";
 
                 if (existing == null) throw new Exception("Due collection not found.");
 
-                // Bills touched by the OLD version (need status refresh too)
                 var oldSales = (await db.QueryAsync<long>(@"
             SELECT salescode FROM public.due_collection_detail
             WHERE duecollectioncode = @code AND tenantcode = @tenantcode;",
                     new { code, tenantcode }, tx)).ToList();
 
-                // Remove old details → their amounts no longer count as "collected"
                 await db.ExecuteAsync(
                     "DELETE FROM public.due_collection_detail WHERE duecollectioncode = @code;",
                     new { code }, tx);
 
+                request.master.salestype = NormalizeDueType(request.master.salestype);
+
                 await db.ExecuteAsync(@"
             UPDATE public.due_collection_master
             SET requestdate  = @requestdate,
+                salestype    = @salestype,
                 patientid    = @patientid,
                 patientname  = @patientname,
                 mobileno     = @mobileno,
@@ -8971,7 +9011,7 @@ AND deleted = false;";
             }
         }
 
-        // ─── DELETE (soft) — restores the bills' payment status ────────────────────────
+        // ─── DELETE (soft) ──────────────────────────────────────────────────────────
         public async Task<string> DeleteDueCollection(long duecollectioncode, string tenantcode)
         {
             using IDbConnection db = new NpgsqlConnection(con);
@@ -9013,8 +9053,10 @@ AND deleted = false;";
             }
         }
 
-        // ─── GET ALL ────────────────────────────────────────────────────────────────
-        public async Task<IEnumerable<due_collection_request>> GetAllDueCollections(string tenantcode)
+        // ─── GET ALL (with OP / IP / COUNTER filter) ─────────────────────────────────
+        // Old rows saved before the salestype column existed (null) are treated as COUNTER.
+        public async Task<IEnumerable<due_collection_request>> GetAllDueCollections(
+            string tenantcode, string? salestype = null, DateTime? fromdate = null, DateTime? todate = null)
         {
             using IDbConnection db = new NpgsqlConnection(con);
 
@@ -9023,6 +9065,13 @@ AND deleted = false;";
         WHERE deleted = false AND tenantcode = @tenantcode
         ORDER BY duecollectioncode DESC;",
                 new { tenantcode })).ToList();
+
+            string? filter = NormalizeDueType(salestype);
+
+            masters = masters.Where(m =>
+                (filter == null || (m.salestype ?? "COUNTER").Equals(filter, StringComparison.OrdinalIgnoreCase))
+                && (fromdate == null || m.requestdate.Date >= fromdate.Value.Date)
+                && (todate == null || m.requestdate.Date <= todate.Value.Date)).ToList();
 
             var details = (await db.QueryAsync<due_collection_detail>(@"
         SELECT d.* FROM public.due_collection_detail d
@@ -9062,47 +9111,215 @@ AND deleted = false;";
             return new due_collection_request { master = master, details = details.ToList() };
         }
 
-        // ─── PENDING DUE BILLS (feeds the "select bills" grid) ─────────────────────────
+        // ─── PENDING BILLS (shared query: used by grid + bulk) ──────────────────────
+        private async Task<List<due_pending_bill>> QueryPendingBills(
+            IDbConnection db, IDbTransaction? tx, string tenantcode,
+            string? patientid, string? mobileno, string? patientname, string? billno,
+            string? salestype, DateTime? fromdate, DateTime? todate, long[]? salescodes)
+        {
+            string sql = $@"
+        SELECT * FROM
+        (
+            SELECT
+                sm.salescode,
+                sm.billno,
+                sm.billdate::timestamp AS billdate,
+                {SalesTypeCaseSql} AS salestype,
+                sm.patientid,
+                sm.patientname,
+                sm.mobileno,
+                sm.netamount                                   AS billamount,
+                COALESCE(c.collected, 0)                       AS paidamount,
+                sm.netamount - COALESCE(c.collected, 0)        AS remainingamount,
+                sm.paymentstatus
+            FROM public.sales_master sm
+            LEFT JOIN
+            (
+                SELECT d.salescode, SUM(d.collectedamount) AS collected
+                FROM public.due_collection_detail d
+                JOIN public.due_collection_master m ON m.duecollectioncode = d.duecollectioncode
+                WHERE m.deleted = false AND d.tenantcode = @tenantcode
+                GROUP BY d.salescode
+            ) c ON c.salescode = sm.salescode
+            WHERE sm.deleted = false
+              AND sm.tenantcode = @tenantcode
+              AND UPPER(COALESCE(sm.paymentstatus, '')) = ANY(@statuses)
+              AND (@patientid   IS NULL OR sm.patientid = @patientid)
+              AND (@mobileno    IS NULL OR sm.mobileno  = @mobileno)
+              AND (@patientname IS NULL OR sm.patientname ILIKE '%' || @patientname || '%')
+              AND (@billno      IS NULL OR sm.billno ILIKE '%' || @billno || '%')
+              AND (@fromdate::date IS NULL OR sm.billdate::date >= @fromdate::date)
+              AND (@todate::date   IS NULL OR sm.billdate::date <= @todate::date)
+              AND (cardinality(@salescodes) = 0 OR sm.salescode = ANY(@salescodes))
+              AND sm.netamount - COALESCE(c.collected, 0) > 0
+        ) x
+        WHERE (@salestype IS NULL OR x.salestype = @salestype)
+        ORDER BY x.billdate, x.salescode;";
+
+            string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+            var rows = await db.QueryAsync<due_pending_bill>(sql, new
+            {
+                tenantcode,
+                patientid = Clean(patientid),
+                mobileno = Clean(mobileno),
+                patientname = Clean(patientname),
+                billno = Clean(billno),
+                salestype = NormalizeDueType(salestype) is "OP" or "IP" or "COUNTER" ? NormalizeDueType(salestype) : null,
+                fromdate,
+                todate,
+                salescodes = salescodes ?? Array.Empty<long>(),
+                statuses = OpenDueStatuses
+            }, tx);
+
+            return rows.ToList();
+        }
+
         public async Task<IEnumerable<due_pending_bill>> GetPendingDues(
-            string tenantcode, string? patientid, string? mobileno)
+            string tenantcode, string? patientid, string? mobileno,
+            string? salestype = null, string? patientname = null, string? billno = null,
+            DateTime? fromdate = null, DateTime? todate = null)
         {
             using IDbConnection db = new NpgsqlConnection(con);
+            return await QueryPendingBills(db, null, tenantcode,
+                patientid, mobileno, patientname, billno, salestype, fromdate, todate, null);
+        }
 
-            return await db.QueryAsync<due_pending_bill>(@"
-        SELECT
-            sm.salescode,
-            sm.billno,
-            sm.billdate::timestamp AS billdate,
-            sm.patientid,
-            sm.patientname,
-            sm.mobileno,
-            sm.netamount                                   AS billamount,
-            COALESCE(c.collected, 0)                       AS paidamount,
-            sm.netamount - COALESCE(c.collected, 0)        AS remainingamount,
-            sm.paymentstatus
-        FROM public.sales_master sm
-        LEFT JOIN
-        (
-            SELECT d.salescode, SUM(d.collectedamount) AS collected
-            FROM public.due_collection_detail d
-            JOIN public.due_collection_master m ON m.duecollectioncode = d.duecollectioncode
-            WHERE m.deleted = false AND d.tenantcode = @tenantcode
-            GROUP BY d.salescode
-        ) c ON c.salescode = sm.salescode
-        WHERE sm.deleted = false
-          AND sm.tenantcode = @tenantcode
-          AND UPPER(COALESCE(sm.paymentstatus, '')) = ANY(@statuses)
-          AND (@patientid IS NULL OR sm.patientid = @patientid)
-          AND (@mobileno  IS NULL OR sm.mobileno  = @mobileno)
-          AND sm.netamount - COALESCE(c.collected, 0) > 0
-        ORDER BY sm.billdate, sm.salescode;",
-                new
+        // ─── BULK COLLECTION ────────────────────────────────────────────────────────
+        // Modes (checked in this order):
+        //   1) items        -> explicit amount per bill
+        //   2) collectfull  -> full balance of every bill matched by the filters
+        //   3) totalamount  -> lump sum, allocated oldest bill first
+        // One due_collection_master is created per patient (bills with no patient id are
+        // grouped by name+mobile). Everything runs in ONE transaction: all or nothing.
+        public async Task<List<due_bulk_collection_result>> InsertBulkDueCollection(due_bulk_collection_request req)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                string tenantcode = req.tenantcode!;
+                bool explicitMode = req.items != null && req.items.Count > 0;
+                bool fullMode = !explicitMode && req.collectfull;
+                bool lumpMode = !explicitMode && !fullMode && req.totalamount > 0;
+
+                if (!explicitMode && !fullMode && !lumpMode)
+                    throw new Exception("Provide items, or collectfull = true, or totalamount > 0.");
+
+                if (explicitMode && req.items!.GroupBy(i => i.salescode).Any(g => g.Count() > 1))
+                    throw new Exception("The same bill cannot be added more than once.");
+
+                long[] restrictTo = explicitMode
+                    ? req.items!.Select(i => i.salescode).Distinct().ToArray()
+                    : (req.salescodes ?? new List<long>()).Distinct().ToArray();
+
+                var bills = await QueryPendingBills(db, tx, tenantcode,
+                    req.patientid, req.mobileno, req.patientname, req.billno,
+                    req.salestype, req.fromdate, req.todate, restrictTo);
+
+                if (bills.Count == 0)
+                    throw new Exception("No pending bills found for the given filters.");
+
+                var allocations = new List<(due_pending_bill bill, decimal amount, string? remarks)>();
+
+                if (explicitMode)
                 {
-                    tenantcode,
-                    patientid = string.IsNullOrWhiteSpace(patientid) ? null : patientid,
-                    mobileno = string.IsNullOrWhiteSpace(mobileno) ? null : mobileno,
-                    statuses = OpenDueStatuses
-                });
+                    foreach (var item in req.items!)
+                    {
+                        var bill = bills.FirstOrDefault(b => b.salescode == item.salescode)
+                            ?? throw new Exception($"Bill {item.salescode} is not pending / not found for the given filters.");
+                        allocations.Add((bill, Math.Round(item.collectedamount, 2), item.remarks));
+                    }
+                }
+                else if (fullMode)
+                {
+                    foreach (var b in bills)
+                        allocations.Add((b, Math.Round(b.remainingamount, 2), null));
+                }
+                else
+                {
+                    decimal left = Math.Round(req.totalamount, 2);
+                    decimal pendingTotal = bills.Sum(b => Math.Round(b.remainingamount, 2));
+
+                    if (left > pendingTotal)
+                        throw new Exception($"Amount ({left}) is more than the total pending balance ({pendingTotal}).");
+
+                    foreach (var b in bills)            // already ordered oldest first
+                    {
+                        if (left <= 0) break;
+                        decimal take = Math.Min(left, Math.Round(b.remainingamount, 2));
+                        allocations.Add((b, take, null));
+                        left -= take;
+                    }
+                }
+
+                var results = new List<due_bulk_collection_result>();
+
+                var groups = allocations.GroupBy(a =>
+                    !string.IsNullOrWhiteSpace(a.bill.patientid)
+                        ? a.bill.patientid!.Trim().ToUpperInvariant()
+                        : $"~{a.bill.patientname?.Trim().ToUpperInvariant()}|{a.bill.mobileno?.Trim()}");
+
+                foreach (var g in groups)
+                {
+                    var first = g.First().bill;
+                    var types = g.Select(x => x.bill.salestype ?? "COUNTER").Distinct().ToList();
+
+                    var creq = new due_collection_request
+                    {
+                        master = new due_collection_master
+                        {
+                            requestdate = req.requestdate ?? DateTime.Now,
+                            salestype = types.Count == 1 ? types[0] : "MIXED",
+                            patientid = first.patientid,
+                            patientname = first.patientname,
+                            mobileno = first.mobileno,
+                            paymentmode = req.paymentmode,
+                            chequeno = req.chequeno,
+                            accountno = req.accountno,
+                            referenceno = req.referenceno,
+                            remarks = req.remarks,
+                            usercode = req.usercode,
+                            tenantcode = tenantcode,
+                            branchcode = req.branchcode,
+                            companycode = req.companycode,
+                            bh_code = req.bh_code,
+                            cntcode = req.cntcode,
+                            cnttid = req.cnttid
+                        },
+                        details = g.Select(x => new due_collection_detail
+                        {
+                            salescode = x.bill.salescode,
+                            collectedamount = x.amount,
+                            remarks = x.remarks,
+                            tenantcode = tenantcode
+                        }).ToList()
+                    };
+
+                    long code = await CreateDueCollectionTx(db, tx, creq);
+
+                    results.Add(new due_bulk_collection_result
+                    {
+                        duecollectioncode = code,
+                        requestno = creq.master.requestno,
+                        salestype = creq.master.salestype,
+                        patientid = creq.master.patientid,
+                        patientname = creq.master.patientname,
+                        bills = creq.master.totalbills,
+                        collected = creq.master.totalcollectedamount
+                    });
+                }
+
+                tx.Commit();
+                return results;
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                throw new Exception("Bulk due collection failed: " + ex.Message);
+            }
         }
     }
 }
