@@ -224,12 +224,30 @@ namespace medico_backend.Controllers
         }
 
         [HttpGet("labreport")]
-        public async Task<IActionResult> GetLabReport([FromQuery] Guid requestguid, [FromQuery] bool? isletterhead)
+        public async Task<IActionResult> GetLabReport(
+            [FromQuery] Guid requestguid,
+            [FromQuery] bool? isletterhead,
+            [FromQuery] string? timezone = null,
+            [FromQuery] List<int>? tcodes = null,
+            [FromQuery] string? tcode = null,
+            [FromQuery] string? paper_size = null,
+            [FromQuery] string? paperSize = null,
+            [FromQuery] string? orientation = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
-            var result = await _reportClass.GetLabReportAsync(requestguid, T, isletterhead);
+            IList<int>? finalTCodes = tcodes;
+            if ((finalTCodes == null || finalTCodes.Count == 0) && !string.IsNullOrWhiteSpace(tcode))
+            {
+                finalTCodes = tcode.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                                   .Select(x => int.TryParse(x, out int c) ? c : 0)
+                                   .Where(c => c > 0)
+                                   .ToList();
+            }
+
+            string effectivePaperSize = !string.IsNullOrWhiteSpace(paper_size) ? paper_size : paperSize;
+            var result = await _reportClass.GetLabReportAsync(requestguid, T, isletterhead, timezone, finalTCodes, effectivePaperSize, orientation);
 
             return Ok(result);
         }

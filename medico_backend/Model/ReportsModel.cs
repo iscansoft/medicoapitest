@@ -2250,6 +2250,8 @@ namespace medico_backend.Model
 
         public bool IsAuthorized1 { get; set; }
 
+        public bool IsAuthorized2 { get; set; }
+
         public string DoctorTitle { get; set; } = "";
 
         public string SecondDoctorName { get; set; } = "";

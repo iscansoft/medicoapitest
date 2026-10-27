@@ -5942,7 +5942,93 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
         }
 
+        /// <summary>
+        /// Loads the letterhead logo image.
+        /// Priority:
+        ///   1) lab_settings.logo_path  (tenant / branch specific)
+        ///   2) tenants.logo_url        (legacy fallback)
+        /// Returns null when neither path resolves to bytes.
+        /// </summary>
+        private async Task<byte[]?> LoadLogoImageAsync(
+            string tenant_code,
+            int? bh_code = null,
+            LabSettingModel.lab_settings? existingConfig = null,
+            IDbConnection? existingDb = null)
+        {
+            IDbConnection? db = existingDb;
+            bool ownsDb = false;
+            try
+            {
+                if (db == null)
+                {
+                    db = new NpgsqlConnection(_conn);
+                    ownsDb = true;
+                }
 
+                // Resolve lab_settings when caller didn't pass it
+                LabSettingModel.lab_settings? lsConfig = existingConfig;
+                if (lsConfig == null)
+                {
+                    const string lsSql = @"
+                SELECT * FROM lab_settings
+                WHERE (LOWER(tenant_code) = LOWER(@tenant_code) OR tenant_code IS NULL)
+                  AND COALESCE(deleted, false) = false
+                  AND (@bh_code = 0 OR bh_code = @bh_code OR bh_code = 0 OR bh_code IS NULL)
+                ORDER BY CASE WHEN bh_code = @bh_code AND @bh_code <> 0 THEN 1
+                              WHEN bh_code = 0 THEN 2 ELSE 3 END,
+                         lsid DESC
+                LIMIT 1";
+
+                    lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
+                        lsSql, new { tenant_code, bh_code = bh_code ?? 0 });
+                }
+
+                // 1) Prefer lab_settings.logo_path
+                if (lsConfig != null && !string.IsNullOrWhiteSpace(lsConfig.logo_path))
+                {
+                    try
+                    {
+                        var res = await _s3Service.DownloadAsync(lsConfig.logo_path);
+                        if (res.HasValue && res.Value.Data != null && res.Value.Data.Length > 0)
+                            return res.Value.Data;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[LoadLogoImageAsync] logo_path fetch failed: {ex.Message}");
+                    }
+                }
+
+                // 2) Fallback to tenants.logo_url
+                try
+                {
+                    var tenantLogoUrl = await db.QueryFirstOrDefaultAsync<string>(
+                        "SELECT logo_url FROM mastertenant.tenants WHERE tenant_code = @tenant_code LIMIT 1",
+                        new { tenant_code });
+
+                    if (!string.IsNullOrWhiteSpace(tenantLogoUrl))
+                    {
+                        var res = await _s3Service.DownloadAsync(tenantLogoUrl);
+                        if (res.HasValue && res.Value.Data != null && res.Value.Data.Length > 0)
+                            return res.Value.Data;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[LoadLogoImageAsync] logo_url fallback failed: {ex.Message}");
+                }
+
+                return null;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[LoadLogoImageAsync] {ex.Message}");
+                return null;
+            }
+            finally
+            {
+                if (ownsDb && db != null) db.Dispose();
+            }
+        }
 
         private async Task<Dictionary<string, byte[]>> BuildImageCacheAsync(
 
@@ -6366,7 +6452,24 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
 
 
-        public async Task<string?> GetLabReportAsync(Guid requestguid, string tenant_code, bool? isletterhead)
+        private static async Task<bool> GetAuthorizeReportFlagAsync(IDbConnection db, string tenantCode, int bhCode)
+        {
+            const string sql = @"
+        SELECT is_authorizereport
+        FROM lab_settings
+        WHERE (LOWER(tenant_code) = LOWER(@tenantCode) OR tenant_code IS NULL)
+          AND (bh_code = @bhCode OR bh_code = 0 OR bh_code IS NULL)
+          AND (deleted = false OR deleted IS NULL)
+          AND is_authorizereport IS NOT NULL
+        ORDER BY CASE WHEN bh_code = @bhCode AND bh_code <> 0 THEN 1
+                      WHEN bh_code = 0 THEN 2 ELSE 3 END,
+                 lsid DESC
+        LIMIT 1";
+
+            return await db.QueryFirstOrDefaultAsync<bool?>(sql, new { tenantCode, bhCode }) ?? false;
+        }
+
+        public async Task<string?> GetLabReportAsync(Guid requestguid, string tenant_code, bool? isletterhead, string? timezone = null, IList<int>? tcodes = null, string? paper_size = null, string? orientation = null)
 
         {
 
@@ -6583,6 +6686,8 @@ SELECT
     COALESCE(NULLIF(lrm.fronthospitalpatientid, ''), '')                      AS FrontHospitalPatientID,
 
     COALESCE(lrd.isauthorized1, false)                                  AS IsAuthorized1,
+
+    COALESCE(lrd.isauthorized2, false)                                  AS IsAuthorized2,
 
     COALESCE(dm.nametitle,  '')                                         AS DoctorTitle,
 
@@ -6822,14 +6927,29 @@ ORDER BY COALESCE(gm.orderno, 9999),
 
                 if (rawRows.Count == 0) return null;
 
+                if (tcodes != null && tcodes.Count > 0)
+                {
+                    var tcodeSet = tcodes.ToHashSet();
+                    rawRows = rawRows.Where(r => tcodeSet.Contains(r.TCode)).ToList();
+                    if (rawRows.Count == 0) return null;
+                }
 
+                int? bhCode = null;
+                var firstRowEarly = rawRows.FirstOrDefault();
+                if (firstRowEarly != null && !string.IsNullOrWhiteSpace(firstRowEarly.AlteredBHCode) && int.TryParse(firstRowEarly.AlteredBHCode, out int pBhEarly))
+                    bhCode = pBhEarly;
+
+                bool isAuthorizeReport = await GetAuthorizeReportFlagAsync(db, tenant_code, bhCode ?? 0);
+                if (isAuthorizeReport)
+                {
+                    rawRows = rawRows.Where(r => r.IsAuthorized2).ToList();
+                    if (rawRows.Count == 0) return null;
+                }
 
                 rawRows = (await SetNormalRanges(rawRows.ToList(), db)).ToList();
 
 
-
                 const string authSql = @"
-
 SELECT DISTINCT
 
     COALESCE(eu.name,        '')    AS EnteredBy,
@@ -6868,13 +6988,15 @@ WHERE lrd.requestguid::text = @requestguid::text
 
   AND (lrd.tenant_code = @tenant_code OR lrd.tenant_code = '0' OR lrd.tenant_code IS NULL)
 
-  AND (lrd.ttid = 1 OR lrd.ttid = 0 OR lrd.ttid IS NULL)";
+  AND (lrd.ttid = 1 OR lrd.ttid = 0 OR lrd.ttid IS NULL)
+
+  AND (@onlyAuthorized = false OR COALESCE(lrd.isauthorized2, false) = true)";
 
 
 
                 var rawAuth = (await db.QueryAsync<RawAuthUser>(
 
-                    authSql, new { requestguid = requestguid.ToString(), tenant_code }
+                    authSql, new { requestguid = requestguid.ToString(), tenant_code, onlyAuthorized = isAuthorizeReport }
 
                 )).ToList();
 
@@ -6959,20 +7081,6 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
                 var authUsers = rawAuth.Select(a => MapAuth(a, imageCache)).ToList();
-
-
-
-                int? bhCode = null;
-
-                var firstRow = rawRows.FirstOrDefault();
-
-                if (firstRow != null && !string.IsNullOrWhiteSpace(firstRow.AlteredBHCode) && int.TryParse(firstRow.AlteredBHCode, out int pBh))
-
-                {
-
-                    bhCode = pBh;
-
-                }
 
 
 
@@ -9378,16 +9486,14 @@ WHERE lrd.requestguid::text = @requestguid::text
                 }
 
 
-
-                byte[] logoImage = null;
-
-
+                byte[]? logoImage = null;
 
                 var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
-
                     @"SELECT * FROM lab_settings WHERE tenant_code = @tenant_code AND COALESCE(deleted, false) = false ORDER BY bh_code LIMIT 1",
-
                     new { tenant_code });
+
+                // ✅ Logo now comes from lab_settings.logo_path (fallback: tenants.logo_url)
+                logoImage = await LoadLogoImageAsync(tenant_code, existingConfig: lsConfig, existingDb: db);
 
 
 
@@ -9894,17 +10000,13 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 }
 
-
-
-                byte[] logoImage = null;
-
-
+                byte[]? logoImage = null;
 
                 var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
-
                     @"SELECT * FROM lab_settings WHERE tenant_code = @tenant_code AND COALESCE(deleted, false) = false ORDER BY bh_code LIMIT 1",
-
                     new { tenant_code });
+
+                logoImage = await LoadLogoImageAsync(tenant_code, existingConfig: lsConfig, existingDb: db);
 
 
 
