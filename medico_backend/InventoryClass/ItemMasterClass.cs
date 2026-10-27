@@ -8687,30 +8687,56 @@ AND deleted = false;";
 
         private static readonly string[] OpenDueStatuses = { "DUE", "PARTIAL", "PENDING", "UNPAID" };
 
-        // Same rule is used in SQL below — keep both in sync
+        // ── Sales types (same labels as the billing screen dropdown) ──
+        private const string TypeOp = "OP Sales";
+        private const string TypeIp = "IP Sales";
+        private const string TypeCounter = "Counter Sales";
+        private const string TypeMixed = "MIXED";
+
+        // "OP Sales" -> "OPSALES", "Counter Sales" -> "COUNTERSALES"
+        private static string NormType(string? s) =>
+            new string((s ?? "").Where(char.IsLetter).ToArray()).ToUpperInvariant();
+
+        // Bill type from sales_master.salestype text
         private static string ClassifySalesType(string? s)
         {
-            var u = (s ?? "").Trim().ToUpperInvariant();
-            if (u is "OP" or "OPD" or "OUTPATIENT") return "OP";
-            if (u is "IP" or "IPD" or "INPATIENT") return "IP";
-            return "COUNTER";
+            var n = NormType(s);
+            if (n.StartsWith("OP") || n.StartsWith("OUTPATIENT")) return TypeOp;
+            if (n.StartsWith("IP") || n.StartsWith("INPATIENT")) return TypeIp;
+            return TypeCounter;
         }
 
-        // null/ALL => no restriction, MIXED => bulk across types, else OP/IP/COUNTER
+        // Type stored on a due collection row: null => Counter, MIXED stays MIXED
+        private static string RowSalesType(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return TypeCounter;
+            if (NormType(s) == "MIXED") return TypeMixed;
+            return ClassifySalesType(s);
+        }
+
+        // null = no filter ("ALL" / blank), MIXED = bulk across types, else one of the 3 labels
         private static string? NormalizeDueType(string? s)
         {
             if (string.IsNullOrWhiteSpace(s)) return null;
-            var u = s.Trim().ToUpperInvariant();
-            if (u == "ALL") return null;
-            if (u == "MIXED") return "MIXED";
-            return ClassifySalesType(u);
+            var n = NormType(s);
+            if (n == "ALL") return null;
+            if (n == "MIXED") return TypeMixed;
+            return ClassifySalesType(s);
         }
 
+        // Same rule in SQL. Order: text match -> pharmacy queue link (ip_id / op_id) -> Counter Sales
         private const string SalesTypeCaseSql = @"
     CASE
-        WHEN UPPER(TRIM(COALESCE(sm.salestype,''))) IN ('OP','OPD','OUTPATIENT') THEN 'OP'
-        WHEN UPPER(TRIM(COALESCE(sm.salestype,''))) IN ('IP','IPD','INPATIENT')  THEN 'IP'
-        ELSE 'COUNTER'
+        WHEN regexp_replace(UPPER(COALESCE(sm.salestype,'')), '[^A-Z]', '', 'g') ~ '^(OP|OUTPATIENT)' THEN 'OP Sales'
+        WHEN regexp_replace(UPPER(COALESCE(sm.salestype,'')), '[^A-Z]', '', 'g') ~ '^(IP|INPATIENT)'  THEN 'IP Sales'
+        WHEN regexp_replace(UPPER(COALESCE(sm.salestype,'')), '[^A-Z]', '', 'g') ~ '(COUNTER|WALKIN|CASH|OTC)' THEN 'Counter Sales'
+        WHEN EXISTS (SELECT 1 FROM public.pharmacy_prescription_queue q
+                     WHERE q.salescode = sm.salescode AND q.tenant_code = sm.tenantcode
+                       AND q.ip_id IS NOT NULL) THEN 'IP Sales'
+        WHEN EXISTS (SELECT 1 FROM public.pharmacy_prescription_queue q
+                     WHERE q.salescode = sm.salescode AND q.tenant_code = sm.tenantcode
+                       AND q.op_id IS NOT NULL) THEN 'OP Sales'
+        ELSE 'Counter Sales'
     END";
 
         private async Task<string> GetNextDueRequestNo(IDbConnection db, IDbTransaction tx, string tenantcode)
@@ -8770,7 +8796,7 @@ AND deleted = false;";
         {
             string tenantcode = request.master.tenantcode!;
             string? masterType = NormalizeDueType(request.master.salestype);
-            bool enforceType = masterType is "OP" or "IP" or "COUNTER";
+            bool enforceType = masterType != null && masterType != TypeMixed;
 
             if (request.details.GroupBy(d => d.salescode).Any(g => g.Count() > 1))
                 throw new Exception("The same bill cannot be added more than once.");
@@ -8794,7 +8820,12 @@ AND deleted = false;";
                 if (bill == null)
                     throw new Exception($"Sales bill {item.salescode} not found.");
 
-                string billType = ClassifySalesType(bill.salestype);
+                // Bill type from SQL (text match + pharmacy queue fallback)
+                string billType = await db.ExecuteScalarAsync<string>($@"
+            SELECT {SalesTypeCaseSql}
+            FROM public.sales_master sm
+            WHERE sm.salescode = @salescode AND sm.tenantcode = @tenantcode;",
+                    new { item.salescode, tenantcode }, tx) ?? TypeCounter;
 
                 if (enforceType && billType != masterType)
                     throw new Exception($"Bill {bill.billno} is a {billType} bill but this collection is for {masterType}.");
@@ -9053,8 +9084,8 @@ AND deleted = false;";
             }
         }
 
-        // ─── GET ALL (with OP / IP / COUNTER filter) ─────────────────────────────────
-        // Old rows saved before the salestype column existed (null) are treated as COUNTER.
+        // ─── GET ALL (with OP Sales / IP Sales / Counter Sales filter) ──────────────
+        // Old rows with a null / old-style salestype are treated by RowSalesType().
         public async Task<IEnumerable<due_collection_request>> GetAllDueCollections(
             string tenantcode, string? salestype = null, DateTime? fromdate = null, DateTime? todate = null)
         {
@@ -9069,7 +9100,7 @@ AND deleted = false;";
             string? filter = NormalizeDueType(salestype);
 
             masters = masters.Where(m =>
-                (filter == null || (m.salestype ?? "COUNTER").Equals(filter, StringComparison.OrdinalIgnoreCase))
+                (filter == null || RowSalesType(m.salestype) == filter)
                 && (fromdate == null || m.requestdate.Date >= fromdate.Value.Date)
                 && (todate == null || m.requestdate.Date <= todate.Value.Date)).ToList();
 
@@ -9158,6 +9189,9 @@ AND deleted = false;";
 
             string? Clean(string? s) => string.IsNullOrWhiteSpace(s) ? null : s.Trim();
 
+            string? typeFilter = NormalizeDueType(salestype);
+            if (typeFilter == TypeMixed) typeFilter = null;
+
             var rows = await db.QueryAsync<due_pending_bill>(sql, new
             {
                 tenantcode,
@@ -9165,7 +9199,7 @@ AND deleted = false;";
                 mobileno = Clean(mobileno),
                 patientname = Clean(patientname),
                 billno = Clean(billno),
-                salestype = NormalizeDueType(salestype) is "OP" or "IP" or "COUNTER" ? NormalizeDueType(salestype) : null,
+                salestype = typeFilter,
                 fromdate,
                 todate,
                 salescodes = salescodes ?? Array.Empty<long>(),
@@ -9265,14 +9299,14 @@ AND deleted = false;";
                 foreach (var g in groups)
                 {
                     var first = g.First().bill;
-                    var types = g.Select(x => x.bill.salestype ?? "COUNTER").Distinct().ToList();
+                    var types = g.Select(x => x.bill.salestype ?? TypeCounter).Distinct().ToList();
 
                     var creq = new due_collection_request
                     {
                         master = new due_collection_master
                         {
                             requestdate = req.requestdate ?? DateTime.Now,
-                            salestype = types.Count == 1 ? types[0] : "MIXED",
+                            salestype = types.Count == 1 ? types[0] : TypeMixed,
                             patientid = first.patientid,
                             patientname = first.patientname,
                             mobileno = first.mobileno,
