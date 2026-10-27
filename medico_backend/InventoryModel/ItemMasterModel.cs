@@ -1378,5 +1378,141 @@ public long? customercode { get; set; }
         public int row { get; set; }
         public string message { get; set; } = string.Empty;
     }
+    // ─── DUE COLLECTION ──────────────────────────────────────────────────────────
+    public class due_collection_master
+    {
+        public long duecollectioncode { get; set; }
+        public string? requestno { get; set; }
+        public DateTime requestdate { get; set; } = DateTime.Now;
+
+        public string? salestype { get; set; }   // OP / IP / COUNTER / MIXED (NEW)
+
+        public string? patientid { get; set; }
+        public string? patientname { get; set; }
+        public string? mobileno { get; set; }
+        public string? address { get; set; }
+        public decimal? custid { get; set; }
+
+        public int totalbills { get; set; }
+        public decimal totaldueamount { get; set; }
+        public decimal totalcollectedamount { get; set; }
+        public decimal totalremainingamount { get; set; }
+
+        public string? paymentmode { get; set; }
+        public string? chequeno { get; set; }
+        public string? accountno { get; set; }
+        public string? referenceno { get; set; }
+
+        public string? remarks { get; set; }
+        public string? status { get; set; }
+
+        public bool isactive { get; set; } = true;
+        public bool deleted { get; set; } = false;
+        public DateTime createddate { get; set; }
+        public DateTime? modifieddate { get; set; }
+        public long? usercode { get; set; }
+        public string? tenantcode { get; set; }
+        public string? branchcode { get; set; }
+        public string? companycode { get; set; }
+
+        public int? bh_code { get; set; }
+        public decimal? cntcode { get; set; }
+        public string? cnttid { get; set; }
+    }
+
+    public class due_collection_detail
+    {
+        public long duecollectiondetailcode { get; set; }
+        public long duecollectioncode { get; set; }
+
+        public long salescode { get; set; }
+        public string? billno { get; set; }
+        public DateTime? billdate { get; set; }
+        public string? salestype { get; set; }               // server (NEW)
+
+        public decimal billamount { get; set; }
+        public decimal previouslypaidamount { get; set; }
+        public decimal dueamount { get; set; }
+        public decimal collectedamount { get; set; }
+        public decimal remainingamount { get; set; }
+        public string? paymentstatus { get; set; }
+
+        public string? remarks { get; set; }
+        public string? tenantcode { get; set; }
+    }
+
+    public class due_collection_request
+    {
+        public due_collection_master master { get; set; } = new();
+        public List<due_collection_detail> details { get; set; } = new();
+    }
+
+    public class due_pending_bill
+    {
+        public long salescode { get; set; }
+        public string? billno { get; set; }
+        public DateTime billdate { get; set; }
+        public string? salestype { get; set; }     // OP / IP / COUNTER (NEW)
+        public string? patientid { get; set; }
+        public string? patientname { get; set; }
+        public string? mobileno { get; set; }
+        public decimal billamount { get; set; }
+        public decimal paidamount { get; set; }
+        public decimal remainingamount { get; set; }
+        public string? paymentstatus { get; set; }
+    }
+
+    // ─── BULK DUE COLLECTION (NEW) ───────────────────────────────────────────────
+    public class due_bulk_item
+    {
+        public long salescode { get; set; }
+        public decimal collectedamount { get; set; }
+        public string? remarks { get; set; }
+    }
+
+    public class due_bulk_collection_request
+    {
+        // ── which bills (filters, same as getpendingdues) ──
+        public string? salestype { get; set; }      // OP / IP / COUNTER / null = all
+        public string? patientid { get; set; }
+        public string? mobileno { get; set; }
+        public string? patientname { get; set; }
+        public string? billno { get; set; }
+        public DateTime? fromdate { get; set; }
+        public DateTime? todate { get; set; }
+        public List<long> salescodes { get; set; } = new();   // optional: restrict to these bills
+
+        // ── how much: pick ONE mode ──
+        public List<due_bulk_item> items { get; set; } = new();  // 1) explicit amount per bill
+        public bool collectfull { get; set; }                    // 2) pay the full balance of every matched bill
+        public decimal totalamount { get; set; }                 // 3) lump sum, allocated oldest bill first
+
+        // ── payment info ──
+        public DateTime? requestdate { get; set; }
+        public string? paymentmode { get; set; }
+        public string? chequeno { get; set; }
+        public string? accountno { get; set; }
+        public string? referenceno { get; set; }
+        public string? remarks { get; set; }
+
+        public long? usercode { get; set; }
+        public string? tenantcode { get; set; }
+        public string? branchcode { get; set; }
+        public string? companycode { get; set; }
+        public int? bh_code { get; set; }
+        public decimal? cntcode { get; set; }
+        public string? cnttid { get; set; }
+    }
+
+    public class due_bulk_collection_result
+    {
+        public long duecollectioncode { get; set; }
+        public string? requestno { get; set; }
+        public string? salestype { get; set; }
+        public string? patientid { get; set; }
+        public string? patientname { get; set; }
+        public int bills { get; set; }
+        public decimal collected { get; set; }
+    }
 }
 

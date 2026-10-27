@@ -222,6 +222,7 @@ builder.Services.AddScoped<OpeningStockController>();
 builder.Services.AddScoped<ShiftAutoCloseService>();
 builder.Services.AddScoped<OpStatusMasterClass>();
 builder.Services.AddScoped<OpStatusMasterController>();
+builder.Services.AddScoped<HealthController>();
 
 builder.Services.AddSingleton<IAmazonS3>(sp =>
 {
