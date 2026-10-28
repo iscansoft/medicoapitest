@@ -64,7 +64,7 @@ namespace Medico_Backend.Controllers
         }
 
         // ── UPDATE ────────────────────────────────────────────────────────────
-
+        [RequestFormLimits(ValueCountLimit = 10000)]
         [HttpPost("update")]
         public async Task<IActionResult> Update([FromBody] TestMasterModel data)
         {

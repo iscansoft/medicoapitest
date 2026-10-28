@@ -1,4 +1,4 @@
-﻿using Amazon.Runtime;
+using Amazon.Runtime;
 
 using Amazon.S3.Model;
 
@@ -9132,7 +9132,12 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         c.name AS PatientName, c.gender, c.mobile AS MobileNo,
 
-                        CONCAT_WS(', ', NULLIF(c.street, ''), NULLIF(c.city, ''), NULLIF(c.state, ''), NULLIF(c.zipcode, '')) AS Address,
+                        CONCAT_WS(', ', NULLIF(c.street, ''), NULLIF(c.area, ''), NULLIF(c.city, ''), NULLIF(c.state, ''), NULLIF(c.zipcode, '')) AS Address,
+                        c.area AS AreaName,
+                        c.area AS Area,
+                        c.street AS Street,
+                        c.city AS City,
+                        c.zipcode AS Pincode,
 
                         c.ageyears, c.agemonths, c.agedays,
 
@@ -9142,7 +9147,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         opr.visit_date::timestamp AS VisitDate,
 
-                        dm.doctorfullname AS DoctorName,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS DoctorName,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS Doctor,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS Consultant,
 
                         bm.name AS BranchName,
 
@@ -9183,6 +9190,41 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
                     casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
+
+                    int docCode = casesheet.dcode;
+                    if (docCode <= 0 && casesheet.op_id.HasValue && casesheet.op_id.Value != Guid.Empty)
+                    {
+                        docCode = await db.ExecuteScalarAsync<int>(
+                            @"SELECT COALESCE(dcode, 0) FROM op_registration WHERE op_id = CAST(@op_id AS uuid) LIMIT 1",
+                            new { op_id = casesheet.op_id.Value });
+                    }
+                    if (docCode <= 0 && casesheet.custid > 0)
+                    {
+                        docCode = await db.ExecuteScalarAsync<int>(
+                            @"SELECT COALESCE(dcode, 0) FROM customerdb.customer_master WHERE custid = @custid LIMIT 1",
+                            new { custid = casesheet.custid });
+                    }
+
+                    if (docCode > 0)
+                    {
+                        var docName = await db.ExecuteScalarAsync<string?>(
+                            @"SELECT COALESCE(NULLIF(name, ''), NULLIF(doctorfullname, ''), NULLIF(shortname, ''))
+                              FROM doctor_master
+                              WHERE dcode = @docCode
+                                AND (tenant_code = @tenant_code OR tenant_code IS NULL OR tenant_code = '0' OR tenant_code = '')
+                                AND COALESCE(deleted, false) = false
+                              ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END)
+                              LIMIT 1",
+                            new { docCode, tenant_code });
+
+                        if (!string.IsNullOrWhiteSpace(docName))
+                        {
+                            casesheet.DoctorName = docName.Trim();
+                        }
+                    }
+
+                    casesheet.Doctor = casesheet.DoctorName;
+                    casesheet.Consultant = casesheet.DoctorName;
                 }
 
 
@@ -9645,7 +9687,12 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         c.name AS PatientName, c.gender, c.mobile AS MobileNo,
 
-                        CONCAT_WS(', ', NULLIF(c.street, ''), NULLIF(c.city, ''), NULLIF(c.state, ''), NULLIF(c.zipcode, '')) AS Address,
+                        CONCAT_WS(', ', NULLIF(c.street, ''), NULLIF(c.area, ''), NULLIF(c.city, ''), NULLIF(c.state, ''), NULLIF(c.zipcode, '')) AS Address,
+                        c.area AS AreaName,
+                        c.area AS Area,
+                        c.street AS Street,
+                        c.city AS City,
+                        c.zipcode AS Pincode,
 
                         c.ageyears, c.agemonths, c.agedays,
 
@@ -9657,7 +9704,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         ipm.bedcode::text AS BedNo,
 
-                        dm.doctorfullname AS DoctorName,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS DoctorName,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS Doctor,
+                        COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS Consultant,
 
                         bm.name AS BranchName,
 
@@ -9698,6 +9747,41 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
                     casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
+
+                    int docCode = casesheet.dcode;
+                    if (docCode <= 0 && casesheet.op_id.HasValue && casesheet.op_id.Value != Guid.Empty)
+                    {
+                        docCode = await db.ExecuteScalarAsync<int>(
+                            @"SELECT COALESCE(dcode, 0) FROM op_registration WHERE op_id = CAST(@op_id AS uuid) LIMIT 1",
+                            new { op_id = casesheet.op_id.Value });
+                    }
+                    if (docCode <= 0 && casesheet.custid > 0)
+                    {
+                        docCode = await db.ExecuteScalarAsync<int>(
+                            @"SELECT COALESCE(dcode, 0) FROM customerdb.customer_master WHERE custid = @custid LIMIT 1",
+                            new { custid = casesheet.custid });
+                    }
+
+                    if (docCode > 0)
+                    {
+                        var docName = await db.ExecuteScalarAsync<string?>(
+                            @"SELECT COALESCE(NULLIF(name, ''), NULLIF(doctorfullname, ''), NULLIF(shortname, ''))
+                              FROM doctor_master
+                              WHERE dcode = @docCode
+                                AND (tenant_code = @tenant_code OR tenant_code IS NULL OR tenant_code = '0' OR tenant_code = '')
+                                AND COALESCE(deleted, false) = false
+                              ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END)
+                              LIMIT 1",
+                            new { docCode, tenant_code });
+
+                        if (!string.IsNullOrWhiteSpace(docName))
+                        {
+                            casesheet.DoctorName = docName.Trim();
+                        }
+                    }
+
+                    casesheet.Doctor = casesheet.DoctorName;
+                    casesheet.Consultant = casesheet.DoctorName;
                 }
 
 

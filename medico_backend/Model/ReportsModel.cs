@@ -2373,6 +2373,14 @@ namespace medico_backend.Model
         // Doctor
 
         public string? DoctorName { get; set; }
+        public string? Doctor { get; set; }
+        public string? Consultant { get; set; }
+        public string? Street { get; set; }
+        public string? AreaName { get; set; }
+        public string? Area { get; set; }
+        public string? City { get; set; }
+        public string? Pincode { get; set; }
+        public string? PatientAddress { get; set; }
 
 
 
@@ -2423,6 +2431,8 @@ namespace medico_backend.Model
         public Guid? op_id { get; set; }
 
         public decimal custid { get; set; }
+
+        public int dcode { get; set; }
 
 
 
