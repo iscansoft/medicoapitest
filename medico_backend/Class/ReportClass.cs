@@ -15930,7 +15930,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                         modifieddate, usercode, tenantcode, branchcode, companycode, ordercode, 
 
-                        salestype, warehousecode, warehousefield, patientid, patientname, address, consultant
+                        salestype, warehousecode, warehousefield, patientid, patientname, address, consultant, bh_code
 
                     FROM sales_master
 
@@ -15950,7 +15950,122 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 master.createddate = AppTimeZoneHelper.ToLocalTimeSafe(master.createddate);
                 master.modifieddate = AppTimeZoneHelper.ToLocalTimeSafe(master.modifieddate);
 
+                // Resolve Doctor Name from doctor_master -> name by dcode
+                using (IDbConnection mainDb = new NpgsqlConnection(_conn))
+                {
+                    string? resolvedDoctor = null;
 
+                    // 1. If master.consultant is numeric (dcode)
+                    if (!string.IsNullOrWhiteSpace(master.consultant) && int.TryParse(master.consultant.Trim(), out int docDcode) && docDcode > 0)
+                    {
+                        resolvedDoctor = await mainDb.QueryFirstOrDefaultAsync<string>(@"
+                            SELECT name 
+                            FROM doctor_master 
+                            WHERE dcode = @docDcode AND (tenant_code = @tenantCode OR tenant_code IS NULL) AND COALESCE(deleted, false) = false 
+                            LIMIT 1",
+                            new { docDcode, tenantCode });
+                    }
+
+                    // 2. If not resolved yet (e.g. consultant is 'SELF', empty, or numeric lookup didn't match),
+                    // resolve via patient registration (op_registration or ip_registration) using master.patientid / customercode
+                    if (string.IsNullOrWhiteSpace(resolvedDoctor) && 
+                        (string.IsNullOrWhiteSpace(master.consultant) || master.consultant.Trim().Equals("SELF", StringComparison.OrdinalIgnoreCase) || int.TryParse(master.consultant.Trim(), out _)))
+                    {
+                        var patId = master.patientid?.Trim();
+                        var custCode = master.customercode;
+
+                        if (!string.IsNullOrWhiteSpace(patId) || custCode.HasValue)
+                        {
+                            // Check OP Registration
+                            string opSql = @"
+                                SELECT dm.name
+                                FROM op_registration op
+                                JOIN doctor_master dm ON dm.dcode = op.dcode AND (dm.tenant_code = op.tenant_code OR dm.tenant_code IS NULL)
+                                WHERE (op.op_no = @patId OR op.op_id::text = @patId OR op.custid::text = @patId OR (@custCode IS NOT NULL AND op.custid = @custCode))
+                                  AND op.tenant_code = @tenantCode
+                                  AND COALESCE(op.isdeleted, false) = false
+                                ORDER BY op.created_at DESC
+                                LIMIT 1";
+
+                            resolvedDoctor = await mainDb.QueryFirstOrDefaultAsync<string>(opSql, new { patId = patId ?? "", custCode, tenantCode });
+
+                            // If not found in OP, check IP Registration
+                            if (string.IsNullOrWhiteSpace(resolvedDoctor))
+                            {
+                                string ipSql = @"
+                                    SELECT dm.name
+                                    FROM ip_registration ip
+                                    JOIN doctor_master dm ON dm.dcode = ip.dcode AND (dm.tenant_code = ip.tenant_code OR dm.tenant_code IS NULL)
+                                    WHERE (ip.ip_no = @patId OR ip.ip_id::text = @patId OR ip.custid::text = @patId OR (@custCode IS NOT NULL AND ip.custid = @custCode))
+                                      AND ip.tenant_code = @tenantCode
+                                      AND COALESCE(ip.isdeleted, false) = false
+                                    ORDER BY ip.admitdate DESC
+                                    LIMIT 1";
+
+                                resolvedDoctor = await mainDb.QueryFirstOrDefaultAsync<string>(ipSql, new { patId = patId ?? "", custCode, tenantCode });
+                            }
+                        }
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(resolvedDoctor))
+                    {
+                        master.consultant = resolvedDoctor;
+                    }
+
+                    // Resolve Mobile No from branch_master -> mobileno (mobile / phone)
+                    try
+                    {
+                        int? branchCode = master.bh_code;
+                        if (!branchCode.HasValue && int.TryParse(master.branchcode, out int parsedBc))
+                        {
+                            branchCode = parsedBc;
+                        }
+
+                        string branchSql = @"
+                            SELECT 
+                                COALESCE(NULLIF(mobile, ''), NULLIF(phone, ''), '') AS mobile,
+                                name AS branch_name
+                            FROM mastertenant.branch_master
+                            WHERE tenant_code = @tenantCode 
+                              AND (@branchCode IS NULL OR bh_code = @branchCode)
+                              AND COALESCE(deleted, false) = false
+                            ORDER BY CASE WHEN bh_code = @branchCode THEN 0 ELSE 1 END, bh_code
+                            LIMIT 1";
+
+                        var branchInfo = await mainDb.QueryFirstOrDefaultAsync<dynamic>(branchSql, new { tenantCode, branchCode });
+
+                        if (branchInfo == null)
+                        {
+                            branchInfo = await mainDb.QueryFirstOrDefaultAsync<dynamic>(@"
+                                SELECT 
+                                    COALESCE(NULLIF(mobile, ''), NULLIF(phone, ''), '') AS mobile,
+                                    name AS branch_name
+                                FROM public.branch_master
+                                WHERE tenant_code = @tenantCode 
+                                  AND (@branchCode IS NULL OR bh_code = @branchCode)
+                                  AND COALESCE(deleted, false) = false
+                                ORDER BY CASE WHEN bh_code = @branchCode THEN 0 ELSE 1 END, bh_code
+                                LIMIT 1",
+                                new { tenantCode, branchCode });
+                        }
+
+                        string? branchMobile = branchInfo?.mobile?.ToString();
+                        if (!string.IsNullOrWhiteSpace(branchMobile))
+                        {
+                            response.MobileNo = branchMobile.Trim();
+                        }
+
+                        string? branchName = branchInfo?.branch_name?.ToString();
+                        if (!string.IsNullOrWhiteSpace(branchName) && string.IsNullOrWhiteSpace(response.BranchName))
+                        {
+                            response.BranchName = branchName.Trim();
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"Error resolving branch_master mobile: {ex.Message}");
+                    }
+                }
 
                 response.BillDetails = master;
 
@@ -15983,6 +16098,52 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 var details = await db.QueryAsync<SalesDetailModel>(sqlDetails, new { SalesCode = master.salescode, tenantCode });
 
                 response.Items = details.ToList();
+
+                // Resolve GST Number from warehouse_master -> gstno
+                try
+                {
+                    long? whCode = null;
+                    if (long.TryParse(master.warehousecode, out long parsedWh))
+                        whCode = parsedWh;
+                    else if (response.Items != null && response.Items.Any(i => i.warehousecode.HasValue))
+                        whCode = response.Items.FirstOrDefault(i => i.warehousecode.HasValue)?.warehousecode;
+
+                    string? whField = master.warehousefield?.Trim();
+
+                    string whSql = @"
+                        SELECT gstno 
+                        FROM public.warehouse_master 
+                        WHERE ((@whCode IS NOT NULL AND warehousecode = @whCode) 
+                            OR (@whField IS NOT NULL AND (warehousecode::text = @whField OR LOWER(warehousename) = LOWER(@whField))))
+                          AND (tenantcode = @tenantCode OR tenantcode IS NULL)
+                          AND COALESCE(isdeleted, false) = false
+                          AND NULLIF(gstno, '') IS NOT NULL
+                        LIMIT 1";
+
+                    string? warehouseGst = await db.QueryFirstOrDefaultAsync<string>(whSql, new { whCode, whField, tenantCode });
+
+                    if (string.IsNullOrWhiteSpace(warehouseGst))
+                    {
+                        warehouseGst = await db.QueryFirstOrDefaultAsync<string>(@"
+                            SELECT gstno 
+                            FROM public.warehouse_master 
+                            WHERE tenantcode = @tenantCode 
+                              AND COALESCE(isdeleted, false) = false 
+                              AND NULLIF(gstno, '') IS NOT NULL
+                            ORDER BY warehousecode
+                            LIMIT 1",
+                            new { tenantCode });
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(warehouseGst))
+                    {
+                        response.GSTNo = warehouseGst.Trim();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error resolving warehouse_master gstno: {ex.Message}");
+                }
 
 
 
