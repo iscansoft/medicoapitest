@@ -2846,6 +2846,8 @@ public class CasesheetPrescriptionItemDto
 
         public string? consultant { get; set; }
 
+        public int? bh_code { get; set; }
+
     }
 
 
