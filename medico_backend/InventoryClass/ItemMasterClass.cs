@@ -19,8 +19,11 @@ namespace medico_backend.InventoryClass
         {
             con = config.GetConnectionString("inventory_conn");
             _hmsCon = config.GetConnectionString("conn") ?? con;
-        }
 
+        }
+        // Batch is optional: blank / whitespace => NULL so it matches a no-batch stock row
+        private static string? NormBatch(string? batchno) =>
+            string.IsNullOrWhiteSpace(batchno) ? null : batchno.Trim();
         // ─── ITEM MASTER ──────────────────────────────────────────────────────────────
 
         public async Task<string> InsertItem(item_master item)
@@ -1438,14 +1441,13 @@ string tenantcode)
         // ── Helper: draw issued quantity down from the specific purchase batch,
         //     and mirror the reduction onto stock_master (same pattern as InsertPurchaseReturn) ──
         private async Task IssueIndentStock(
-            IDbConnection db, IDbTransaction transaction,
-            IEnumerable<indent_detail> details, string tenantcode)
+    IDbConnection db, IDbTransaction transaction,
+    IEnumerable<indent_detail> details, string tenantcode)
         {
             foreach (var item in details)
             {
                 if (item.issuedqty <= 0) continue;
 
-                // Pull the specific purchase batch this indent item is issued against.
                 var purchase = await db.QueryFirstOrDefaultAsync<purchase_detail>(@"
             SELECT
                 purchasedetailcode, purchasecode, itemcode,
@@ -1466,35 +1468,40 @@ string tenantcode)
                 if (item.issuedqty > availableqty)
                     throw new Exception($"Cannot issue {item.issuedqty} for item {item.itemcode}; only {availableqty} available in batch {purchase.batchno}");
 
-                // 1) Update purchase_detail — track cumulative issued qty against this batch
+                // 1) Track cumulative issued qty against this purchase line
                 await db.ExecuteAsync(@"
             UPDATE public.purchase_detail
             SET issuedqty = COALESCE(issuedqty, 0) + @issuedqty
             WHERE purchasedetailcode = @purchasedetailcode;",
                     new { item.issuedqty, item.purchasedetailcode }, transaction);
 
-                // 2) Update stock_master — reduce closing stock for that item/batch/warehouse
+                // 2) Reduce stock (batch optional: NULL/blank batch matches a no-batch stock row)
                 int rows = await db.ExecuteAsync(@"
             UPDATE public.stock_master
             SET
                 closingstock = closingstock - @issuedqty,
                 stockvalue   = (closingstock - @issuedqty) * unitcost,
                 modifieddate = CURRENT_TIMESTAMP
-            WHERE itemcode = @itemcode
-              AND batchno = @batchno
-              AND warehousecode = @warehousecode
-              AND tenantcode = @tenantcode;",
+            WHERE stockcode = (
+                SELECT stockcode FROM public.stock_master
+                WHERE itemcode = @itemcode
+                  AND COALESCE(batchno, '') = COALESCE(@batchno, '')
+                  AND warehousecode = @warehousecode
+                  AND tenantcode = @tenantcode
+                ORDER BY stockcode
+                LIMIT 1
+            );",
                     new
                     {
                         item.issuedqty,
                         item.itemcode,
-                        purchase.batchno,
+                        batchno = NormBatch(purchase.batchno),
                         purchase.warehousecode,
                         tenantcode
                     }, transaction);
 
                 if (rows == 0)
-                    throw new Exception($"Stock not found for item {item.itemcode}, batch {purchase.batchno}, warehouse {purchase.warehousecode}");
+                    throw new Exception($"Stock not found for item {item.itemcode}, batch {(string.IsNullOrEmpty(purchase.batchno) ? "(none)" : purchase.batchno)}, warehouse {purchase.warehousecode}");
             }
         }
 
@@ -2951,6 +2958,7 @@ string tenantcode)
             var (shiftError, cnttid) = await ResolveSalesShift(request.master, request.master.tenantcode!);
             if (shiftError != null) return shiftError;
             request.master.cnttid = cnttid;
+
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
@@ -2962,195 +2970,95 @@ string tenantcode)
                         //========================================
                         // Generate Bill Number
                         //========================================
-
                         string generatedBillNo = await GetNextSalesBillNo(
-                            conn,
-                            trans,
-                            request.master.tenantcode);
+                            conn, trans, request.master.tenantcode);
 
-                        // Remove BILL prefix
-                        // Example:
-                        // BILL202602 -> 202602
-                        string billno = generatedBillNo.StartsWith(
-                            "BILL",
-                            StringComparison.OrdinalIgnoreCase)
+                        string billno = generatedBillNo.StartsWith("BILL", StringComparison.OrdinalIgnoreCase)
                             ? generatedBillNo.Substring(4)
                             : generatedBillNo;
 
                         request.master.billno = billno;
 
-
                         //========================================
                         // Insert Sales Master
                         //========================================
-
                         string masterQuery = @"
 INSERT INTO sales_master
 (
-    billno,
-    billdate,
-    invoiceno,
-    invoicedate,
-    customercode,
-    salestype,
-    warehousefield,
-    patientid,
-    patientname,
-    mobileno,
-    address,
-    consultant,
-    grossamount,
-    discountamount,
-    taxamount,
-    roundoff,
-    netamount,
-    paymentmode,
-    paymentstatus,
-    currencycode,
-    isactive,
-    deleted,
-    remarks,
-    createddate,
-    modifieddate,
-    usercode,
-    tenantcode,
-    branchcode,
-    companycode,
-    ordercode,
-    cntcode,
-    bh_code,
-    cnttid
+    billno, billdate, invoiceno, invoicedate, customercode,
+    salestype, warehousefield, patientid, patientname, mobileno,
+    address, consultant, grossamount, discountamount, taxamount,
+    roundoff, netamount, paymentmode, paymentstatus, currencycode,
+    isactive, deleted, remarks, createddate, modifieddate,
+    usercode, tenantcode, branchcode, companycode, ordercode,
+    cntcode, bh_code, cnttid
 )
 VALUES
 (
-    @billno,
-    @billdate,
-    @invoiceno,
-    @invoicedate,
-    @customercode,
-    @salestype,
-    @warehousefield,
-    @patientid,
-    @patientname,
-    @mobileno,
-    @address,
-    @consultant,
-    @grossamount,
-    @discountamount,
-    @taxamount,
-    @roundoff,
-    @netamount,
-    @paymentmode,
-    @paymentstatus,
-    @currencycode,
-    @isactive,
-    @deleted,
-    @remarks,
-    @createddate,
-    @modifieddate,
-    @usercode,
-    @tenantcode,
-    @branchcode,
-    @companycode,
-    @ordercode,
-    @cntcode,
-    @bh_code,
-    @cnttid
+    @billno, @billdate, @invoiceno, @invoicedate, @customercode,
+    @salestype, @warehousefield, @patientid, @patientname, @mobileno,
+    @address, @consultant, @grossamount, @discountamount, @taxamount,
+    @roundoff, @netamount, @paymentmode, @paymentstatus, @currencycode,
+    @isactive, @deleted, @remarks, @createddate, @modifieddate,
+    @usercode, @tenantcode, @branchcode, @companycode, @ordercode,
+    @cntcode, @bh_code, @cnttid
 )
 RETURNING salescode;";
 
                         long salescode = await conn.ExecuteScalarAsync<long>(
-                            masterQuery,
-                            request.master,
-                            trans);
-
+                            masterQuery, request.master, trans);
 
                         string detailQuery = @"
 INSERT INTO sales_detail
 (
-    salescode,
-    itemcode,
-    quantity,
-    freequantity,
-    uomcode,
-    rate,
-    discountpercentage,
-    discountamount,
-    taxpercentage,
-    taxamount,
-    amount,
-    totalamount,
-    batchno,
-    manufacturingdate,
-    expirydate,
-    soldqty,
-    days,
-    warehousecode,
-    tenantcode,
-    morning_dose,
-    afternoon_dose,
-    evening_dose,
-    night_dose
+    salescode, itemcode, quantity, freequantity, uomcode, rate,
+    discountpercentage, discountamount, taxpercentage, taxamount,
+    amount, totalamount, batchno, manufacturingdate, expirydate,
+    soldqty, days, warehousecode, tenantcode,
+    morning_dose, afternoon_dose, evening_dose, night_dose
 )
 VALUES
 (
-    @salescode,
-    @itemcode,
-    @quantity,
-    @freequantity,
-    @uomcode,
-    @rate,
-    @discountpercentage,
-    @discountamount,
-    @taxpercentage,
-    @taxamount,
-    @amount,
-    @totalamount,
-    @batchno,
-    @manufacturingdate,
-    @expirydate,
-    @soldqty,
-    @days,
-    @warehousecode,
-    @tenantcode,
-    @morning_dose,
-    @afternoon_dose,
-    @evening_dose,
-    @night_dose
+    @salescode, @itemcode, @quantity, @freequantity, @uomcode, @rate,
+    @discountpercentage, @discountamount, @taxpercentage, @taxamount,
+    @amount, @totalamount, @batchno, @manufacturingdate, @expirydate,
+    @soldqty, @days, @warehousecode, @tenantcode,
+    @morning_dose, @afternoon_dose, @evening_dose, @night_dose
 );";
 
                         foreach (var item in request.details)
                         {
                             item.salescode = salescode;
+                            item.batchno = NormBatch(item.batchno);   // blank => NULL (batch optional)
 
-                            await conn.ExecuteAsync(
-                                detailQuery,
-                                item,
-                                trans);
+                            await conn.ExecuteAsync(detailQuery, item, trans);
 
                             //---------------------------------------
-                            // Check Stock
+                            // Check Stock (batch optional)
                             //---------------------------------------
-
                             string stockQuery = @"
 SELECT stockcode, closingstock
 FROM stock_master
-WHERE itemcode=@itemcode
-AND warehousecode=@warehousecode
-AND batchno=@batchno;";
+WHERE itemcode = @itemcode
+  AND warehousecode = @warehousecode
+  AND COALESCE(batchno, '') = COALESCE(@batchno, '')
+ORDER BY stockcode
+LIMIT 1;";
 
                             var stock = await conn.QueryFirstOrDefaultAsync(stockQuery,
                                 new
                                 {
                                     item.itemcode,
                                     item.warehousecode,
-                                    item.batchno
+                                    batchno = item.batchno
                                 },
                                 trans);
 
                             if (stock == null)
                             {
-                                throw new Exception($"Stock not found for Item : {item.itemcode}");
+                                throw new Exception(string.IsNullOrEmpty(item.batchno)
+                                    ? $"Stock not found for Item : {item.itemcode} (no batch)"
+                                    : $"Stock not found for Item : {item.itemcode}, Batch : {item.batchno}");
                             }
 
                             decimal closingStock = stock.closingstock;
@@ -3163,7 +3071,6 @@ AND batchno=@batchno;";
                             //---------------------------------------
                             // Update Stock
                             //---------------------------------------
-
                             string updateStock = @"
 UPDATE stock_master
 SET
@@ -3175,13 +3082,10 @@ WHERE stockcode=@stockcode;";
 
                             await conn.ExecuteAsync(
                                 updateStock,
-                                new
-                                {
-                                    qty = item.quantity,
-                                    stockcode = stock.stockcode
-                                },
+                                new { qty = item.quantity, stockcode = stock.stockcode },
                                 trans);
                         }
+
                         // ── Mark pharmacy queue rows as BILLED (same transaction) ──
                         if (request.queue_ids != null && request.queue_ids.Any())
                         {
@@ -3203,6 +3107,7 @@ WHERE stockcode=@stockcode;";
                             if (marked != ids.Length)
                                 throw new Exception("One or more pharmacy queue items are already billed or cancelled.");
                         }
+
                         await trans.CommitAsync();
 
                         return "Sales Inserted Successfully";
