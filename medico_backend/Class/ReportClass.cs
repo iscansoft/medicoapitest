@@ -9167,7 +9167,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     LEFT JOIN op_registration opr ON opr.op_id = cs.op_id
 
-                    LEFT JOIN doctor_master dm ON dm.dcode = cs.dcode
+                    LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(NULLIF(cs.dcode, 0), NULLIF(opr.dcode, 0), NULLIF(c.dcode, 0)) AND (dm.tenant_code = cs.tenant_code OR dm.tenant_code IS NULL OR dm.tenant_code = '0' OR dm.tenant_code = '')
 
                     LEFT JOIN mastertenant.tenants t ON t.tenant_code = cs.tenant_code
 
@@ -9190,38 +9190,6 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
                     casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
-
-                    int docCode = casesheet.dcode;
-                    if (docCode <= 0 && casesheet.op_id.HasValue && casesheet.op_id.Value != Guid.Empty)
-                    {
-                        docCode = await db.ExecuteScalarAsync<int>(
-                            @"SELECT COALESCE(dcode, 0) FROM op_registration WHERE op_id = CAST(@op_id AS uuid) LIMIT 1",
-                            new { op_id = casesheet.op_id.Value });
-                    }
-                    if (docCode <= 0 && casesheet.custid > 0)
-                    {
-                        docCode = await db.ExecuteScalarAsync<int>(
-                            @"SELECT COALESCE(dcode, 0) FROM customerdb.customer_master WHERE custid = @custid LIMIT 1",
-                            new { custid = casesheet.custid });
-                    }
-
-                    if (docCode > 0)
-                    {
-                        var docName = await db.ExecuteScalarAsync<string?>(
-                            @"SELECT COALESCE(NULLIF(name, ''), NULLIF(doctorfullname, ''), NULLIF(shortname, ''))
-                              FROM doctor_master
-                              WHERE dcode = @docCode
-                                AND (tenant_code = @tenant_code OR tenant_code IS NULL OR tenant_code = '0' OR tenant_code = '')
-                                AND COALESCE(deleted, false) = false
-                              ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END)
-                              LIMIT 1",
-                            new { docCode, tenant_code });
-
-                        if (!string.IsNullOrWhiteSpace(docName))
-                        {
-                            casesheet.DoctorName = docName.Trim();
-                        }
-                    }
 
                     casesheet.Doctor = casesheet.DoctorName;
                     casesheet.Consultant = casesheet.DoctorName;
@@ -9724,7 +9692,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     LEFT JOIN inpatient_master ipm ON ipm.patcode = c.custcode
 
-                    LEFT JOIN doctor_master dm ON dm.dcode = cs.dcode
+                    LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(NULLIF(cs.dcode, 0), NULLIF(opr.dcode, 0), NULLIF(c.dcode, 0)) AND (dm.tenant_code = cs.tenant_code OR dm.tenant_code IS NULL OR dm.tenant_code = '0' OR dm.tenant_code = '')
 
                     LEFT JOIN mastertenant.tenants t ON t.tenant_code = cs.tenant_code
 
@@ -9747,38 +9715,6 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     casesheet.FollowupDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.FollowupDate);
                     casesheet.VisitDate = AppTimeZoneHelper.ToLocalTimeSafe(casesheet.VisitDate);
-
-                    int docCode = casesheet.dcode;
-                    if (docCode <= 0 && casesheet.op_id.HasValue && casesheet.op_id.Value != Guid.Empty)
-                    {
-                        docCode = await db.ExecuteScalarAsync<int>(
-                            @"SELECT COALESCE(dcode, 0) FROM op_registration WHERE op_id = CAST(@op_id AS uuid) LIMIT 1",
-                            new { op_id = casesheet.op_id.Value });
-                    }
-                    if (docCode <= 0 && casesheet.custid > 0)
-                    {
-                        docCode = await db.ExecuteScalarAsync<int>(
-                            @"SELECT COALESCE(dcode, 0) FROM customerdb.customer_master WHERE custid = @custid LIMIT 1",
-                            new { custid = casesheet.custid });
-                    }
-
-                    if (docCode > 0)
-                    {
-                        var docName = await db.ExecuteScalarAsync<string?>(
-                            @"SELECT COALESCE(NULLIF(name, ''), NULLIF(doctorfullname, ''), NULLIF(shortname, ''))
-                              FROM doctor_master
-                              WHERE dcode = @docCode
-                                AND (tenant_code = @tenant_code OR tenant_code IS NULL OR tenant_code = '0' OR tenant_code = '')
-                                AND COALESCE(deleted, false) = false
-                              ORDER BY (CASE WHEN tenant_code = @tenant_code THEN 0 ELSE 1 END)
-                              LIMIT 1",
-                            new { docCode, tenant_code });
-
-                        if (!string.IsNullOrWhiteSpace(docName))
-                        {
-                            casesheet.DoctorName = docName.Trim();
-                        }
-                    }
 
                     casesheet.Doctor = casesheet.DoctorName;
                     casesheet.Consultant = casesheet.DoctorName;

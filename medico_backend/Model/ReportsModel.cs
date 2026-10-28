@@ -1318,7 +1318,7 @@ namespace medico_backend.Model
 
 
 
-        public int dcode { get; set; }
+        public int? dcode { get; set; }
 
 
 
@@ -2432,7 +2432,7 @@ namespace medico_backend.Model
 
         public decimal custid { get; set; }
 
-        public int dcode { get; set; }
+        public int? dcode { get; set; }
 
 
 
