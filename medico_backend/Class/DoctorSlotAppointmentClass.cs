@@ -323,6 +323,9 @@ namespace Medico_Backend.Class
         // ═══════════════════════════════════════════
         // MASTER - BULK UPDATE
         // ═══════════════════════════════════════════
+        // ═══════════════════════════════════════════
+        // MASTER - BULK UPDATE
+        // ═══════════════════════════════════════════
         public async Task<object> BulkUpdateMaster(
             List<DoctorAppointmentSlotMasterModel> slots,
             string tenant_code)
@@ -331,69 +334,94 @@ namespace Medico_Backend.Class
             var failed = new List<string>();
 
             using IDbConnection db = new NpgsqlConnection(_db_conn);
+            db.Open();
 
             foreach (var data in slots)
             {
+                using var tx = db.BeginTransaction();
                 try
                 {
                     data.updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
 
-                    string masterSql = @"
-                    UPDATE doctor_appointment_slot_master
-                    SET
-                        dcode           = @dcode,
-                        day_of_week     = @day_of_week,
-                        slot_start_time = @slot_start_time,
-                        slot_end_time   = @slot_end_time,
-                        typeofslot      = @typeofslot,
-                        max_patients    = @max_patients,
-                        max_walkin      = @max_walkin,
-                        max_online      = @max_online,
-                        avgtime         = @avgtime,
-                        slot_date       = @slot_date,
-                        is_active       = @is_active,
-                        updated_at      = @updated_at
-                    WHERE slot_master_id = @slot_master_id
-                    AND   tenant_code    = @tenant_code";
+                    // remember the old doctor/date so its ranges can be re-flowed too
+                    var old = await db.QueryFirstOrDefaultAsync<(int dcode, DateTime? slot_date)?>(
+                        @"SELECT dcode, slot_date FROM doctor_appointment_slot_master
+                  WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code",
+                        new { data.slot_master_id, tenant_code }, tx);
 
-                    int rows = await db.ExecuteAsync(masterSql, new
+                    // never shrink below seats already used
+                    var used = await db.QueryFirstOrDefaultAsync<(int walkin_count, int online_count)?>(
+                        @"SELECT walkin_count, online_count FROM doctor_appointment_slot_details
+                  WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code AND isdeleted = false",
+                        new { data.slot_master_id, tenant_code }, tx);
+
+                    if (used.HasValue && (data.max_walkin < used.Value.walkin_count || data.max_online < used.Value.online_count))
                     {
-                        data.dcode,
-                        data.day_of_week,
-                        slot_start_time = data.slot_start_time.ToTimeSpan(),
-                        slot_end_time = data.slot_end_time.ToTimeSpan(),
-                        data.typeofslot,
-                        data.max_patients,
-                        data.max_walkin,
-                        data.max_online,
-                        data.avgtime,
-                        slot_date = data.slot_date.HasValue
-                            ? data.slot_date.Value.ToDateTime(TimeOnly.MinValue)
-                            : (DateTime?)null,
-                        data.is_active,
-                        data.updated_at,
-                        data.slot_master_id,
-                        tenant_code
-                    });
+                        tx.Rollback();
+                        failed.Add($"Cannot reduce below used seats (walkin used {used.Value.walkin_count}, online used {used.Value.online_count}): {data.slot_master_id}");
+                        continue;
+                    }
 
-                    if (rows > 0)
-                    {
-                        // ✅ SYNC DETAILS — keep capacity and slot info in sync with master
-                        string syncDetailSql = @"
-                        UPDATE doctor_appointment_slot_details
-                        SET
-                            max_patients = @max_patients,
-                            max_walkin   = @max_walkin,
-                            max_online   = @max_online,
-                            typeofslot   = @typeofslot,
-                            avgtime      = @avgtime,
-                            updated_at   = now()
-                        WHERE slot_master_id = @slot_master_id
-                        AND   tenant_code    = @tenant_code
-                        AND   isdeleted      = false";
-
-                        await db.ExecuteAsync(syncDetailSql, new
+                    int rows = await db.ExecuteAsync(@"
+                UPDATE doctor_appointment_slot_master
+                SET dcode = @dcode, day_of_week = @day_of_week,
+                    slot_start_time = @slot_start_time, slot_end_time = @slot_end_time,
+                    typeofslot = @typeofslot, max_patients = @max_patients,
+                    max_walkin = @max_walkin, max_online = @max_online,
+                    avgtime = @avgtime, slot_date = @slot_date,
+                    is_active = @is_active, updated_at = @updated_at
+                WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code",
+                        new
                         {
+                            data.dcode,
+                            data.day_of_week,
+                            slot_start_time = data.slot_start_time.ToTimeSpan(),
+                            slot_end_time = data.slot_end_time.ToTimeSpan(),
+                            data.typeofslot,
+                            data.max_patients,
+                            data.max_walkin,
+                            data.max_online,
+                            data.avgtime,
+                            slot_date = data.slot_date.HasValue
+                                ? data.slot_date.Value.ToDateTime(TimeOnly.MinValue)
+                                : (DateTime?)null,
+                            data.is_active,
+                            data.updated_at,
+                            data.slot_master_id,
+                            tenant_code
+                        }, tx);
+
+                    if (rows == 0)
+                    {
+                        tx.Rollback();
+                        failed.Add($"Not Found: {data.slot_master_id}");
+                        continue;
+                    }
+
+                    // sync details (capacity + slot info + date/time)
+                    await db.ExecuteAsync(@"
+                UPDATE doctor_appointment_slot_details
+                SET dcode = @dcode,
+                    appointment_date = COALESCE(@slot_date, appointment_date),
+                    slot_start_time = @slot_start_time,
+                    slot_end_time = @slot_end_time,
+                    max_patients = @max_patients,
+                    max_walkin = @max_walkin,
+                    max_online = @max_online,
+                    typeofslot = @typeofslot,
+                    avgtime = @avgtime,
+                    updated_at = now()
+                WHERE slot_master_id = @slot_master_id
+                AND   tenant_code = @tenant_code
+                AND   isdeleted = false",
+                        new
+                        {
+                            data.dcode,
+                            slot_date = data.slot_date.HasValue
+                                ? data.slot_date.Value.ToDateTime(TimeOnly.MinValue)
+                                : (DateTime?)null,
+                            slot_start_time = data.slot_start_time.ToTimeSpan(),
+                            slot_end_time = data.slot_end_time.ToTimeSpan(),
                             data.max_patients,
                             data.max_walkin,
                             data.max_online,
@@ -401,17 +429,30 @@ namespace Medico_Backend.Class
                             data.avgtime,
                             data.slot_master_id,
                             tenant_code
-                        });
+                        }, tx);
 
-                        updated.Add($"Updated: {data.slot_master_id}");
-                    }
-                    else
+                    // re-flow token ranges for the new doctor/date, and the old one if it moved
+                    string? err = null;
+                    if (data.slot_date.HasValue)
+                        err = await RecalculateTokenRanges(db, tx, data.dcode, data.slot_date.Value.ToDateTime(TimeOnly.MinValue), tenant_code);
+
+                    if (err == null && old.HasValue && old.Value.slot_date.HasValue &&
+                        (old.Value.dcode != data.dcode || old.Value.slot_date.Value.Date != data.slot_date?.ToDateTime(TimeOnly.MinValue).Date))
+                        err = await RecalculateTokenRanges(db, tx, old.Value.dcode, old.Value.slot_date.Value, tenant_code);
+
+                    if (err != null)
                     {
-                        failed.Add($"Not Found: {data.slot_master_id}");
+                        tx.Rollback();
+                        failed.Add($"{err}: {data.slot_master_id}");
+                        continue;
                     }
+
+                    tx.Commit();
+                    updated.Add($"Updated: {data.slot_master_id}");
                 }
                 catch (Exception ex)
                 {
+                    tx.Rollback();
                     failed.Add(ex.Message);
                 }
             }
@@ -419,6 +460,62 @@ namespace Medico_Backend.Class
             return new { updated, failed };
         }
 
+        // Re-flows online/walk-in token ranges for one doctor + date, in slot time order,
+        // using the same rule as insert: online block first, then walk-in block, next slot continues.
+        // Returns an error text if a slot that already has bookings would have its range moved.
+        private async Task<string?> RecalculateTokenRanges(
+            IDbConnection db, IDbTransaction tx, int dcode, DateTime date, string tenant_code)
+        {
+            string lockKey = $"SLOTRANGE:{tenant_code}:{dcode}:{date:yyyyMMdd}";
+            await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))", new { lockKey }, tx);
+
+            var rows = (await db.QueryAsync<SlotRangeRow>(@"
+        SELECT slot_detail_id, max_online, max_walkin, booked_count,
+               online_token_start, online_token_end, walkin_token_start, walkin_token_end
+        FROM   doctor_appointment_slot_details
+        WHERE  dcode = @dcode AND tenant_code = @tenant_code
+        AND    appointment_date = @date AND isdeleted = false
+        ORDER  BY slot_start_time",
+                new { dcode, tenant_code, date }, tx)).ToList();
+
+            int cursor = 0;
+            foreach (var r in rows)
+            {
+                int os = cursor + 1;
+                int oe = os + r.max_online - 1;
+                int ws = oe + 1;
+                int we = ws + r.max_walkin - 1;
+                cursor = we;
+
+                bool changed = r.online_token_start != os || r.online_token_end != oe ||
+                               r.walkin_token_start != ws || r.walkin_token_end != we;
+                if (!changed) continue;
+
+                if (r.booked_count > 0)
+                    return "Token ranges of a slot that already has bookings would change. Cancel/complete those bookings or keep the online/walk-in counts the same";
+
+                await db.ExecuteAsync(@"
+            UPDATE doctor_appointment_slot_details
+            SET online_token_start = @os, online_token_end = @oe,
+                walkin_token_start = @ws, walkin_token_end = @we,
+                updated_at = now()
+            WHERE slot_detail_id = @id",
+                    new { os, oe, ws, we, id = r.slot_detail_id }, tx);
+            }
+            return null;
+        }
+
+        private class SlotRangeRow
+        {
+            public Guid slot_detail_id { get; set; }
+            public int max_online { get; set; }
+            public int max_walkin { get; set; }
+            public int booked_count { get; set; }
+            public int? online_token_start { get; set; }
+            public int? online_token_end { get; set; }
+            public int? walkin_token_start { get; set; }
+            public int? walkin_token_end { get; set; }
+        }
         // ═══════════════════════════════════════════
         // MASTER - DELETE (soft delete)
         // ═══════════════════════════════════════════

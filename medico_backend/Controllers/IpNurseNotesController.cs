@@ -522,5 +522,50 @@ namespace medico_backend.Controllers
                 tenant_code = tenant
             });
         }
+        // ═══ 10. DIABETIC CHART ═══
+        [HttpPost("diabetic/add")]
+        public async Task<IActionResult> AddDiabetic([FromBody] AddDiabeticRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
+            var res = await cls.AddDiabetic(req, req.usercode, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        [HttpPost("diabetic/update")]
+        public async Task<IActionResult> UpdateDiabetic([FromBody] UpdateDiabeticRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.UpdateDiabetic(req, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
+
+        [HttpGet("diabetic/{ip_id}")]
+        public async Task<IActionResult> GetDiabetic(Guid ip_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            return Ok(await cls.GetDiabetic(ip_id, tenant));
+        }
+
+        [HttpGet("diabetic/{ip_id}/detail")]
+        public async Task<IActionResult> GetDiabeticById(Guid ip_id, [FromQuery] Guid diabetic_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.GetDiabeticById(ip_id, diabetic_id, tenant);
+            return res != null ? Ok(res) : NotFound(new { message = "Record not found" });
+        }
+
+        [HttpGet("diabetic/delete")]
+        public async Task<IActionResult> DeleteDiabetic([FromQuery] Guid diabetic_id)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            var res = await cls.DeleteDiabetic(diabetic_id, tenant);
+            return res == "Success" ? Ok(new { message = res }) : NotFound(new { message = res });
+        }
     }
 }

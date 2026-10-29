@@ -955,5 +955,115 @@ namespace medico_backend.Class
                 return $"|Pharmacy:Failed({ex.Message})";
             }
         }
+        // ═══ 10. DIABETIC CHART ═══
+        public async Task<string> AddDiabetic(AddDiabeticRequest req, int usercode, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            if (!await IpExists(db, req.ip_id, tenant_code)) return "IP Registration not found";
+
+            var data = new NurseDiabeticModel
+            {
+                ip_id = req.ip_id,
+                custid = req.custid,
+                shift = req.shift,
+                reading_type = req.reading_type.ToUpper(),
+                blood_sugar = req.blood_sugar,
+                insulin_type = req.insulin_type,
+                insulin_dose = req.insulin_dose,
+                insulin_unit = req.insulin_unit,
+                site = req.site,
+                remarks = req.remarks,
+                usercode = usercode,
+                tenant_code = tenant_code
+            };
+
+            await db.ExecuteAsync(@"
+        INSERT INTO ip_nurse_note_diabetic
+        (diabetic_id, ip_id, custid, entry_date, entry_time, shift, reading_type, blood_sugar,
+         insulin_type, insulin_dose, insulin_unit, site, remarks, usercode, tenant_code,
+         isdeleted, created_at, updated_at)
+        VALUES
+        (@diabetic_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @reading_type, @blood_sugar,
+         @insulin_type, @insulin_dose, @insulin_unit, @site, @remarks, @usercode, @tenant_code,
+         @isdeleted, @created_at, @updated_at)",
+                new
+                {
+                    data.diabetic_id,
+                    data.ip_id,
+                    data.custid,
+                    entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+                    entry_time = data.entry_time.ToTimeSpan(),
+                    data.shift,
+                    data.reading_type,
+                    data.blood_sugar,
+                    data.insulin_type,
+                    data.insulin_dose,
+                    data.insulin_unit,
+                    data.site,
+                    data.remarks,
+                    data.usercode,
+                    data.tenant_code,
+                    data.isdeleted,
+                    data.created_at,
+                    data.updated_at
+                });
+
+            return $"Success|Id:{data.diabetic_id}";
+        }
+
+        public async Task<string> UpdateDiabetic(UpdateDiabeticRequest req, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            int rows = await db.ExecuteAsync(@"
+        UPDATE ip_nurse_note_diabetic
+        SET shift = @shift, reading_type = @reading_type, blood_sugar = @blood_sugar,
+            insulin_type = @insulin_type, insulin_dose = @insulin_dose, insulin_unit = @insulin_unit,
+            site = @site, remarks = @remarks, updated_at = now()
+        WHERE diabetic_id = @diabetic_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new
+                {
+                    req.diabetic_id,
+                    req.shift,
+                    reading_type = req.reading_type.ToUpper(),
+                    req.blood_sugar,
+                    req.insulin_type,
+                    req.insulin_dose,
+                    req.insulin_unit,
+                    req.site,
+                    req.remarks,
+                    tenant_code
+                });
+            return rows > 0 ? "Success" : "Record not found";
+        }
+
+        public async Task<List<NurseDiabeticModel>> GetDiabetic(Guid ip_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            var res = await db.QueryAsync<NurseDiabeticModel>(
+                @"SELECT * FROM ip_nurse_note_diabetic
+          WHERE ip_id = @ip_id AND tenant_code = @tenant_code AND isdeleted = false
+          ORDER BY entry_date DESC, entry_time DESC",
+                new { ip_id, tenant_code });
+            return res.ToList();
+        }
+
+        public async Task<NurseDiabeticModel?> GetDiabeticById(Guid ip_id, Guid diabetic_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            return await db.QueryFirstOrDefaultAsync<NurseDiabeticModel>(
+                @"SELECT * FROM ip_nurse_note_diabetic
+          WHERE ip_id = @ip_id AND diabetic_id = @diabetic_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { ip_id, diabetic_id, tenant_code });
+        }
+
+        public async Task<string> DeleteDiabetic(Guid diabetic_id, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            int rows = await db.ExecuteAsync(
+                @"UPDATE ip_nurse_note_diabetic SET isdeleted = true, updated_at = now()
+          WHERE diabetic_id = @diabetic_id AND tenant_code = @tenant_code",
+                new { diabetic_id, tenant_code });
+            return rows > 0 ? "Success" : "Record not found";
+        }
     }
 }
