@@ -9124,7 +9124,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     SELECT 
 
-                        cs.sheet_id, cs.op_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
+                        cs.sheet_id, cs.op_id, cs.ip_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
 
                         cs.chief_complaint AS ChiefComplaint, cs.symptoms AS Symptoms, cs.examination AS Examination, 
 
@@ -9255,56 +9255,100 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-                string presSql = @"
+                var queryParams = new
+                {
+                    sheet_id = sheet_id.ToString(),
+                    op_id = casesheet.op_id?.ToString(),
+                    custid = casesheet.custid,
+                    visit_date = casesheet.CaseSheetVisitDate ?? casesheet.VisitDate,
+                    tenant_code
+                };
 
+                string presSql = @"
                     SELECT sno, drug_name AS DrugName, 
                            COALESCE(NULLIF(generic_name, ''), drug_name) AS GenericName,
                            generic_name AS Composition,
                            drug_name AS MedicineName,
                            morning, afternoon, evening, night,
                            before_food AS BeforeFood, after_food AS AfterFood, days, qty, route, notes
-
                     FROM op_prescription_detail
-
                     WHERE pr_id IN (
-
                         SELECT pr_id FROM op_prescription_master 
-
-                        WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false
-
+                        WHERE (
+                            (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                            OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                            OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                        )
+                        AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                        AND COALESCE(isdeleted, false) = false
                     )
-
-                    AND isdeleted = false
-
-                    ORDER BY sno";
+                    AND COALESCE(isdeleted, false) = false
+                    ORDER BY pr_id, sno";
 
                 casesheet.PrescriptionList = (await db.QueryAsync<CasesheetPrescriptionItemDto>(
+                    presSql, queryParams)).ToList();
 
-                    presSql, new { sheet_id = sheet_id.ToString(), tenant_code })).ToList();
+                if (casesheet.PrescriptionList.Count == 0 && casesheet.custid > 0)
+                {
+                    casesheet.PrescriptionList = (await db.QueryAsync<CasesheetPrescriptionItemDto>(@"
+                        SELECT sno, drug_name AS DrugName, 
+                               COALESCE(NULLIF(generic_name, ''), drug_name) AS GenericName,
+                               generic_name AS Composition,
+                               drug_name AS MedicineName,
+                               morning, afternoon, evening, night,
+                               before_food AS BeforeFood, after_food AS AfterFood, days, qty, route, notes
+                        FROM op_prescription_detail
+                        WHERE pr_id IN (
+                            SELECT pr_id FROM op_prescription_master 
+                            WHERE custid = @custid
+                              AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                              AND COALESCE(isdeleted, false) = false
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        AND COALESCE(isdeleted, false) = false
+                        ORDER BY sno", queryParams)).ToList();
+                }
 
-
+                int presSeq = 1;
+                foreach (var p in casesheet.PrescriptionList)
+                {
+                    p.Sno = presSeq++;
+                }
 
                 string invSql = @"
-
                     SELECT sno, test_name AS TestName, test_category AS TestCategory, quantity
-
                     FROM op_investigation_detail
-
                     WHERE inv_id IN (
-
                         SELECT inv_id FROM op_investigation_master 
-
-                        WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false
-
+                        WHERE (
+                            (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                            OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                            OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                        )
+                        AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                        AND COALESCE(isdeleted, false) = false
                     )
-
-                    AND isdeleted = false
-
-                    ORDER BY sno";
+                    AND COALESCE(isdeleted, false) = false
+                    ORDER BY inv_id, sno";
 
                 casesheet.InvestigationList = (await db.QueryAsync<CasesheetInvestigationItemDto>(
+                    invSql, queryParams)).ToList();
 
-                    invSql, new { sheet_id = sheet_id.ToString(), tenant_code })).ToList();
+                if (casesheet.InvestigationList.Count == 0 && casesheet.custid > 0)
+                {
+                    casesheet.InvestigationList = (await db.QueryAsync<CasesheetInvestigationItemDto>(@"
+                        SELECT sno, test_name AS TestName, test_category AS TestCategory, quantity
+                        FROM op_investigation_detail
+                        WHERE inv_id IN (
+                            SELECT inv_id FROM op_investigation_master 
+                            WHERE custid = @custid
+                              AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                              AND COALESCE(isdeleted, false) = false
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        AND COALESCE(isdeleted, false) = false
+                        ORDER BY sno", queryParams)).ToList();
+                }
 
 
 
@@ -9450,49 +9494,61 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
                 // Fetch Prescription Remarks
-
                 var presMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-
                     @"SELECT pr_code AS PrNo, pr_code AS PrescriptionNo, topremarks, bottonremarks FROM op_prescription_master 
+                      WHERE (
+                          (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                          OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                          OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                      )
+                      AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                      AND COALESCE(isdeleted, false) = false 
+                      ORDER BY created_at DESC LIMIT 1", queryParams);
 
-                      WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false 
-
-                      ORDER BY created_at DESC LIMIT 1", new { sheet_id = sheet_id.ToString(), tenant_code });
-
-                if (presMst != null)
-
+                if (presMst == null && casesheet.custid > 0)
                 {
-
-                    casesheet.PrNo = presMst.PrNo;
-
-                    casesheet.PrescriptionNo = presMst.PrescriptionNo;
-
-                    casesheet.topremarks = presMst.topremarks;
-
-                    casesheet.bottonremarks = presMst.bottonremarks;
-
+                    presMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
+                        @"SELECT pr_code AS PrNo, pr_code AS PrescriptionNo, topremarks, bottonremarks FROM op_prescription_master 
+                          WHERE custid = @custid
+                            AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                            AND COALESCE(isdeleted, false) = false 
+                          ORDER BY created_at DESC LIMIT 1", queryParams);
                 }
 
-
+                if (presMst != null)
+                {
+                    casesheet.PrNo = presMst.PrNo;
+                    casesheet.PrescriptionNo = presMst.PrescriptionNo;
+                    casesheet.topremarks = presMst.topremarks;
+                    casesheet.bottonremarks = presMst.bottonremarks;
+                }
 
                 // Fetch Investigation Remarks/Urgency
-
                 var invMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-
                     @"SELECT notes AS InvestigationNotes, is_urgent AS IsInvestigationUrgent FROM op_investigation_master 
+                      WHERE (
+                          (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                          OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                          OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                      )
+                      AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                      AND COALESCE(isdeleted, false) = false 
+                      LIMIT 1", queryParams);
 
-                      WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false 
-
-                      LIMIT 1", new { sheet_id = sheet_id.ToString(), tenant_code });
+                if (invMst == null && casesheet.custid > 0)
+                {
+                    invMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
+                        @"SELECT notes AS InvestigationNotes, is_urgent AS IsInvestigationUrgent FROM op_investigation_master 
+                          WHERE custid = @custid
+                            AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                            AND COALESCE(isdeleted, false) = false 
+                          LIMIT 1", queryParams);
+                }
 
                 if (invMst != null)
-
                 {
-
                     casesheet.InvestigationNotes = invMst.InvestigationNotes;
-
                     casesheet.IsInvestigationUrgent = invMst.IsInvestigationUrgent;
-
                 }
 
 
@@ -9647,7 +9703,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     SELECT 
 
-                        cs.sheet_id, cs.op_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
+                        cs.sheet_id, cs.op_id, cs.ip_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
 
                         cs.chief_complaint AS ChiefComplaint, cs.symptoms AS Symptoms, cs.examination AS Examination, 
 
@@ -9666,11 +9722,11 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                         COALESCE(NULLIF(c.custcode::text, ''), NULLIF(c.bhcustcode::text, ''), NULLIF(c.customermanualcode::text, ''), c.custid::text, '') AS PatientId,
 
-                        COALESCE(ipm.patcode, c.custcode::text, c.custid::text) AS VisitNo,
+                        COALESCE(NULLIF(ipr.ip_no, ''), NULLIF(ipm.patcode, ''), NULLIF(opr.op_no, ''), c.custcode::text, c.custid::text) AS VisitNo,
 
-                        COALESCE(ipm.regdate, cs.visit_date)::timestamp AS VisitDate,
+                        COALESCE(ipr.admitdate, ipm.regdate, opr.visit_date, cs.visit_date)::timestamp AS VisitDate,
 
-                        ipm.bedcode::text AS BedNo,
+                        COALESCE(NULLIF(ipr.bedcode::text, ''), ipm.bedcode::text) AS BedNo,
 
                         COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS DoctorName,
                         COALESCE(NULLIF(dm.name, ''), NULLIF(dm.doctorfullname, ''), NULLIF(dm.shortname, ''), '') AS Doctor,
@@ -9690,9 +9746,13 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     LEFT JOIN customerdb.customer_master c ON c.custid = cs.custid
 
+                    LEFT JOIN ip_registration ipr ON ipr.ip_id = cs.ip_id
+
+                    LEFT JOIN op_registration opr ON opr.op_id = cs.op_id
+
                     LEFT JOIN inpatient_master ipm ON ipm.patcode = c.custcode
 
-                    LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(NULLIF(cs.dcode, 0), NULLIF(opr.dcode, 0), NULLIF(c.dcode, 0)) AND (dm.tenant_code = cs.tenant_code OR dm.tenant_code IS NULL OR dm.tenant_code = '0' OR dm.tenant_code = '')
+                    LEFT JOIN doctor_master dm ON dm.dcode = COALESCE(NULLIF(cs.dcode, 0), NULLIF(ipr.dcode, 0), NULLIF(opr.dcode, 0), NULLIF(c.dcode, 0)) AND (dm.tenant_code = cs.tenant_code OR dm.tenant_code IS NULL OR dm.tenant_code = '0' OR dm.tenant_code = '')
 
                     LEFT JOIN mastertenant.tenants t ON t.tenant_code = cs.tenant_code
 
@@ -9780,56 +9840,103 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-                string presSql = @"
+                var ipQueryParams = new
+                {
+                    sheet_id = sheet_id.ToString(),
+                    op_id = casesheet.op_id?.ToString(),
+                    ip_id = casesheet.ip_id?.ToString(),
+                    custid = casesheet.custid,
+                    visit_date = casesheet.CaseSheetVisitDate ?? casesheet.VisitDate,
+                    tenant_code
+                };
 
+                string presSql = @"
                     SELECT sno, drug_name AS DrugName, 
                            COALESCE(NULLIF(generic_name, ''), drug_name) AS GenericName,
                            generic_name AS Composition,
                            drug_name AS MedicineName,
                            morning, afternoon, evening, night,
                            before_food AS BeforeFood, after_food AS AfterFood, days, qty, route, notes
-
                     FROM op_prescription_detail
-
                     WHERE pr_id IN (
-
                         SELECT pr_id FROM op_prescription_master 
-
-                        WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false
-
+                        WHERE (
+                            (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                            OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+                            OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                            OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                        )
+                        AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                        AND COALESCE(isdeleted, false) = false
                     )
-
-                    AND isdeleted = false
-
-                    ORDER BY sno";
+                    AND COALESCE(isdeleted, false) = false
+                    ORDER BY pr_id, sno";
 
                 casesheet.PrescriptionList = (await db.QueryAsync<CasesheetPrescriptionItemDto>(
+                    presSql, ipQueryParams)).ToList();
 
-                    presSql, new { sheet_id = sheet_id.ToString(), tenant_code })).ToList();
+                if (casesheet.PrescriptionList.Count == 0 && casesheet.custid > 0)
+                {
+                    casesheet.PrescriptionList = (await db.QueryAsync<CasesheetPrescriptionItemDto>(@"
+                        SELECT sno, drug_name AS DrugName, 
+                               COALESCE(NULLIF(generic_name, ''), drug_name) AS GenericName,
+                               generic_name AS Composition,
+                               drug_name AS MedicineName,
+                               morning, afternoon, evening, night,
+                               before_food AS BeforeFood, after_food AS AfterFood, days, qty, route, notes
+                        FROM op_prescription_detail
+                        WHERE pr_id IN (
+                            SELECT pr_id FROM op_prescription_master 
+                            WHERE custid = @custid
+                              AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                              AND COALESCE(isdeleted, false) = false
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        AND COALESCE(isdeleted, false) = false
+                        ORDER BY sno", ipQueryParams)).ToList();
+                }
 
-
+                int ipPresSeq = 1;
+                foreach (var p in casesheet.PrescriptionList)
+                {
+                    p.Sno = ipPresSeq++;
+                }
 
                 string invSql = @"
-
                     SELECT sno, test_name AS TestName, test_category AS TestCategory, quantity
-
                     FROM op_investigation_detail
-
                     WHERE inv_id IN (
-
                         SELECT inv_id FROM op_investigation_master 
-
-                        WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false
-
+                        WHERE (
+                            (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                            OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+                            OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                            OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                        )
+                        AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                        AND COALESCE(isdeleted, false) = false
                     )
-
-                    AND isdeleted = false
-
-                    ORDER BY sno";
+                    AND COALESCE(isdeleted, false) = false
+                    ORDER BY inv_id, sno";
 
                 casesheet.InvestigationList = (await db.QueryAsync<CasesheetInvestigationItemDto>(
+                    invSql, ipQueryParams)).ToList();
 
-                    invSql, new { sheet_id = sheet_id.ToString(), tenant_code })).ToList();
+                if (casesheet.InvestigationList.Count == 0 && casesheet.custid > 0)
+                {
+                    casesheet.InvestigationList = (await db.QueryAsync<CasesheetInvestigationItemDto>(@"
+                        SELECT sno, test_name AS TestName, test_category AS TestCategory, quantity
+                        FROM op_investigation_detail
+                        WHERE inv_id IN (
+                            SELECT inv_id FROM op_investigation_master 
+                            WHERE custid = @custid
+                              AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                              AND COALESCE(isdeleted, false) = false
+                            ORDER BY created_at DESC LIMIT 1
+                        )
+                        AND COALESCE(isdeleted, false) = false
+                        ORDER BY sno", ipQueryParams)).ToList();
+                }
 
 
 
@@ -9975,49 +10082,63 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
                 // Fetch Prescription Remarks
-
                 var presMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-
                     @"SELECT pr_code AS PrNo, pr_code AS PrescriptionNo, topremarks, bottonremarks FROM op_prescription_master 
+                      WHERE (
+                          (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                          OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+                          OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                          OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                      )
+                      AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                      AND COALESCE(isdeleted, false) = false 
+                      ORDER BY created_at DESC LIMIT 1", ipQueryParams);
 
-                      WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false 
-
-                      ORDER BY created_at DESC LIMIT 1", new { sheet_id = sheet_id.ToString(), tenant_code });
-
-                if (presMst != null)
-
+                if (presMst == null && casesheet.custid > 0)
                 {
-
-                    casesheet.PrNo = presMst.PrNo;
-
-                    casesheet.PrescriptionNo = presMst.PrescriptionNo;
-
-                    casesheet.topremarks = presMst.topremarks;
-
-                    casesheet.bottonremarks = presMst.bottonremarks;
-
+                    presMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
+                        @"SELECT pr_code AS PrNo, pr_code AS PrescriptionNo, topremarks, bottonremarks FROM op_prescription_master 
+                          WHERE custid = @custid
+                            AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                            AND COALESCE(isdeleted, false) = false 
+                          ORDER BY created_at DESC LIMIT 1", ipQueryParams);
                 }
 
-
+                if (presMst != null)
+                {
+                    casesheet.PrNo = presMst.PrNo;
+                    casesheet.PrescriptionNo = presMst.PrescriptionNo;
+                    casesheet.topremarks = presMst.topremarks;
+                    casesheet.bottonremarks = presMst.bottonremarks;
+                }
 
                 // Fetch Investigation Remarks/Urgency
-
                 var invMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
-
                     @"SELECT notes AS InvestigationNotes, is_urgent AS IsInvestigationUrgent FROM op_investigation_master 
+                      WHERE (
+                          (@sheet_id IS NOT NULL AND sheet_id = CAST(@sheet_id AS uuid))
+                          OR (@ip_id IS NOT NULL AND ip_id = CAST(@ip_id AS uuid))
+                          OR (@op_id IS NOT NULL AND op_id = CAST(@op_id AS uuid))
+                          OR (@custid > 0 AND custid = @custid AND @visit_date IS NOT NULL AND visit_date::date = CAST(@visit_date AS date))
+                      )
+                      AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                      AND COALESCE(isdeleted, false) = false 
+                      LIMIT 1", ipQueryParams);
 
-                      WHERE sheet_id = CAST(@sheet_id AS uuid) AND tenant_code = @tenant_code AND isdeleted = false 
-
-                      LIMIT 1", new { sheet_id = sheet_id.ToString(), tenant_code });
+                if (invMst == null && casesheet.custid > 0)
+                {
+                    invMst = await db.QueryFirstOrDefaultAsync<CasesheetReportPdfModel>(
+                        @"SELECT notes AS InvestigationNotes, is_urgent AS IsInvestigationUrgent FROM op_investigation_master 
+                          WHERE custid = @custid
+                            AND (tenant_code = @tenant_code OR @tenant_code IS NULL)
+                            AND COALESCE(isdeleted, false) = false 
+                          LIMIT 1", ipQueryParams);
+                }
 
                 if (invMst != null)
-
                 {
-
                     casesheet.InvestigationNotes = invMst.InvestigationNotes;
-
                     casesheet.IsInvestigationUrgent = invMst.IsInvestigationUrgent;
-
                 }
 
                 byte[]? logoImage = null;
@@ -10306,7 +10427,7 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
                     string mainSql = @"
                         SELECT 
-                            cs.sheet_id, cs.op_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
+                            cs.sheet_id, cs.op_id, cs.ip_id, cs.custid, cs.dcode, cs.visit_date::timestamp AS CaseSheetVisitDate,
                             cs.chief_complaint AS ChiefComplaint, cs.symptoms AS Symptoms, cs.examination AS Examination, 
                             cs.advise AS Advise, cs.notes AS Notes, cs.followup_date::timestamp AS FollowupDate, cs.followup_notes AS FollowupNotes,
                             c.name AS PatientName, c.gender, c.mobile AS MobileNo,
@@ -16092,32 +16213,75 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
 
                 // Query Sales Details
-
+                // Query Sales Details
                 string sqlDetails = @"
-
                     SELECT 
-
                         sd.salesdetailcode, sd.salescode, sd.itemcode, sd.quantity, sd.freequantity, 
-
-                        sd.uomcode, sd.rate, sd.discountpercentage, sd.discountamount, sd.taxpercentage, 
-
-                        sd.taxamount, sd.amount, sd.totalamount, sd.batchno, sd.manufacturingdate, 
-
+                        sd.uomcode, sd.rate, sd.discountpercentage, sd.discountamount, 
+                        COALESCE(
+                            NULLIF(im.gstpercentage, 0),
+                            NULLIF(sd.taxpercentage, 0),
+                            (
+                                SELECT pd.taxpercentage 
+                                FROM public.purchase_detail pd 
+                                WHERE pd.itemcode = sd.itemcode 
+                                  AND (pd.batchno = sd.batchno OR sd.batchno IS NULL OR sd.batchno = '')
+                                  AND COALESCE(pd.taxpercentage, 0) > 0 
+                                  AND (pd.tenantcode = sd.tenantcode OR pd.tenantcode IS NULL)
+                                ORDER BY pd.purchasedetailcode DESC 
+                                LIMIT 1
+                            ),
+                            (
+                                SELECT pd.taxpercentage 
+                                FROM public.purchase_detail pd 
+                                WHERE pd.itemcode = sd.itemcode 
+                                  AND COALESCE(pd.taxpercentage, 0) > 0 
+                                  AND (pd.tenantcode = sd.tenantcode OR pd.tenantcode IS NULL)
+                                ORDER BY pd.purchasedetailcode DESC 
+                                LIMIT 1
+                            ),
+                            0
+                        ) AS taxpercentage,
+                        sd.taxamount, 
+                        COALESCE(sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) AS amount, 
+                        COALESCE(sd.totalamount, sd.amount, (sd.rate * sd.quantity) - COALESCE(sd.discountamount, 0), 0) AS totalamount, 
+                        sd.batchno, sd.manufacturingdate, 
                         sd.expirydate, sd.warehousecode, sd.tenantcode, sd.soldqty, sd.returnedqty,
-
                         im.itemname
+                    FROM public.sales_detail sd
+                    LEFT JOIN public.item_master im 
+                           ON im.itemcode = sd.itemcode 
+                          AND (im.tenantcode = sd.tenantcode OR im.tenantcode IS NULL)
+                    WHERE sd.salescode = @SalesCode AND sd.tenantcode = @tenantCode
+                    ORDER BY sd.salesdetailcode ASC";
 
-                    FROM sales_detail sd
+                var details = (await db.QueryAsync<SalesDetailModel>(sqlDetails, new { SalesCode = master.salescode, tenantCode })).ToList();
 
-                    LEFT JOIN item_master im ON sd.itemcode = im.itemcode
+                foreach (var item in details)
+                {
+                    if ((item.taxpercentage ?? 0) > 0)
+                    {
+                        decimal lineTotal = (item.totalamount ?? 0) > 0 
+                            ? item.totalamount.GetValueOrDefault() 
+                            : ((item.amount ?? 0) > 0 
+                                ? item.amount.GetValueOrDefault() 
+                                : ((item.rate ?? 0) * (item.quantity ?? 1) - (item.discountamount ?? 0)));
 
-                    WHERE sd.salescode = @SalesCode AND sd.tenantcode = @tenantCode";
+                        decimal taxable = Math.Round(lineTotal / (1m + (item.taxpercentage.GetValueOrDefault() / 100m)), 2);
+                        item.taxamount = lineTotal - taxable;
+                    }
+                    else
+                    {
+                        item.taxamount = 0;
+                    }
+                }
 
+                if (response.BillDetails != null && (response.BillDetails.taxamount ?? 0) <= 0 && details.Any(i => (i.taxamount ?? 0) > 0))
+                {
+                    response.BillDetails.taxamount = details.Sum(i => i.taxamount ?? 0);
+                }
 
-
-                var details = await db.QueryAsync<SalesDetailModel>(sqlDetails, new { SalesCode = master.salescode, tenantCode });
-
-                response.Items = details.ToList();
+                response.Items = details;
 
                 // Resolve GST Number from warehouse_master -> gstno
                 try

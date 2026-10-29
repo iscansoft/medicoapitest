@@ -2341,6 +2341,7 @@ namespace medico_backend.Model
         public string? VisitNo { get; set; } // OP No or IP No
 
         public DateTime? VisitDate { get; set; } // Visit date or Admission date
+        public DateTime? CaseSheetVisitDate { get; set; }
 
         public string? BedNo { get; set; } // For IP
 
@@ -2428,7 +2429,11 @@ namespace medico_backend.Model
 
 
 
+        public Guid? sheet_id { get; set; }
+
         public Guid? op_id { get; set; }
+
+        public Guid? ip_id { get; set; }
 
         public decimal custid { get; set; }
 
