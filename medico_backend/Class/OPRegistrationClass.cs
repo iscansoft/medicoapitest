@@ -1256,6 +1256,7 @@ AND b.tenant_code = @tenant_code
             try
             {
                 using IDbConnection db = new NpgsqlConnection(_db_conn);
+                db.Open();
 
                 if (req.dcode == 0)
                     return "dcode is required";
@@ -1268,93 +1269,86 @@ AND b.tenant_code = @tenant_code
 
                 if (!slotRequired)
                 {
-                    // NO-SLOT MODE — token restarts at 1 daily, counted only among dressing rows
-                    int dressingSeq = await db.ExecuteScalarAsync<int>(
-                        @"SELECT COALESCE(MAX(
-                      NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
-                  ), 0) + 1
-                  FROM op_registration
-                  WHERE tenant_code = @tenant_code AND isdeleted = false
-                  AND is_dressing = true
-                  AND visit_date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date",
-                        new { dcode = req.dcode, tenant_code });
+                    var visitDate = DateOnly.FromDateTime(
+                        TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata")));
 
-                    string dressingToken = $"D{dressingSeq}";
-
-                    var noSlotData = new OpRegistrationModel
+                    using var tx = db.BeginTransaction();
+                    try
                     {
-                        op_id = Guid.NewGuid(),
-                        op_no = await GenerateOpNo(db, tenant_code),
-                        custid = req.custid,
-                        dcode = req.dcode,
-                        department_code = req.department_code,
-                        slot_detail_id = null,
-                        visit_type = "DRESSING",
-                        reg_type = "WALKIN",
-                        visit_date = DateOnly.FromDateTime(DateTime.UtcNow),
-                        token_no = dressingToken,   // "D1", "D2", ...
-                        queue_no = dressingSeq,     // plain int, unchanged
-                        is_dressing = true,
-                        visit_status = "WAITING",
-                        notes = req.notes,
-                        is_direct_walkin = true,
-                        tenant_code = tenant_code,
-                        usercode = req.usercode,
-                        walkin_time=req.walkin_time,
-                        isdeleted = false,
-                        created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
-                        updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
-                    };
+                        var (dressingToken, dressingSeq) = await GenerateNextTokenNo(
+                            db, tx, req.dcode, null, "WALKIN",
+                            visitDate, tenant_code, is_dressing: true);
 
-                    await db.ExecuteAsync(@"
-                INSERT INTO op_registration
-                (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
-                 reg_type, visit_date, token_no, queue_no, is_dressing,
-                 visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
-                VALUES
-                (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
-                 @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-                 @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
-                        new
+                        var noSlotData = new OpRegistrationModel
                         {
-                            noSlotData.op_id,
-                            noSlotData.op_no,
-                            noSlotData.custid,
-                            noSlotData.dcode,
-                            noSlotData.department_code,
-                            noSlotData.slot_detail_id,
-                            noSlotData.visit_type,
-                            noSlotData.reg_type,
-                            visit_date = noSlotData.visit_date.ToDateTime(TimeOnly.MinValue),
-                            noSlotData.token_no,
-                            noSlotData.queue_no,
-                            noSlotData.is_dressing,
-                            noSlotData.visit_status,
-                            noSlotData.notes,
-                            noSlotData.is_direct_walkin,
-                            noSlotData.tenant_code,
-                            noSlotData.usercode,
-                            noSlotData.walkin_time,
-                            noSlotData.isdeleted,
-                            noSlotData.created_at,
-                            noSlotData.updated_at
-                        });
-                    //var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                            op_id = Guid.NewGuid(),
+                            op_no = await GenerateOpNo(db, tenant_code),
+                            custid = req.custid,
+                            dcode = req.dcode,
+                            department_code = req.department_code,
+                            slot_detail_id = null,
+                            visit_type = "DRESSING",
+                            reg_type = "WALKIN",
+                            visit_date = visitDate,
+                            token_no = dressingToken,   // "D1", "D2", ...
+                            queue_no = dressingSeq,     // plain int
+                            is_dressing = true,
+                            visit_status = "WAITING",
+                            notes = req.notes,
+                            is_direct_walkin = true,
+                            tenant_code = tenant_code,
+                            usercode = req.usercode,
+                            walkin_time = req.walkin_time,
+                            isdeleted = false,
+                            created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+                            updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
+                        };
 
-                    //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                    //{
-                    //    op_id = noSlotData.op_id.ToString(),
-                    //    custid = noSlotData.custid,
-                    //    tcode = noSlotTcode,
-                    //    rate = noSlotRate,
-                    //    amount = noSlotAmount,
-                    //    quantity = 1
-                    //}, tenant_code);
+                        await db.ExecuteAsync(@"
+                    INSERT INTO op_registration
+                    (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
+                     reg_type, visit_date, token_no, queue_no, is_dressing,
+                     visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
+                    VALUES
+                    (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
+                     @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
+                     @visit_status, @notes, @is_direct_walkin, @tenant_code,@usercode, @walkin_time,@isdeleted, @created_at, @updated_at)",
+                            new
+                            {
+                                noSlotData.op_id,
+                                noSlotData.op_no,
+                                noSlotData.custid,
+                                noSlotData.dcode,
+                                noSlotData.department_code,
+                                noSlotData.slot_detail_id,
+                                noSlotData.visit_type,
+                                noSlotData.reg_type,
+                                visit_date = noSlotData.visit_date.ToDateTime(TimeOnly.MinValue),
+                                noSlotData.token_no,
+                                noSlotData.queue_no,
+                                noSlotData.is_dressing,
+                                noSlotData.visit_status,
+                                noSlotData.notes,
+                                noSlotData.is_direct_walkin,
+                                noSlotData.tenant_code,
+                                noSlotData.usercode,
+                                noSlotData.walkin_time,
+                                noSlotData.isdeleted,
+                                noSlotData.created_at,
+                                noSlotData.updated_at
+                            }, tx);
 
-                    return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}";
+                        tx.Commit();
+                        return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}";
+                    }
+                    catch
+                    {
+                        tx.Rollback();
+                        throw;
+                    }
                 }
 
-                // SLOT-REQUIRED MODE — same slot validation as DirectWalkinRegistration
+                // SLOT-REQUIRED MODE
                 var slot = await db.QueryFirstOrDefaultAsync<DoctorAppointmentSlotDetailsModel>(
                     @"SELECT *
               FROM doctor_appointment_slot_details
@@ -1385,146 +1379,157 @@ AND b.tenant_code = @tenant_code
                 if (slot.booked_count >= slot.max_patients)
                     return "Slot capacity reached";
 
-                int slotSeq = slot.booked_count + 1;
-                string slotToken = $"D{slotSeq}";
-
-                var data = new OpRegistrationModel
+                using var slotTx = db.BeginTransaction();
+                try
                 {
-                    op_id = Guid.NewGuid(),
-                    op_no = await GenerateOpNo(db, tenant_code),
-                    custid = req.custid,
-                    dcode = req.dcode,
-                    department_code = req.department_code,
-                    slot_detail_id = slot.slot_detail_id,
-                    visit_type = "DRESSING",
-                    reg_type = "WALKIN",
-                    visit_date = slot.appointment_date,
-                    token_no = slotToken,   // "D1", "D2", ...
-                    queue_no = slotSeq,     // plain int, unchanged
-                    is_dressing = true,
-                    visit_status = "WAITING",
-                    notes = req.notes,
-                    is_direct_walkin = true,
-                    tenant_code = tenant_code,
-                    usercode = req.usercode,
-                    walkin_time=req.walkin_time,
-                    isdeleted = false,
-                    created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
-                    updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
-                };
+                    var (slotToken, slotSeq) = await GenerateNextTokenNo(
+                        db, slotTx, req.dcode, slot.slot_detail_id, "WALKIN",
+                        slot.appointment_date, tenant_code, is_dressing: true);
 
-                await db.ExecuteAsync(@"
-            INSERT INTO op_registration
-            (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
-             reg_type, visit_date, token_no, queue_no, is_dressing,
-             visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
-            VALUES
-            (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
-             @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
-             @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
-                    new
+                    var data = new OpRegistrationModel
                     {
-                        data.op_id,
-                        data.op_no,
-                        data.custid,
-                        data.dcode,
-                        data.department_code,
-                        data.slot_detail_id,
-                        data.visit_type,
-                        data.reg_type,
-                        visit_date = data.visit_date.ToDateTime(TimeOnly.MinValue),
-                        data.token_no,
-                        data.queue_no,
-                        data.is_dressing,
-                        data.visit_status,
-                        data.notes,
-                        data.is_direct_walkin,
-                        data.tenant_code,
-                        data.usercode,
-                        data.walkin_time,
-                        data.isdeleted,
-                        data.created_at,
-                        data.updated_at
-                    });
+                        op_id = Guid.NewGuid(),
+                        op_no = await GenerateOpNo(db, tenant_code),
+                        custid = req.custid,
+                        dcode = req.dcode,
+                        department_code = req.department_code,
+                        slot_detail_id = slot.slot_detail_id,
+                        visit_type = "DRESSING",
+                        reg_type = "WALKIN",
+                        visit_date = slot.appointment_date,
+                        token_no = slotToken,   // "D1", "D2", ...
+                        queue_no = slotSeq,     // plain int
+                        is_dressing = true,
+                        visit_status = "WAITING",
+                        notes = req.notes,
+                        is_direct_walkin = true,
+                        tenant_code = tenant_code,
+                        usercode = req.usercode,
+                        walkin_time = req.walkin_time,
+                        isdeleted = false,
+                        created_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc),
+                        updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc)
+                    };
 
-                await db.ExecuteAsync(@"
-            UPDATE doctor_appointment_slot_details
-            SET booked_count = booked_count + 1,
-                walkin_count = walkin_count + 1,
-                updated_at = now()
-            WHERE slot_detail_id = @slot_detail_id
-              AND tenant_code = @tenant_code",
-                    new { slot_detail_id = slot.slot_detail_id, tenant_code });
+                    await db.ExecuteAsync(@"
+                INSERT INTO op_registration
+                (op_id, op_no, custid, dcode, department_code, slot_detail_id, visit_type,
+                 reg_type, visit_date, token_no, queue_no, is_dressing,
+                 visit_status, notes, is_direct_walkin, tenant_code, usercode,walkin_time,isdeleted, created_at, updated_at)
+                VALUES
+                (@op_id, @op_no, @custid, @dcode, @department_code, @slot_detail_id, @visit_type,
+                 @reg_type, @visit_date, @token_no, @queue_no, @is_dressing,
+                 @visit_status, @notes, @is_direct_walkin, @tenant_code, @usercode,@walkin_time,@isdeleted, @created_at, @updated_at)",
+                        new
+                        {
+                            data.op_id,
+                            data.op_no,
+                            data.custid,
+                            data.dcode,
+                            data.department_code,
+                            data.slot_detail_id,
+                            data.visit_type,
+                            data.reg_type,
+                            visit_date = data.visit_date.ToDateTime(TimeOnly.MinValue),
+                            data.token_no,
+                            data.queue_no,
+                            data.is_dressing,
+                            data.visit_status,
+                            data.notes,
+                            data.is_direct_walkin,
+                            data.tenant_code,
+                            data.usercode,
+                            data.walkin_time,
+                            data.isdeleted,
+                            data.created_at,
+                            data.updated_at
+                        }, slotTx);
 
-                await db.ExecuteAsync(@"
-            UPDATE doctor_appointment_slot_details
-            SET slot_status = 'FULL'
-            WHERE slot_detail_id = @slot_detail_id
-              AND booked_count >= max_patients
-              AND tenant_code = @tenant_code",
-                    new { slot_detail_id = slot.slot_detail_id, tenant_code });
+                    await db.ExecuteAsync(@"
+                UPDATE doctor_appointment_slot_details
+                SET booked_count = booked_count + 1,
+                    walkin_count = walkin_count + 1,
+                    updated_at = now()
+                WHERE slot_detail_id = @slot_detail_id
+                  AND tenant_code = @tenant_code",
+                        new { slot.slot_detail_id, tenant_code }, slotTx);
 
-                // ✅ NEW — add unbilled dressing charge
-                //var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, "Dressing", tenant_code);
+                    await db.ExecuteAsync(@"
+                UPDATE doctor_appointment_slot_details
+                SET slot_status = 'FULL'
+                WHERE slot_detail_id = @slot_detail_id
+                  AND booked_count >= max_patients
+                  AND tenant_code = @tenant_code",
+                        new { slot.slot_detail_id, tenant_code }, slotTx);
 
-                //await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
-                //{
-                //    op_id = data.op_id.ToString(),
-                //    custid = data.custid,
-                //    tcode = feeTcode,
-                //    rate = feeRate,
-                //    amount = feeAmount,
-                //    quantity = 1
-                //}, tenant_code);
-
-                return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{data.token_no}";
+                    slotTx.Commit();
+                    return $"Success|OpNo:{data.op_no}|OpId:{data.op_id}|Token:{data.token_no}";
+                }
+                catch
+                {
+                    slotTx.Rollback();
+                    throw;
+                }
             }
             catch (Exception ex)
             {
                 return ex.Message;
             }
         }
-        private async Task<(string token_no, int seq)> GenerateNextTokenNo(
-    IDbConnection db, IDbTransaction tx,
-    int dcode, Guid? slot_detail_id, string reg_type,
-    DateOnly visit_date, string tenant_code,      // ✅ visit_date added
-    int? service_id = null)
+        public async Task<List<(string token_no, int seq)>> GenerateTokens(
+            IDbConnection db, IDbTransaction tx,
+            int dcode, Guid? slot_detail_id, string reg_type,
+            DateOnly visit_date, string tenant_code,
+            int? service_id = null,
+            bool is_dressing = false,
+            int count = 1)
         {
-            string bookingType = string.IsNullOrWhiteSpace(reg_type) ? "WALKIN" : reg_type.ToUpper();
+            if (count < 1)
+                count = 1;
 
-            string? prefix;
-            bool sharedSequence;
+            // â”€â”€ 3. PREFIX AND SCOPE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            string? prefix = null;
+            bool sharedSequence = false;
             long? groupId = null;
 
-            if (service_id == null)
+            if (is_dressing)
+            {
+                prefix = "D";
+            }
+            else if (service_id == null)
             {
                 var groupRow = await db.QueryFirstOrDefaultAsync(
                     @"SELECT dm.group_id, dm.token_prefix AS doctor_prefix,
-                     dgm.token_type, dgm.token_prefix AS group_prefix
-              FROM   doctor_master dm
-              LEFT JOIN doctor_group_master dgm
-                     ON dgm.group_id     = dm.group_id
-                    AND dgm.tenant_code  = dm.tenant_code
-                    AND dgm.is_deleted   = false
-                    AND dgm.is_active    = true
-              WHERE  dm.dcode       = @dcode
-              AND    dm.tenant_code = @tenant_code
-              AND    dm.deleted     = false",
+                             dgm.token_type, dgm.token_prefix AS group_prefix
+                      FROM   doctor_master dm
+                      LEFT JOIN doctor_group_master dgm
+                             ON dgm.group_id     = dm.group_id
+                            AND dgm.tenant_code  = dm.tenant_code
+                            AND dgm.is_deleted   = false
+                            AND dgm.is_active    = true
+                      WHERE  dm.dcode       = @dcode
+                      AND    dm.tenant_code = @tenant_code
+                      AND    dm.deleted     = false",
                     new { dcode, tenant_code }, tx);
 
                 groupId = groupRow?.group_id;
                 string tokenType = (string)(groupRow?.token_type ?? "DOCTOR");
-                prefix = (groupId.HasValue && tokenType == "GROUP")
-                    ? (string?)groupRow?.group_prefix
-                    : (string?)groupRow?.doctor_prefix;
-
-                sharedSequence = groupId.HasValue && tokenType == "GROUP";
+                if (groupId.HasValue && tokenType == "GROUP")
+                {
+                    prefix = (string?)groupRow?.group_prefix;
+                    sharedSequence = true;
+                }
+                else
+                {
+                    prefix = (string?)groupRow?.doctor_prefix;
+                    sharedSequence = false;
+                }
             }
             else
             {
                 var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
                     @"SELECT * FROM service_type_master
-              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+                      WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
                     new { service_id, tenant_code }, tx);
 
                 if (svc == null)
@@ -1534,151 +1539,267 @@ AND b.tenant_code = @tenant_code
                 sharedSequence = svc.scope != "DOCTOR";
             }
 
-            int seq;
+            string FormatToken(string? pfx, int s) =>
+                string.IsNullOrWhiteSpace(pfx) ? s.ToString() : $"{pfx}{s}";
 
-            if (slot_detail_id.HasValue && slot_detail_id != Guid.Empty)
+            // â”€â”€ 4. MODE A: WITH SLOT (slot_detail_id is present) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            if (slot_detail_id.HasValue && slot_detail_id.Value != Guid.Empty)
             {
-                // ── SLOT MODE ─────────────────────────────── (unchanged — date lives on the slot row)
-                string lockKey = $"SLOT:{tenant_code}:{slot_detail_id}";
-                await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))",
-                    new { lockKey }, tx);
+                // Step 1: Lock slot
+                string slotLockKey = $"SLOT:{tenant_code}:{slot_detail_id.Value}";
+                await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@slotLockKey))",
+                    new { slotLockKey }, tx);
 
-                string sql = @"SELECT online_token_start, online_token_end, online_count,
-                               walkin_token_start, walkin_token_end, walkin_count
-                        FROM   doctor_appointment_slot_details
-                        WHERE  slot_detail_id = @slot_detail_id
-                        AND    tenant_code    = @tenant_code
-                        FOR UPDATE";
+                var slotRow = await db.QueryFirstOrDefaultAsync(
+                    @"SELECT slot_detail_id, max_patients, max_walkin, max_online,
+                             booked_count, walkin_count, online_count, slot_status,
+                             online_token_start, online_token_end,
+                             walkin_token_start, walkin_token_end
+                      FROM   doctor_appointment_slot_details
+                      WHERE  slot_detail_id = @slot_detail_id
+                      AND    tenant_code    = @tenant_code
+                      FOR UPDATE",
+                    new { slot_detail_id = slot_detail_id.Value, tenant_code }, tx);
 
-                var row = await db.QueryFirstOrDefaultAsync(
-                    sql, new { slot_detail_id, tenant_code }, tx);
-
-                if (row == null)
+                if (slotRow == null)
                     throw new Exception("Slot not found while generating token");
 
-                int start, end, used;
+                if (slotRow.slot_status == "CANCELLED" || slotRow.slot_status == "CLOSED")
+                    throw new Exception($"Slot is {slotRow.slot_status}");
+
+                if (is_dressing)
+                {
+                    // Dressing with a slot: ignore ranges.
+                    // seq = max(count of dressing rows in the slot, highest D-number) + 1, so D1, D2, D3... per slot.
+                    var dressingStats = await db.QueryFirstOrDefaultAsync(
+                        @"SELECT COUNT(*)::int AS issued_count,
+                                 COALESCE(MAX(NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int), 0) AS max_num
+                          FROM   op_registration
+                          WHERE  slot_detail_id = @slot_detail_id
+                          AND    tenant_code    = @tenant_code
+                          AND    is_dressing    = true",
+                        new { slot_detail_id = slot_detail_id.Value, tenant_code }, tx);
+
+                    int countDressing = dressingStats?.issued_count ?? 0;
+                    int highestD = dressingStats?.max_num ?? 0;
+                    int firstD = Math.Max(countDressing, highestD) + 1;
+
+                    var dressingResults = new List<(string token_no, int seq)>();
+                    for (int i = 0; i < count; i++)
+                    {
+                        int curSeq = firstD + i;
+                        dressingResults.Add(($"D{curSeq}", curSeq));
+                    }
+                    return dressingResults;
+                }
+
+                // Step 2: Pick the range for reg_type
+                string bookingType = (reg_type?.Trim().ToUpper() == "WALKIN") ? "WALKIN" : "ONLINE";
+                int rangeStart;
+                int rangeEnd;
 
                 if (bookingType == "WALKIN")
                 {
-                    if (row.walkin_token_start == null || row.walkin_token_end == null)
+                    if (slotRow.walkin_token_start == null || slotRow.walkin_token_end == null)
                         throw new Exception("Walk-in token range not configured on this slot");
-                    start = (int)row.walkin_token_start;
-                    end = (int)row.walkin_token_end;
-                    used = (int)row.walkin_count;
+
+                    rangeStart = (int)slotRow.walkin_token_start;
+                    rangeEnd = (int)slotRow.walkin_token_end;
                 }
                 else
                 {
-                    if (row.online_token_start == null || row.online_token_end == null)
+                    if (slotRow.online_token_start == null || slotRow.online_token_end == null)
                         throw new Exception("Online token range not configured on this slot");
-                    start = (int)row.online_token_start;
-                    end = (int)row.online_token_end;
-                    used = (int)row.online_count;
+
+                    rangeStart = (int)slotRow.online_token_start;
+                    rangeEnd = (int)slotRow.online_token_end;
                 }
 
-                seq = start + used;
-                if (seq > end)
-                    throw new Exception($"{bookingType} token quota exhausted for this slot");
+                // Step 3: Count tokens EVER issued in that range for this slot
+                var stats = await db.QueryFirstOrDefaultAsync(
+                    @"SELECT COUNT(*)::int AS issued_count,
+                             MAX(u.q) AS highest_num
+                      FROM (
+                          SELECT COALESCE(queue_no, NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int) AS q
+                          FROM   op_registration
+                          WHERE  slot_detail_id = @slot_detail_id
+                          AND    tenant_code    = @tenant_code
+                          AND    COALESCE(is_dressing, false) = false
+                          UNION
+                          SELECT COALESCE(op_queue_no, NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int, NULLIF(token_no, 0)) AS q
+                          FROM   appointment_booking
+                          WHERE  slot_detail_id = @slot_detail_id
+                          AND    tenant_code    = @tenant_code
+                      ) u
+                      WHERE u.q IS NOT NULL
+                        AND u.q >= @rangeStart
+                        AND u.q <= @rangeEnd",
+                    new { slot_detail_id = slot_detail_id.Value, tenant_code, rangeStart, rangeEnd }, tx);
 
-                string bumpSql = bookingType == "WALKIN"
-                    ? @"UPDATE doctor_appointment_slot_details
-                SET walkin_count = walkin_count + 1
-                WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code"
-                    : @"UPDATE doctor_appointment_slot_details
-                SET online_count = online_count + 1
-                WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code";
+                int issuedCount = stats?.issued_count ?? 0;
+                int highestUsedNumber = (stats?.highest_num != null) ? (int)stats.highest_num : (rangeStart - 1);
 
-                await db.ExecuteAsync(bumpSql, new { slot_detail_id, tenant_code }, tx);
+                // Step 4: first = max(range_start + issued_count, highest_used_number + 1)
+                int first = Math.Max(rangeStart + issuedCount, highestUsedNumber + 1);
+
+                // Step 5: If first + count - 1 > range_end, raise token quota exhausted
+                if (first + count - 1 > rangeEnd)
+                    throw new Exception("Token quota exhausted for this slot");
+
+                // Step 6: Bump online_count or walkin_count by count
+                if (bookingType == "WALKIN")
+                {
+                    await db.ExecuteAsync(
+                        @"UPDATE doctor_appointment_slot_details
+                          SET walkin_count = walkin_count + @count
+                          WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
+                        new { count, slot_detail_id = slot_detail_id.Value, tenant_code }, tx);
+                }
+                else
+                {
+                    await db.ExecuteAsync(
+                        @"UPDATE doctor_appointment_slot_details
+                          SET online_count = online_count + @count
+                          WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
+                        new { count, slot_detail_id = slot_detail_id.Value, tenant_code }, tx);
+                }
+
+                // Step 7: Return first .. first + count - 1
+                var slotResults = new List<(string token_no, int seq)>();
+                for (int i = 0; i < count; i++)
+                {
+                    int curSeq = first + i;
+                    slotResults.Add((FormatToken(prefix, curSeq), curSeq));
+                }
+                return slotResults;
+            }
+
+            // â”€â”€ 5. MODE B: WITHOUT SLOT (slot_detail_id is null) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+            DateTime visitDateParam = visit_date.ToDateTime(TimeOnly.MinValue);
+            string dateStr = visit_date.ToString("yyyyMMdd");
+            string lockKey;
+            string sql;
+            object param;
+
+            if (is_dressing)
+            {
+                lockKey = $"DRESSING:{tenant_code}:{dateStr}";
+                sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
+                        FROM (
+                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   op_registration
+                            WHERE  tenant_code = @tenant_code
+                            AND    isdeleted   = false
+                            AND    is_dressing = true
+                            AND    visit_date  = @visit_date
+                        ) t";
+                param = new { tenant_code, visit_date = visitDateParam };
+            }
+            else if (service_id == null && sharedSequence)
+            {
+                lockKey = $"GROUP:{tenant_code}:{groupId}:{dateStr}";
+                sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
+                        FROM (
+                            SELECT NULLIF(regexp_replace(o.token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   op_registration o
+                            JOIN   doctor_master d
+                                   ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
+                            WHERE  d.group_id    = @groupId
+                            AND    o.tenant_code = @tenant_code
+                            AND    o.isdeleted   = false
+                            AND    COALESCE(o.is_dressing, false) = false
+                            AND    o.visit_date  = @visit_date
+                            UNION ALL
+                            SELECT NULLIF(regexp_replace(ab.op_token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   appointment_booking ab
+                            JOIN   doctor_master d
+                                   ON d.dcode = ab.dcode AND d.tenant_code = ab.tenant_code
+                            WHERE  d.group_id        = @groupId
+                            AND    ab.tenant_code    = @tenant_code
+                            AND    ab.isdeleted      = false
+                            AND    ab.booking_status != 'CANCELLED'
+                            AND    ab.appointment_date = @visit_date
+                        ) t";
+                param = new { groupId, tenant_code, visit_date = visitDateParam };
+            }
+            else if (service_id == null)
+            {
+                lockKey = $"DCODE:{tenant_code}:{dcode}:{dateStr}";
+                sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
+                        FROM (
+                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   op_registration
+                            WHERE  dcode        = @dcode
+                            AND    tenant_code  = @tenant_code
+                            AND    isdeleted    = false
+                            AND    COALESCE(is_dressing, false) = false
+                            AND    visit_date   = @visit_date
+                            UNION ALL
+                            SELECT NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   appointment_booking
+                            WHERE  dcode             = @dcode
+                            AND    tenant_code       = @tenant_code
+                            AND    isdeleted         = false
+                            AND    booking_status   != 'CANCELLED'
+                            AND    appointment_date  = @visit_date
+                        ) t";
+                param = new { dcode, tenant_code, visit_date = visitDateParam };
+            }
+            else if (sharedSequence)
+            {
+                lockKey = $"SVC:{tenant_code}:{service_id}:{dateStr}";
+                sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
+                        FROM (
+                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   op_registration
+                            WHERE  service_id  = @service_id
+                            AND    tenant_code = @tenant_code
+                            AND    isdeleted   = false
+                            AND    visit_date  = @visit_date
+                        ) t";
+                param = new { service_id, tenant_code, visit_date = visitDateParam };
             }
             else
             {
-                // ── NO-SLOT MODE — doctor/group/service-wise, restarts per visit_date ──
-                // ✅ FIX: use the passed visit_date, not CURRENT_TIMESTAMP, so
-                // future/back-dated registrations count against the right day
-                // instead of colliding with (or missing) today's tokens.
-                DateTime visitDateParam = visit_date.ToDateTime(TimeOnly.MinValue);
-
-                string lockKey;
-                string sql;
-                object param;
-
-                if (service_id == null && sharedSequence)
-                {
-                    // GROUP MODE
-                    lockKey = $"GROUP:{tenant_code}:{groupId}:{visit_date:yyyyMMdd}";
-
-                    sql = @"SELECT COALESCE(MAX(
-                        NULLIF(regexp_replace(o.token_no, '\D', '', 'g'), '')::int
-                    ), 0) + 1
-                    FROM   op_registration o
-                    JOIN   doctor_master d
-                           ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
-                    WHERE  d.group_id    = @groupId
-                    AND    o.tenant_code = @tenant_code
-                    AND    o.isdeleted   = false
-                    AND    COALESCE(o.is_dressing, false) = false
-                    AND    o.visit_date  = @visit_date";
-
-                    param = new { groupId, tenant_code, visit_date = visitDateParam };
-                }
-                else if (service_id == null)
-                {
-                    // INDIVIDUAL MODE
-                    lockKey = $"DCODE:{tenant_code}:{dcode}:{visit_date:yyyyMMdd}";
-
-                    sql = @"SELECT COALESCE(MAX(
-                        NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
-                    ), 0) + 1
-                    FROM   op_registration
-                    WHERE  dcode        = @dcode
-                    AND    tenant_code  = @tenant_code
-                    AND    isdeleted    = false
-                    AND    COALESCE(is_dressing, false) = false
-                    AND    visit_date   = @visit_date";
-
-                    param = new { dcode, tenant_code, visit_date = visitDateParam };
-                }
-                else if (sharedSequence)
-                {
-                    // TENANT-scope service
-                    lockKey = $"SVC:{tenant_code}:{service_id}:{visit_date:yyyyMMdd}";
-
-                    sql = @"SELECT COALESCE(MAX(
-                        NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
-                    ), 0) + 1
-                    FROM   op_registration
-                    WHERE  service_id  = @service_id
-                    AND    tenant_code = @tenant_code
-                    AND    isdeleted   = false
-                    AND    visit_date  = @visit_date";
-
-                    param = new { service_id, tenant_code, visit_date = visitDateParam };
-                }
-                else
-                {
-                    // DOCTOR-scope service
-                    lockKey = $"SVC:{tenant_code}:{service_id}:{dcode}:{visit_date:yyyyMMdd}";
-
-                    sql = @"SELECT COALESCE(MAX(
-                        NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
-                    ), 0) + 1
-                    FROM   op_registration
-                    WHERE  service_id  = @service_id
-                    AND    dcode       = @dcode
-                    AND    tenant_code = @tenant_code
-                    AND    isdeleted   = false
-                    AND    visit_date  = @visit_date";
-
-                    param = new { service_id, dcode, tenant_code, visit_date = visitDateParam };
-                }
-
-                await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))",
-                    new { lockKey }, tx);
-
-                seq = await db.ExecuteScalarAsync<int>(sql, param, tx);
+                lockKey = $"SVC:{tenant_code}:{service_id}:{dcode}:{dateStr}";
+                sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
+                        FROM (
+                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                            FROM   op_registration
+                            WHERE  service_id  = @service_id
+                            AND    dcode       = @dcode
+                            AND    tenant_code = @tenant_code
+                            AND    isdeleted   = false
+                            AND    visit_date  = @visit_date
+                        ) t";
+                param = new { service_id, dcode, tenant_code, visit_date = visitDateParam };
             }
 
-            string tokenNo = string.IsNullOrWhiteSpace(prefix) ? seq.ToString() : $"{prefix}{seq}";
-            return (tokenNo, seq);
+            await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))",
+                new { lockKey }, tx);
+
+            int firstNoSlot = await db.ExecuteScalarAsync<int>(sql, param, tx);
+
+            var noSlotResults = new List<(string token_no, int seq)>();
+            for (int i = 0; i < count; i++)
+            {
+                int curSeq = firstNoSlot + i;
+                noSlotResults.Add((FormatToken(prefix, curSeq), curSeq));
+            }
+            return noSlotResults;
+        }
+
+        public async Task<(string token_no, int seq)> GenerateNextTokenNo(
+            IDbConnection db, IDbTransaction tx,
+            int dcode, Guid? slot_detail_id, string reg_type,
+            DateOnly visit_date, string tenant_code,
+            int? service_id = null,
+            bool is_dressing = false)
+        {
+            var tokens = await GenerateTokens(
+                db, tx, dcode, slot_detail_id, reg_type,
+                visit_date, tenant_code, service_id, is_dressing, count: 1);
+            return tokens[0];
         }
         // ─────────────────────────────────────────
         // CANCEL OP FOR A CANCELLED BOOKING
@@ -2171,8 +2292,16 @@ AND b.tenant_code = @tenant_code
         public Task<(string token_no, int seq)> GenerateTokenForBooking(
             IDbConnection db, IDbTransaction tx,
             int dcode, Guid? slot_detail_id, string reg_type,
-            DateOnly visit_date, string tenant_code, int? service_id = null)
-            => GenerateNextTokenNo(db, tx, dcode, slot_detail_id, reg_type, visit_date, tenant_code, service_id);
+            DateOnly visit_date, string tenant_code, int? service_id = null,
+            bool is_dressing = false)
+            => GenerateNextTokenNo(db, tx, dcode, slot_detail_id, reg_type, visit_date, tenant_code, service_id, is_dressing);
+
+        public Task<List<(string token_no, int seq)>> GenerateTokensForBooking(
+            IDbConnection db, IDbTransaction tx,
+            int dcode, Guid? slot_detail_id, string reg_type,
+            DateOnly visit_date, string tenant_code, int? service_id = null,
+            bool is_dressing = false, int count = 1)
+            => GenerateTokens(db, tx, dcode, slot_detail_id, reg_type, visit_date, tenant_code, service_id, is_dressing, count);
 
         // ─────────────────────────────────────────
         // COMBO REGISTRATION (NEW)
@@ -2308,49 +2437,14 @@ AND b.tenant_code = @tenant_code
                 {
                     try
                     {
-                        if (primaryType == "DRESSING")
-                        {
-                            // ✅ FIX — dressing must always token as D1, D2... regardless of
-                            // which service_id represents "Dressing" in service_type_master.
-                            // Mirrors DressingRegistration's own logic exactly, just run
-                            // inside combo's existing transaction/lock for safety.
-                            if (slot != null)
-                            {
-                                seq = slot.booked_count + 1;
-                            }
-                            else
-                            {
-                                string lockKey = $"DRESSING:{tenant_code}:{req.dcode}:{data.visit_date:yyyyMMdd}";
-                                await db.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtext(@lockKey))",
-                                    new { lockKey }, tx);
+                        var (tokenStr, s) = await GenerateNextTokenNo(
+                            db, tx, req.dcode, slot?.slot_detail_id, "WALKIN",
+                            data.visit_date, tenant_code,
+                            service_id: primaryType == "CONSULTATION" ? null : req.primary_service_id,
+                            is_dressing: primaryType == "DRESSING");
 
-                                seq = await db.ExecuteScalarAsync<int>(
-                                    @"SELECT COALESCE(MAX(
-                        NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int
-                    ), 0) + 1
-                    FROM   op_registration
-                    WHERE  tenant_code = @tenant_code AND isdeleted = false
-                    AND    is_dressing = true
-                    AND    visit_date  = @visit_date",
-                                    new
-                                    {
-                                        tenant_code,
-                                        visit_date = data.visit_date.ToDateTime(TimeOnly.MinValue)
-                                    }, tx);
-                            }
-
-                            token = $"D{seq}";
-                        }
-                        else
-                        {
-                            var (tokenStr, s) = await GenerateNextTokenNo(
-                                db, tx, req.dcode, slot?.slot_detail_id, "WALKIN",
-                                data.visit_date, tenant_code,
-                                service_id: primaryType == "CONSULTATION" ? null : req.primary_service_id);
-
-                            token = tokenStr;
-                            seq = s;
-                        }
+                        token = tokenStr;
+                        seq = s;
 
                         data.token_no = token;
                         data.queue_no = seq;
@@ -2731,6 +2825,6 @@ AND b.tenant_code = @tenant_code
           AND LOWER(status_name) = LOWER(@walkin_time) LIMIT 1",
                 new { tenant_code, walkin_time = walkin_time.Trim() });
         }
-
     }
 }
+
