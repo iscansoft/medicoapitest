@@ -14,20 +14,24 @@ namespace medico_backend.Class
     // and its own Add/Get/Update/Delete, so a nurse's "Save"
     // button on one tab only touches that tab's table.
     // Every entry requires ip_id — this module is IP-only.
+    //
+    // entry_date / entry_time: taken from the request when sent,
+    // otherwise server time (Add). On Update they only change
+    // when sent.
     // ─────────────────────────────────────────────────────────
     public class IpBedsideChartClass
     {
         private readonly string _db_conn;
-        private readonly UnbilledChargesClass _unbilledCls;   
-        private readonly ItemMasterClass _itemMasterCls;   
+        private readonly UnbilledChargesClass _unbilledCls;
+        private readonly ItemMasterClass _itemMasterCls;
 
         public IpBedsideChartClass(IConfiguration configuration,
                                    UnbilledChargesClass unbilledCls,
-                                   ItemMasterClass itemMasterCls)      
+                                   ItemMasterClass itemMasterCls)
         {
             _db_conn = configuration.GetConnectionString("conn")!;
             _unbilledCls = unbilledCls;
-            _itemMasterCls = itemMasterCls;                            
+            _itemMasterCls = itemMasterCls;
         }
 
         private async Task<bool> IpExists(IDbConnection db, Guid ip_id, string tenant_code)
@@ -57,6 +61,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 temperature = req.temperature,
                 unit = req.unit,
@@ -98,10 +104,22 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_temperature
-                SET shift = @shift, temperature = @temperature, unit = @unit,
+                SET entry_date = COALESCE(@entry_date::date, entry_date),
+                    entry_time = COALESCE(@entry_time::time, entry_time),
+                    shift = @shift, temperature = @temperature, unit = @unit,
                     remarks = @remarks, updated_at = now()
                 WHERE temp_id = @temp_id AND tenant_code = @tenant_code AND isdeleted = false",
-                new { req.temp_id, req.shift, req.temperature, req.unit, req.remarks, tenant_code });
+                new
+                {
+                    req.temp_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
+                    req.shift,
+                    req.temperature,
+                    req.unit,
+                    req.remarks,
+                    tenant_code
+                });
 
             return rows > 0 ? "Success" : "Record not found";
         }
@@ -149,6 +167,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 io_type = req.io_type.ToUpper(),
                 particulars = req.particulars,
@@ -194,12 +214,16 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_input_output
-                SET shift = @shift, io_type = @io_type, particulars = @particulars,
+                SET entry_date = COALESCE(@entry_date::date, entry_date),
+                    entry_time = COALESCE(@entry_time::time, entry_time),
+                    shift = @shift, io_type = @io_type, particulars = @particulars,
                     quantity = @quantity, unit = @unit, remarks = @remarks, updated_at = now()
                 WHERE io_id = @io_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.io_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
                     req.shift,
                     io_type = req.io_type.ToUpper(),
                     req.particulars,
@@ -263,6 +287,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 service_name = req.service_name,
                 action = req.action,
@@ -309,17 +335,89 @@ namespace medico_backend.Class
 
             return $"Success|Id:{data.service_id}";
         }
+
+        // Updates the note AND re-prices its pending IP_SERVICE charge row.
+        // The charge row is removed and re-inserted through AddOtChargeRow
+        // (same helper AddService uses), so no unbilledcharges column names
+        // are written by hand. Already-billed charges are never touched.
         public async Task<string> UpdateService(UpdateServiceRequest req, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
-            int rows = await db.ExecuteAsync(@"
-                UPDATE ip_nurse_note_service
-                SET shift = @shift, service_name = @service_name, action = @action,
-                    remarks = @remarks, updated_at = now()
-                WHERE service_id = @service_id AND tenant_code = @tenant_code AND isdeleted = false",
-                new { req.service_id, req.shift, req.service_name, req.action, req.remarks, tenant_code });
+            db.Open();
 
-            return rows > 0 ? "Success" : "Record not found";
+            if (string.IsNullOrWhiteSpace(req.service_name))
+                return "service_name is required";
+
+            // 1. Existing nurse note (also gives ip_id / custid for the charge row)
+            var note = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT ip_id, custid FROM ip_nurse_note_service
+                  WHERE service_id = @service_id AND tenant_code = @tenant_code AND isdeleted = false",
+                new { req.service_id, tenant_code });
+            if (note == null) return "Record not found";
+
+            // 2. Block if the charge is already billed
+            bool isBilled = await db.ExecuteScalarAsync<bool>(
+                @"SELECT EXISTS (SELECT 1 FROM unbilledcharges
+                                 WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid
+                                 AND tenant_code = @tenant_code AND billedstatus = true)",
+                new { entryid = req.service_id.ToString(), tenant_code });
+            if (isBilled)
+                return "Service is already billed; fee cannot be changed";
+
+            // 3. Re-resolve rate from test_master for the (possibly new) service name
+            var (tcode, rate) = await _unbilledCls.GetTestMasterRateByName(db, null, req.service_name, tenant_code);
+            if (tcode == null)
+                return $"Service '{req.service_name}' not configured in test master for this tenant";
+
+            decimal qty = req.quantity ?? 1;
+
+            using var tx = db.BeginTransaction();
+            try
+            {
+                // 4. Update the clinical note
+                await db.ExecuteAsync(@"
+                    UPDATE ip_nurse_note_service
+                    SET entry_date = COALESCE(@entry_date::date, entry_date),
+                        entry_time = COALESCE(@entry_time::time, entry_time),
+                        shift = @shift, service_name = @service_name, action = @action,
+                        remarks = @remarks, updated_at = now()
+                    WHERE service_id = @service_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new
+                    {
+                        req.service_id,
+                        entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                        entry_time = req.entry_time?.ToTimeSpan(),
+                        req.shift,
+                        req.service_name,
+                        req.action,
+                        req.remarks,
+                        tenant_code
+                    }, tx);
+
+                // 5. Fee: remove pending charge row, re-insert via the same helper as AddService
+                await db.ExecuteAsync(@"
+                    DELETE FROM unbilledcharges
+                    WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid AND tenant_code = @tenant_code
+                      AND (billedstatus = false OR billedstatus IS NULL)",
+                    new { entryid = req.service_id.ToString(), tenant_code }, tx);
+
+                await _unbilledCls.AddOtChargeRow(
+                    db, tx, op_id: null, ip_id: (Guid)note.ip_id, custid: (decimal)note.custid, tenant_code: tenant_code,
+                    entryType: "IP_SERVICE",
+                    entryId: req.service_id.ToString(),
+                    itemName: req.service_name,
+                    quantity: qty,
+                    rate: rate,
+                    amount: rate * qty);
+
+                tx.Commit();
+                return "Success";
+            }
+            catch
+            {
+                try { tx.Rollback(); } catch { }
+                throw;
+            }
         }
 
         public async Task<List<NurseServiceModel>> GetService(Guid ip_id, string tenant_code)
@@ -364,6 +462,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 medicine_name = req.medicine_name,
                 dose = req.dose,
@@ -447,19 +547,23 @@ namespace medico_backend.Class
 
             return $"Success|Id:{data.med_id}";  // was: return $"Success|Id:{data.med_id}";
         }
-        
+
 
         public async Task<string> UpdateMedicine(UpdateMedicineRequest req, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_medicine
-                SET shift = @shift, medicine_name = @medicine_name, dose = @dose, unit = @unit,
+                SET entry_date = COALESCE(@entry_date::date, entry_date),
+                    entry_time = COALESCE(@entry_time::time, entry_time),
+                    shift = @shift, medicine_name = @medicine_name, dose = @dose, unit = @unit,
                     route = @route,quantity = @quantity, status = @status, remarks = @remarks, updated_at = now()
                 WHERE med_id = @med_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.med_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
                     req.shift,
                     req.medicine_name,
                     req.dose,
@@ -507,6 +611,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 note = req.note,
                 usercode = usercode,
@@ -544,9 +650,19 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_other
-                SET shift = @shift, note = @note, updated_at = now()
+                SET entry_date = COALESCE(@entry_date::date, entry_date),
+                    entry_time = COALESCE(@entry_time::time, entry_time),
+                    shift = @shift, note = @note, updated_at = now()
                 WHERE other_id = @other_id AND tenant_code = @tenant_code AND isdeleted = false",
-                new { req.other_id, req.shift, req.note, tenant_code });
+                new
+                {
+                    req.other_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
+                    req.shift,
+                    req.note,
+                    tenant_code
+                });
 
             return rows > 0 ? "Success" : "Record not found";
         }
@@ -572,7 +688,7 @@ namespace medico_backend.Class
             return rows > 0 ? "Success" : "Record not found";
         }
 
-        
+
         // GET single Temperature record by ip_id + temp_id
         public async Task<NurseTemperatureModel?> GetTemperatureById(Guid ip_id, Guid temp_id, string tenant_code)
         {
@@ -630,6 +746,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 doctor_name = req.doctor_name,
                 specialization = req.specialization,
@@ -677,13 +795,17 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
         UPDATE ip_nurse_note_visiting_doctor
-        SET shift = @shift, doctor_name = @doctor_name, specialization = @specialization,
+        SET entry_date = COALESCE(@entry_date::date, entry_date),
+            entry_time = COALESCE(@entry_time::time, entry_time),
+            shift = @shift, doctor_name = @doctor_name, specialization = @specialization,
             visit_time = @visit_time, diagnosis_notes = @diagnosis_notes, advice = @advice,
             remarks = @remarks, updated_at = now()
         WHERE visit_id = @visit_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.visit_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
                     req.shift,
                     req.doctor_name,
                     req.specialization,
@@ -739,6 +861,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 scheduled_date = req.scheduled_date,
                 scheduled_time = req.scheduled_time,
@@ -788,13 +912,17 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
         UPDATE ip_nurse_note_schedule
-        SET shift = @shift, scheduled_date = @scheduled_date, scheduled_time = @scheduled_time,
+        SET entry_date = COALESCE(@entry_date::date, entry_date),
+            entry_time = COALESCE(@entry_time::time, entry_time),
+            shift = @shift, scheduled_date = @scheduled_date, scheduled_time = @scheduled_time,
             item_type = @item_type, item_name = @item_name, instructions = @instructions,
             status = @status, remarks = @remarks, updated_at = now()
         WHERE schedule_id = @schedule_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.schedule_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
                     req.shift,
                     scheduled_date = req.scheduled_date.ToDateTime(TimeOnly.MinValue),
                     scheduled_time = req.scheduled_time.ToTimeSpan(),
@@ -892,7 +1020,7 @@ namespace medico_backend.Class
             string pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
 
             return (inserted ? "Success|Authorized" : "Success|AuthorizationUpdated") + pharmacyTag;
-        
+
         }
 
         public async Task<NurseNoteAuthorizationModel?> GetNurseNoteAuthorization(Guid ip_id, string tenant_code)
@@ -965,6 +1093,8 @@ namespace medico_backend.Class
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
                 shift = req.shift,
                 reading_type = req.reading_type.ToUpper(),
                 blood_sugar = req.blood_sugar,
@@ -1016,13 +1146,17 @@ namespace medico_backend.Class
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             int rows = await db.ExecuteAsync(@"
         UPDATE ip_nurse_note_diabetic
-        SET shift = @shift, reading_type = @reading_type, blood_sugar = @blood_sugar,
+        SET entry_date = COALESCE(@entry_date::date, entry_date),
+            entry_time = COALESCE(@entry_time::time, entry_time),
+            shift = @shift, reading_type = @reading_type, blood_sugar = @blood_sugar,
             insulin_type = @insulin_type, insulin_dose = @insulin_dose, insulin_unit = @insulin_unit,
             site = @site, remarks = @remarks, updated_at = now()
         WHERE diabetic_id = @diabetic_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
                     req.diabetic_id,
+                    entry_date = req.entry_date?.ToDateTime(TimeOnly.MinValue),
+                    entry_time = req.entry_time?.ToTimeSpan(),
                     req.shift,
                     reading_type = req.reading_type.ToUpper(),
                     req.blood_sugar,

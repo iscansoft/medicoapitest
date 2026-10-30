@@ -232,27 +232,98 @@ namespace medico_backend.Class
         public async Task<string> UpdateSurgeryRequest(UpdateSurgeryRequestRequest req, string tenant_code)
         {
             using IDbConnection db = GetConnection();
-            int rows = await db.ExecuteAsync(@"
-        UPDATE ot_surgery_request
-        SET diagnosis = @diagnosis, procedure_name = @procedure_name, procedure_code = @procedure_code,
-            priority = @priority, surgery_type = @surgery_type, expected_duration_minutes = @expected_duration_minutes,
-            anesthesia_type = @anesthesia_type, notes = @notes, updated_at = now()
-        WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
-                new
-                {
-                    req.request_id,
-                    req.diagnosis,
-                    req.procedure_name,
-                    req.procedure_code,
-                    priority = string.IsNullOrWhiteSpace(req.priority) ? "ELECTIVE" : req.priority.ToUpper(),
-                    surgery_type = string.IsNullOrWhiteSpace(req.surgery_type) ? null : req.surgery_type.ToUpper(),
-                    req.expected_duration_minutes,
-                    req.anesthesia_type,
-                    req.notes,
-                    tenant_code
-                });
+            db.Open();
+            using var tx = db.BeginTransaction();
 
-            return rows > 0 ? "Success" : "Surgery request not found";
+            try
+            {
+                // Existing request (needed for op_id / ip_id / custid when the charge row is re-created)
+                var existing = await db.QueryFirstOrDefaultAsync<OtSurgeryRequestModel>(
+                    @"SELECT * FROM ot_surgery_request
+              WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new { req.request_id, tenant_code }, tx);
+
+                if (existing == null)
+                {
+                    tx.Rollback();
+                    return "Surgery request not found";
+                }
+
+                // If the fee is being changed, make sure it isn't already billed
+                if (req.procedure_fee.HasValue)
+                {
+                    bool alreadyBilled = await db.ExecuteScalarAsync<bool>(
+                        @"SELECT EXISTS (SELECT 1 FROM unbilledcharges
+                                 WHERE entrytype = 'OT_PROCEDURE' AND entryid = @entryid
+                                 AND tenant_code = @tenant_code AND billedstatus = true)",
+                        new { entryid = req.request_id.ToString(), tenant_code }, tx);
+
+                    if (alreadyBilled)
+                    {
+                        tx.Rollback();
+                        return "Procedure fee is already billed and cannot be changed";
+                    }
+                }
+
+                // Clinical fields + procedure_fee (COALESCE keeps the old fee when null is sent)
+                await db.ExecuteAsync(@"
+            UPDATE ot_surgery_request
+            SET diagnosis = @diagnosis, procedure_name = @procedure_name, procedure_code = @procedure_code,
+                priority = @priority, surgery_type = @surgery_type,
+                expected_duration_minutes = @expected_duration_minutes,
+                anesthesia_type = @anesthesia_type, notes = @notes,
+                procedure_fee = COALESCE(@procedure_fee, procedure_fee),
+                updated_at = now()
+            WHERE request_id = @request_id AND tenant_code = @tenant_code AND isdeleted = false",
+                    new
+                    {
+                        req.request_id,
+                        req.diagnosis,
+                        req.procedure_name,
+                        req.procedure_code,
+                        priority = string.IsNullOrWhiteSpace(req.priority) ? "ELECTIVE" : req.priority.ToUpper(),
+                        surgery_type = string.IsNullOrWhiteSpace(req.surgery_type) ? null : req.surgery_type.ToUpper(),
+                        req.expected_duration_minutes,
+                        req.anesthesia_type,
+                        req.notes,
+                        req.procedure_fee,
+                        tenant_code
+                    }, tx);
+
+                // Fee sync: touches ONLY the OT_PROCEDURE row of this request
+                if (req.procedure_fee.HasValue)
+                {
+                    string entryId = req.request_id.ToString();
+
+                    // Remove the pending (not yet billed) charge row, if any
+                    await db.ExecuteAsync(@"
+                DELETE FROM unbilledcharges
+                WHERE entrytype = 'OT_PROCEDURE' AND entryid = @entryid AND tenant_code = @tenant_code
+                  AND (billedstatus = false OR billedstatus IS NULL)",
+                        new { entryid = entryId, tenant_code }, tx);
+
+                    // Re-insert with the new fee, same helper as AddSurgeryRequest
+                    if (req.procedure_fee.Value > 0)
+                    {
+                        await _unbilledCls.AddOtChargeRow(
+                            db, tx, existing.op_id, existing.ip_id, existing.custid, tenant_code,
+                            entryType: "OT_PROCEDURE",
+                            entryId: entryId,
+                            itemName: req.procedure_name,
+                            quantity: 1,
+                            rate: req.procedure_fee,
+                            amount: req.procedure_fee);
+                    }
+                }
+
+                tx.Commit();
+                return "Success";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
+            }
         }
 
         public async Task<string> UpdateSurgeryStatus(UpdateSurgeryStatusRequest req, string tenant_code)
