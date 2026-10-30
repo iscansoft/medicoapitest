@@ -1840,6 +1840,9 @@ namespace medico_backend.Model
 
 
 
+        // Bill Format: "SUMMARY", "DETAILED", "BOTH"
+        public string? BillFormat { get; set; } = "BOTH";
+
         // Summary Section for Sample Report UI
 
         public List<ConsolidatedBillSummaryItem> BillSummary { get; set; } = new List<ConsolidatedBillSummaryItem>();
@@ -2015,6 +2018,9 @@ namespace medico_backend.Model
         public bool? show_header_footer_image { get; set; } = true;
 
         public string? bill_paper_size { get; set; } = "A4";
+
+        // Format selector passed to ReportingServer
+        public string? ip_consolidated_bill_format { get; set; } = "BOTH";
 
         public ConsolidatedBillData? BillData { get; set; }
 
