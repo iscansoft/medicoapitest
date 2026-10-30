@@ -104,6 +104,7 @@ namespace medico_backend.Model
         public string? surgery_type { get; set; }  // e.g. MAJOR / MINOR / DAYCARE / LOCAL
         public string procedure_name { get; set; } = string.Empty;
         public string? procedure_code { get; set; }
+        public decimal? procedure_fee { get; set; }
         public string priority { get; set; } = "ELECTIVE";
         public int? expected_duration_minutes { get; set; }
         public string? anesthesia_type { get; set; }

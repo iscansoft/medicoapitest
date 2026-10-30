@@ -1840,6 +1840,9 @@ namespace medico_backend.Model
 
 
 
+        // Bill Format: "SUMMARY", "DETAILED", "BOTH"
+        public string? BillFormat { get; set; } = "BOTH";
+
         // Summary Section for Sample Report UI
 
         public List<ConsolidatedBillSummaryItem> BillSummary { get; set; } = new List<ConsolidatedBillSummaryItem>();

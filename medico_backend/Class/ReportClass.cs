@@ -13606,6 +13606,10 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     new { tenant_code });
 
+                // Set BillFormat from lab_settings (defaults to "BOTH")
+                string billFormat = lsConfig?.ip_consolidated_bill_format ?? "BOTH";
+                billData.BillFormat = billFormat;
+
 
 
                 // Determine whether bill is IP or OP

@@ -89,6 +89,9 @@ public class LabSettingModel
         public bool? show_ip_casesheet_header_footer_image { get; set; } = true;
         public bool? show_pharmacy_header_footer_image { get; set; } = true;
 
+        // IP Consolidated Bill Format Option: "SUMMARY", "DETAILED", "BOTH" (Default: "BOTH")
+        public string? ip_consolidated_bill_format { get; set; } = "BOTH";
+
         // Signature Mode Selection (True = Fixed LabSettings Signatures, False = Dynamic Test Result Saved & Authorized Users)
         public bool? use_labsetting_signatures { get; set; } = true;
         public bool? use_labsetting_culture_signatures { get; set; } = true;

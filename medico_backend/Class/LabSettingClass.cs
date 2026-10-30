@@ -38,6 +38,7 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS use_labsetting_signatures BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS use_labsetting_culture_signatures BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS report_qr BOOLEAN DEFAULT true;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS ip_consolidated_bill_format VARCHAR(20) DEFAULT 'BOTH';
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS iscan_margin_top DOUBLE PRECISION DEFAULT 0;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS iscan_margin_bottom DOUBLE PRECISION DEFAULT 0;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS iscan_margin_left DOUBLE PRECISION DEFAULT 0;
