@@ -6314,7 +6314,7 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
 
 
-        public async Task<(byte[]? HeaderImage, byte[]? FooterImage)> GetHeaderFooterImagesAsync(string tenant_code, int? bh_code)
+        public async Task<(byte[]? HeaderImage, byte[]? FooterImage)> GetHeaderFooterImagesAsync(string tenant_code, int? bh_code, string segment = "lab")
 
         {
 
@@ -6326,7 +6326,7 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
 
 
-                string sql = "SELECT header_path, header_image_path, footer_path, footer_image_path FROM lab_settings WHERE tenant_code = @tenant_code AND deleted = false";
+                string sql = "SELECT header_path, header_image_path, footer_path, footer_image_path, hospital_header_path, hospital_footer_path, lab_header_path, lab_footer_path, pharmacy_header_path, pharmacy_footer_path FROM lab_settings WHERE tenant_code = @tenant_code AND deleted = false";
 
                 if (bh_code.HasValue && bh_code.Value != 0)
 
@@ -6354,7 +6354,7 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
                 {
 
-                    string fallbackSql = "SELECT header_path, header_image_path, footer_path, footer_image_path FROM lab_settings WHERE tenant_code = @tenant_code AND deleted = false AND (bh_code = 0 OR bh_code IS NULL)";
+                    string fallbackSql = "SELECT header_path, header_image_path, footer_path, footer_image_path, hospital_header_path, hospital_footer_path, lab_header_path, lab_footer_path, pharmacy_header_path, pharmacy_footer_path FROM lab_settings WHERE tenant_code = @tenant_code AND deleted = false AND (bh_code = 0 OR bh_code IS NULL)";
 
                     row = await db.QueryFirstOrDefaultAsync<dynamic>(fallbackSql, new { tenant_code });
 
@@ -6370,9 +6370,33 @@ bill.LabName = companyInfo?.legal_name ?? string.Empty;
 
                 var dict = (IDictionary<string, object>)row;
 
-                string? headerKey = (dict.TryGetValue("header_path", out var hp) && hp != null) ? hp.ToString() : (dict.TryGetValue("header_image_path", out var hip) && hip != null ? hip.ToString() : null);
+                string? headerKey = null;
+                string? footerKey = null;
+                string seg = segment?.ToLowerInvariant() ?? "lab";
+                if (seg == "hospital")
+                {
+                    headerKey = (dict.TryGetValue("hospital_header_path", out var hhp) && hhp != null && !string.IsNullOrWhiteSpace(hhp.ToString())) ? hhp.ToString() : null;
+                    footerKey = (dict.TryGetValue("hospital_footer_path", out var hfp) && hfp != null && !string.IsNullOrWhiteSpace(hfp.ToString())) ? hfp.ToString() : null;
+                }
+                else if (seg == "pharmacy")
+                {
+                    headerKey = (dict.TryGetValue("pharmacy_header_path", out var php) && php != null && !string.IsNullOrWhiteSpace(php.ToString())) ? php.ToString() : null;
+                    footerKey = (dict.TryGetValue("pharmacy_footer_path", out var pfp) && pfp != null && !string.IsNullOrWhiteSpace(pfp.ToString())) ? pfp.ToString() : null;
+                }
+                else
+                {
+                    headerKey = (dict.TryGetValue("lab_header_path", out var lhp) && lhp != null && !string.IsNullOrWhiteSpace(lhp.ToString())) ? lhp.ToString() : null;
+                    footerKey = (dict.TryGetValue("lab_footer_path", out var lfp) && lfp != null && !string.IsNullOrWhiteSpace(lfp.ToString())) ? lfp.ToString() : null;
+                }
 
-                string? footerKey = (dict.TryGetValue("footer_path", out var fp) && fp != null) ? fp.ToString() : (dict.TryGetValue("footer_image_path", out var fip) && fip != null ? fip.ToString() : null);
+                if (string.IsNullOrWhiteSpace(headerKey))
+                {
+                    headerKey = (dict.TryGetValue("header_path", out var hp) && hp != null) ? hp.ToString() : (dict.TryGetValue("header_image_path", out var hip) && hip != null ? hip.ToString() : null);
+                }
+                if (string.IsNullOrWhiteSpace(footerKey))
+                {
+                    footerKey = (dict.TryGetValue("footer_path", out var fp) && fp != null) ? fp.ToString() : (dict.TryGetValue("footer_image_path", out var fip) && fip != null ? fip.ToString() : null);
+                }
 
 
 
@@ -9585,9 +9609,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-                string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path;
+                string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_header_path) ? lsConfig.hospital_header_path : (!string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path);
 
-                string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path;
+                string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_footer_path) ? lsConfig.hospital_footer_path : (!string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path);
 
 
 
@@ -10173,9 +10197,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-                string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path;
+                string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_header_path) ? lsConfig.hospital_header_path : (!string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path);
 
-                string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path;
+                string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_footer_path) ? lsConfig.hospital_footer_path : (!string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path);
 
 
 
@@ -13386,7 +13410,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
             bool? isletterhead = false,
 
-            Guid? op_id = null)
+            Guid? op_id = null,
+
+            string? viewType = null)
 
         {
 
@@ -13610,19 +13636,19 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 {
 
-                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.header_path) 
+                    string? hKey = !string.IsNullOrWhiteSpace(lsConfig.hospital_header_path) 
 
-                        ? lsConfig.header_path 
+                        ? lsConfig.hospital_header_path 
 
-                        : lsConfig.header_image_path;
+                        : (!string.IsNullOrWhiteSpace(lsConfig.header_path) ? lsConfig.header_path : lsConfig.header_image_path);
 
                     
 
-                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.footer_path) 
+                    string? fKey = !string.IsNullOrWhiteSpace(lsConfig.hospital_footer_path) 
 
-                        ? lsConfig.footer_path 
+                        ? lsConfig.hospital_footer_path 
 
-                        : lsConfig.footer_image_path;
+                        : (!string.IsNullOrWhiteSpace(lsConfig.footer_path) ? lsConfig.footer_path : lsConfig.footer_image_path);
 
 
 
@@ -13722,7 +13748,9 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     show_header_footer_image = showHeaderFooter,
 
-                    BillData = billData
+                    BillData = billData,
+
+                    ViewType = string.IsNullOrWhiteSpace(viewType) ? "detailedbreakup" : viewType
 
                 };
 
@@ -15999,9 +16027,9 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
 
 
-                        response.HeaderImagePath = labSettings?.header_path ?? labSettings?.header_image_path ?? tenant?.logo_url;
+                        response.HeaderImagePath = labSettings?.pharmacy_header_path ?? labSettings?.pharmacy_header_image_path ?? labSettings?.header_path ?? labSettings?.header_image_path ?? tenant?.logo_url;
 
-                        response.FooterImagePath = labSettings?.footer_path ?? labSettings?.footer_image_path;
+                        response.FooterImagePath = labSettings?.pharmacy_footer_path ?? labSettings?.pharmacy_footer_image_path ?? labSettings?.footer_path ?? labSettings?.footer_image_path;
 
                     }
 

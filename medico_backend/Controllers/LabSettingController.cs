@@ -73,6 +73,12 @@ namespace medico_backend.Controllers
             [FromForm] lab_settings model,
             [FromForm] IFormFile? headerFile,
             [FromForm] IFormFile? footerFile,
+            [FromForm] IFormFile? hospitalHeaderFile,
+            [FromForm] IFormFile? hospitalFooterFile,
+            [FromForm] IFormFile? labHeaderFile,
+            [FromForm] IFormFile? labFooterFile,
+            [FromForm] IFormFile? pharmacyHeaderFile,
+            [FromForm] IFormFile? pharmacyFooterFile,
             [FromForm] IFormFile? auth1SignatureFile,
             [FromForm] IFormFile? auth2SignatureFile,
             [FromForm] IFormFile? auth3SignatureFile,
@@ -100,7 +106,13 @@ namespace medico_backend.Controllers
                     auth3SignatureFile,
                     cultureAuth1SignatureFile,
                     cultureAuth2SignatureFile,
-                    cultureAuth3SignatureFile);
+                    cultureAuth3SignatureFile,
+                    hospitalHeaderFile,
+                    hospitalFooterFile,
+                    labHeaderFile,
+                    labFooterFile,
+                    pharmacyHeaderFile,
+                    pharmacyFooterFile);
 
                 return Ok(new
                 {
@@ -108,6 +120,12 @@ namespace medico_backend.Controllers
                     lsid,
                     header_path = model.header_path,
                     footer_path = model.footer_path,
+                    hospital_header_path = model.hospital_header_path,
+                    hospital_footer_path = model.hospital_footer_path,
+                    lab_header_path = model.lab_header_path,
+                    lab_footer_path = model.lab_footer_path,
+                    pharmacy_header_path = model.pharmacy_header_path,
+                    pharmacy_footer_path = model.pharmacy_footer_path,
                     auth1_signature_path = model.auth1_signature_path,
                     auth2_signature_path = model.auth2_signature_path,
                     auth3_signature_path = model.auth3_signature_path,
@@ -128,6 +146,12 @@ namespace medico_backend.Controllers
             [FromForm] lab_settings model,
             [FromForm] IFormFile? headerFile,
             [FromForm] IFormFile? footerFile,
+            [FromForm] IFormFile? hospitalHeaderFile,
+            [FromForm] IFormFile? hospitalFooterFile,
+            [FromForm] IFormFile? labHeaderFile,
+            [FromForm] IFormFile? labFooterFile,
+            [FromForm] IFormFile? pharmacyHeaderFile,
+            [FromForm] IFormFile? pharmacyFooterFile,
             [FromForm] IFormFile? auth1SignatureFile,
             [FromForm] IFormFile? auth2SignatureFile,
             [FromForm] IFormFile? auth3SignatureFile,
@@ -156,7 +180,13 @@ namespace medico_backend.Controllers
                     auth3SignatureFile,
                     cultureAuth1SignatureFile,
                     cultureAuth2SignatureFile,
-                    cultureAuth3SignatureFile);
+                    cultureAuth3SignatureFile,
+                    hospitalHeaderFile,
+                    hospitalFooterFile,
+                    labHeaderFile,
+                    labFooterFile,
+                    pharmacyHeaderFile,
+                    pharmacyFooterFile);
 
                 // 3. Save updated model into PostgreSQL
                 var (success, error) = await _labSettingClass.Update(model, tenant_code);
@@ -168,6 +198,12 @@ namespace medico_backend.Controllers
                     message = "Updated Successfully",
                     header_path = model.header_path,
                     footer_path = model.footer_path,
+                    hospital_header_path = model.hospital_header_path,
+                    hospital_footer_path = model.hospital_footer_path,
+                    lab_header_path = model.lab_header_path,
+                    lab_footer_path = model.lab_footer_path,
+                    pharmacy_header_path = model.pharmacy_header_path,
+                    pharmacy_footer_path = model.pharmacy_footer_path,
                     auth1_signature_path = model.auth1_signature_path,
                     auth2_signature_path = model.auth2_signature_path,
                     auth3_signature_path = model.auth3_signature_path,
@@ -189,6 +225,12 @@ namespace medico_backend.Controllers
             [FromForm] int? bh_code,
             [FromForm] IFormFile? headerFile,
             [FromForm] IFormFile? footerFile,
+            [FromForm] IFormFile? hospitalHeaderFile,
+            [FromForm] IFormFile? hospitalFooterFile,
+            [FromForm] IFormFile? labHeaderFile,
+            [FromForm] IFormFile? labFooterFile,
+            [FromForm] IFormFile? pharmacyHeaderFile,
+            [FromForm] IFormFile? pharmacyFooterFile,
             [FromForm] IFormFile? auth1SignatureFile,
             [FromForm] IFormFile? auth2SignatureFile,
             [FromForm] IFormFile? auth3SignatureFile,
@@ -221,13 +263,25 @@ namespace medico_backend.Controllers
                     auth3SignatureFile,
                     cultureAuth1SignatureFile,
                     cultureAuth2SignatureFile,
-                    cultureAuth3SignatureFile);
+                    cultureAuth3SignatureFile,
+                    hospitalHeaderFile,
+                    hospitalFooterFile,
+                    labHeaderFile,
+                    labFooterFile,
+                    pharmacyHeaderFile,
+                    pharmacyFooterFile);
 
                 return Ok(new
                 {
                     message = "Images and signatures updated successfully",
                     header_path = existing.header_path,
                     footer_path = existing.footer_path,
+                    hospital_header_path = existing.hospital_header_path,
+                    hospital_footer_path = existing.hospital_footer_path,
+                    lab_header_path = existing.lab_header_path,
+                    lab_footer_path = existing.lab_footer_path,
+                    pharmacy_header_path = existing.pharmacy_header_path,
+                    pharmacy_footer_path = existing.pharmacy_footer_path,
                     auth1_signature_path = existing.auth1_signature_path,
                     auth2_signature_path = existing.auth2_signature_path,
                     auth3_signature_path = existing.auth3_signature_path,
@@ -332,7 +386,13 @@ namespace medico_backend.Controllers
             IFormFile? auth3SigFile,
             IFormFile? cultureAuth1SigFile = null,
             IFormFile? cultureAuth2SigFile = null,
-            IFormFile? cultureAuth3SigFile = null)
+            IFormFile? cultureAuth3SigFile = null,
+            IFormFile? hospitalHeaderFile = null,
+            IFormFile? hospitalFooterFile = null,
+            IFormFile? labHeaderFile = null,
+            IFormFile? labFooterFile = null,
+            IFormFile? pharmacyHeaderFile = null,
+            IFormFile? pharmacyFooterFile = null)
         {
             if (existing == null)
                 existing = await GetExistingLabSettingAsync(model, tenant_code);
@@ -340,6 +400,13 @@ namespace medico_backend.Controllers
             // Extract & sanitize true old MinIO object keys from database prior to any update
             string? headerOld = SanitizeKey(existing?.header_path);
             string? footerOld = SanitizeKey(existing?.footer_path);
+            string? hospitalHeaderOld = SanitizeKey(existing?.hospital_header_path);
+            string? hospitalFooterOld = SanitizeKey(existing?.hospital_footer_path);
+            string? labHeaderOld = SanitizeKey(existing?.lab_header_path) ?? headerOld;
+            string? labFooterOld = SanitizeKey(existing?.lab_footer_path) ?? footerOld;
+            string? pharmacyHeaderOld = SanitizeKey(existing?.pharmacy_header_path);
+            string? pharmacyFooterOld = SanitizeKey(existing?.pharmacy_footer_path);
+
             string? sig1Old = SanitizeKey(existing?.auth1_signature_path);
             string? sig2Old = SanitizeKey(existing?.auth2_signature_path);
             string? sig3Old = SanitizeKey(existing?.auth3_signature_path);
@@ -349,6 +416,12 @@ namespace medico_backend.Controllers
 
             string? headerKey = null;
             string? footerKey = null;
+            string? hospitalHeaderKey = null;
+            string? hospitalFooterKey = null;
+            string? labHeaderKey = null;
+            string? labFooterKey = null;
+            string? pharmacyHeaderKey = null;
+            string? pharmacyFooterKey = null;
             string? sig1Key = null;
             string? sig2Key = null;
             string? sig3Key = null;
@@ -357,7 +430,40 @@ namespace medico_backend.Controllers
             string? cultureSig3Key = null;
             long entityId = model.bh_code ?? existing?.bh_code ?? 0;
 
-            // ReplaceAsync = DeleteAsync(oldKey) + UploadAsync(newFile)
+            // 1. Hospital Header & Footer
+            if (hospitalHeaderFile != null && hospitalHeaderFile.Length > 0)
+                hospitalHeaderKey = await _s3Service.ReplaceAsync(hospitalHeaderFile, hospitalHeaderOld, tenant_code, EntityType, entityId, "hospital_header");
+            else if (string.IsNullOrWhiteSpace(model.hospital_header_path))
+                model.hospital_header_path = hospitalHeaderOld;
+
+            if (hospitalFooterFile != null && hospitalFooterFile.Length > 0)
+                hospitalFooterKey = await _s3Service.ReplaceAsync(hospitalFooterFile, hospitalFooterOld, tenant_code, EntityType, entityId, "hospital_footer");
+            else if (string.IsNullOrWhiteSpace(model.hospital_footer_path))
+                model.hospital_footer_path = hospitalFooterOld;
+
+            // 2. Lab Header & Footer
+            if (labHeaderFile != null && labHeaderFile.Length > 0)
+                labHeaderKey = await _s3Service.ReplaceAsync(labHeaderFile, labHeaderOld, tenant_code, EntityType, entityId, "lab_header");
+            else if (string.IsNullOrWhiteSpace(model.lab_header_path))
+                model.lab_header_path = labHeaderOld;
+
+            if (labFooterFile != null && labFooterFile.Length > 0)
+                labFooterKey = await _s3Service.ReplaceAsync(labFooterFile, labFooterOld, tenant_code, EntityType, entityId, "lab_footer");
+            else if (string.IsNullOrWhiteSpace(model.lab_footer_path))
+                model.lab_footer_path = labFooterOld;
+
+            // 3. Pharmacy Header & Footer
+            if (pharmacyHeaderFile != null && pharmacyHeaderFile.Length > 0)
+                pharmacyHeaderKey = await _s3Service.ReplaceAsync(pharmacyHeaderFile, pharmacyHeaderOld, tenant_code, EntityType, entityId, "pharmacy_header");
+            else if (string.IsNullOrWhiteSpace(model.pharmacy_header_path))
+                model.pharmacy_header_path = pharmacyHeaderOld;
+
+            if (pharmacyFooterFile != null && pharmacyFooterFile.Length > 0)
+                pharmacyFooterKey = await _s3Service.ReplaceAsync(pharmacyFooterFile, pharmacyFooterOld, tenant_code, EntityType, entityId, "pharmacy_footer");
+            else if (string.IsNullOrWhiteSpace(model.pharmacy_footer_path))
+                model.pharmacy_footer_path = pharmacyFooterOld;
+
+            // 4. Legacy Default Header & Footer
             if (headerFile != null && headerFile.Length > 0)
                 headerKey = await _s3Service.ReplaceAsync(headerFile, headerOld, tenant_code, EntityType, entityId, "header");
             else if (string.IsNullOrWhiteSpace(model.header_path))
@@ -368,6 +474,17 @@ namespace medico_backend.Controllers
             else if (string.IsNullOrWhiteSpace(model.footer_path))
                 model.footer_path = footerOld;
 
+            // Sync legacy defaults with lab headers if legacy is not explicitly given
+            if (labHeaderKey != null && headerKey == null && string.IsNullOrWhiteSpace(model.header_path))
+            {
+                headerKey = labHeaderKey;
+            }
+            if (labFooterKey != null && footerKey == null && string.IsNullOrWhiteSpace(model.footer_path))
+            {
+                footerKey = labFooterKey;
+            }
+
+            // 5. Signatures
             if (auth1SigFile != null && auth1SigFile.Length > 0)
                 sig1Key = await _s3Service.ReplaceAsync(auth1SigFile, sig1Old, tenant_code, EntityType, entityId, "signature1");
             else if (string.IsNullOrWhiteSpace(model.auth1_signature_path))
@@ -398,30 +515,39 @@ namespace medico_backend.Controllers
             else if (string.IsNullOrWhiteSpace(model.culture_auth3_signature_path))
                 model.culture_auth3_signature_path = cultureSig3Old;
 
-            if (headerKey != null || footerKey != null || sig1Key != null || sig2Key != null || sig3Key != null ||
-                cultureSig1Key != null || cultureSig2Key != null || cultureSig3Key != null)
-            {
-                if (headerKey != null) { model.header_path = headerKey; model.header_image_path = headerKey; }
-                if (footerKey != null) { model.footer_path = footerKey; model.footer_image_path = footerKey; }
-                if (sig1Key != null) model.auth1_signature_path = sig1Key;
-                if (sig2Key != null) model.auth2_signature_path = sig2Key;
-                if (sig3Key != null) model.auth3_signature_path = sig3Key;
-                if (cultureSig1Key != null) model.culture_auth1_signature_path = cultureSig1Key;
-                if (cultureSig2Key != null) model.culture_auth2_signature_path = cultureSig2Key;
-                if (cultureSig3Key != null) model.culture_auth3_signature_path = cultureSig3Key;
+            if (hospitalHeaderKey != null) { model.hospital_header_path = hospitalHeaderKey; model.hospital_header_image_path = hospitalHeaderKey; }
+            if (hospitalFooterKey != null) { model.hospital_footer_path = hospitalFooterKey; model.hospital_footer_image_path = hospitalFooterKey; }
+            if (labHeaderKey != null) { model.lab_header_path = labHeaderKey; model.lab_header_image_path = labHeaderKey; }
+            if (labFooterKey != null) { model.lab_footer_path = labFooterKey; model.lab_footer_image_path = labFooterKey; }
+            if (pharmacyHeaderKey != null) { model.pharmacy_header_path = pharmacyHeaderKey; model.pharmacy_header_image_path = pharmacyHeaderKey; }
+            if (pharmacyFooterKey != null) { model.pharmacy_footer_path = pharmacyFooterKey; model.pharmacy_footer_image_path = pharmacyFooterKey; }
 
-                await _labSettingClass.UpdateImageAndSignaturePaths(
-                    model.lsid,
-                    tenant_code,
-                    model.header_path,
-                    model.footer_path,
-                    model.auth1_signature_path,
-                    model.auth2_signature_path,
-                    model.auth3_signature_path,
-                    model.culture_auth1_signature_path,
-                    model.culture_auth2_signature_path,
-                    model.culture_auth3_signature_path);
-            }
+            if (headerKey != null) { model.header_path = headerKey; model.header_image_path = headerKey; }
+            if (footerKey != null) { model.footer_path = footerKey; model.footer_image_path = footerKey; }
+            if (sig1Key != null) model.auth1_signature_path = sig1Key;
+            if (sig2Key != null) model.auth2_signature_path = sig2Key;
+            if (sig3Key != null) model.auth3_signature_path = sig3Key;
+            if (cultureSig1Key != null) model.culture_auth1_signature_path = cultureSig1Key;
+            if (cultureSig2Key != null) model.culture_auth2_signature_path = cultureSig2Key;
+            if (cultureSig3Key != null) model.culture_auth3_signature_path = cultureSig3Key;
+
+            await _labSettingClass.UpdateImageAndSignaturePaths(
+                model.lsid,
+                tenant_code,
+                model.header_path,
+                model.footer_path,
+                model.auth1_signature_path,
+                model.auth2_signature_path,
+                model.auth3_signature_path,
+                model.culture_auth1_signature_path,
+                model.culture_auth2_signature_path,
+                model.culture_auth3_signature_path,
+                model.hospital_header_path,
+                model.hospital_footer_path,
+                model.lab_header_path,
+                model.lab_footer_path,
+                model.pharmacy_header_path,
+                model.pharmacy_footer_path);
         }
     }
 }

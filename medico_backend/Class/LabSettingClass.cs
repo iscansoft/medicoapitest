@@ -58,6 +58,12 @@ namespace medico_backend.Class
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS payment_required_online_reg BOOLEAN DEFAULT true;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS enable_combo_registration BOOLEAN DEFAULT false;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS auto_route_billing_after_register BOOLEAN DEFAULT false;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS hospital_header_path TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS hospital_footer_path TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS lab_header_path TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS lab_footer_path TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS pharmacy_header_path TEXT;
+                    ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS pharmacy_footer_path TEXT;
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS shift_timing_mode VARCHAR(10) DEFAULT 'VARIABLE';
                     ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS shift_end_time VARCHAR(5);
                     
@@ -221,7 +227,13 @@ namespace medico_backend.Class
             string? auth3SigPath,
             string? cultureAuth1SigPath = null,
             string? cultureAuth2SigPath = null,
-            string? cultureAuth3SigPath = null)
+            string? cultureAuth3SigPath = null,
+            string? hospitalHeaderPath = null,
+            string? hospitalFooterPath = null,
+            string? labHeaderPath = null,
+            string? labFooterPath = null,
+            string? pharmacyHeaderPath = null,
+            string? pharmacyFooterPath = null)
         {
             try
             {
@@ -230,6 +242,12 @@ namespace medico_backend.Class
                     UPDATE lab_settings
                     SET header_path = COALESCE(@headerPath, header_path),
                         footer_path = COALESCE(@footerPath, footer_path),
+                        hospital_header_path = COALESCE(@hospitalHeaderPath, hospital_header_path),
+                        hospital_footer_path = COALESCE(@hospitalFooterPath, hospital_footer_path),
+                        lab_header_path = COALESCE(@labHeaderPath, lab_header_path),
+                        lab_footer_path = COALESCE(@labFooterPath, lab_footer_path),
+                        pharmacy_header_path = COALESCE(@pharmacyHeaderPath, pharmacy_header_path),
+                        pharmacy_footer_path = COALESCE(@pharmacyFooterPath, pharmacy_footer_path),
                         auth1_signature_path = COALESCE(@auth1SigPath, auth1_signature_path),
                         auth2_signature_path = COALESCE(@auth2SigPath, auth2_signature_path),
                         auth3_signature_path = COALESCE(@auth3SigPath, auth3_signature_path),
@@ -237,7 +255,24 @@ namespace medico_backend.Class
                         culture_auth2_signature_path = COALESCE(@cultureAuth2SigPath, culture_auth2_signature_path),
                         culture_auth3_signature_path = COALESCE(@cultureAuth3SigPath, culture_auth3_signature_path)
                     WHERE lsid = @lsid AND tenant_code = @tenant_code";
-                int rows = await db.ExecuteAsync(sql, new { lsid, tenant_code, headerPath, footerPath, auth1SigPath, auth2SigPath, auth3SigPath, cultureAuth1SigPath, cultureAuth2SigPath, cultureAuth3SigPath });
+                int rows = await db.ExecuteAsync(sql, new {
+                    lsid,
+                    tenant_code,
+                    headerPath,
+                    footerPath,
+                    hospitalHeaderPath,
+                    hospitalFooterPath,
+                    labHeaderPath,
+                    labFooterPath,
+                    pharmacyHeaderPath,
+                    pharmacyFooterPath,
+                    auth1SigPath,
+                    auth2SigPath,
+                    auth3SigPath,
+                    cultureAuth1SigPath,
+                    cultureAuth2SigPath,
+                    cultureAuth3SigPath
+                });
                 return rows > 0;
             }
             catch (Exception ex)

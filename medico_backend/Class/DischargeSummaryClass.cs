@@ -595,8 +595,8 @@ namespace medico_backend.Class
                 if (fallbackLs != null) lsConfig = fallbackLs;
             }
 
-            string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path;
-            string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path;
+            string? hKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_header_path) ? lsConfig.hospital_header_path : (!string.IsNullOrWhiteSpace(lsConfig?.header_path) ? lsConfig.header_path : lsConfig?.header_image_path);
+            string? fKey = !string.IsNullOrWhiteSpace(lsConfig?.hospital_footer_path) ? lsConfig.hospital_footer_path : (!string.IsNullOrWhiteSpace(lsConfig?.footer_path) ? lsConfig.footer_path : lsConfig?.footer_image_path);
 
             byte[]? headerImage = null;
             byte[]? footerImage = null;

@@ -2016,6 +2016,8 @@ namespace medico_backend.Model
 
         public string? bill_paper_size { get; set; } = "A4";
 
+        public string? ViewType { get; set; } = "detailedbreakup";
+
         public ConsolidatedBillData? BillData { get; set; }
 
     }
