@@ -1703,11 +1703,12 @@ AND b.tenant_code = @tenant_code
                             SELECT NULLIF(regexp_replace(o.token_no, '\D', '', 'g'), '')::int AS token_num
                             FROM   op_registration o
                             JOIN   doctor_master d
-                                   ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
+                            ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
                             WHERE  d.group_id    = @groupId
                             AND    o.tenant_code = @tenant_code
                             AND    o.isdeleted   = false
                             AND    COALESCE(o.is_dressing, false) = false
+                            AND    o.service_id  IS NULL          -- ✅ ADD
                             AND    o.visit_date  = @visit_date
                             UNION ALL
                             SELECT NULLIF(regexp_replace(ab.op_token_no, '\D', '', 'g'), '')::int AS token_num
@@ -1726,23 +1727,24 @@ AND b.tenant_code = @tenant_code
             {
                 lockKey = $"DCODE:{tenant_code}:{dcode}:{dateStr}";
                 sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
-                        FROM (
-                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
-                            FROM   op_registration
-                            WHERE  dcode        = @dcode
-                            AND    tenant_code  = @tenant_code
-                            AND    isdeleted    = false
-                            AND    COALESCE(is_dressing, false) = false
-                            AND    visit_date   = @visit_date
-                            UNION ALL
-                            SELECT NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int AS token_num
-                            FROM   appointment_booking
-                            WHERE  dcode             = @dcode
-                            AND    tenant_code       = @tenant_code
-                            AND    isdeleted         = false
-                            AND    booking_status   != 'CANCELLED'
-                            AND    appointment_date  = @visit_date
-                        ) t";
+            FROM (
+                SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                FROM   op_registration
+                WHERE  dcode        = @dcode
+                AND    tenant_code  = @tenant_code
+                AND    isdeleted    = false
+                AND    COALESCE(is_dressing, false) = false
+                AND    service_id   IS NULL          -- ✅ ADD: ignore service tokens (i1, etc.)
+                AND    visit_date   = @visit_date
+                UNION ALL
+                SELECT NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int AS token_num
+                FROM   appointment_booking
+                WHERE  dcode             = @dcode
+                AND    tenant_code       = @tenant_code
+                AND    isdeleted         = false
+                AND    booking_status   != 'CANCELLED'
+                AND    appointment_date  = @visit_date
+            ) t";
                 param = new { dcode, tenant_code, visit_date = visitDateParam };
             }
             else if (sharedSequence)
