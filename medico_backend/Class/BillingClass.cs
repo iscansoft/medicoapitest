@@ -2198,12 +2198,29 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                         ~ 'x-?ray|radio|scan|usg|ultrasound|\m(ct|mri)\M'               THEN 'SCAN'
 
                 -- SERVICE: registered as service in op_registration OR matched in service_type_master OR chargetype SERVICE
-                WHEN (b.op_service_id IS NOT NULL AND (b.tcode IS NULL OR b.service_id IS NOT NULL OR b.chargetype IN ('SERVICE', 'CONSULTATION', '')))
+                WHEN b.op_service_id IS NOT NULL
                      OR b.service_id IS NOT NULL
                      OR b.chargetype = 'SERVICE'
                      OR LOWER(TRIM(b.item_name)) LIKE 'service%'
                      OR (b.op_visit_type != '' AND LOWER(b.op_visit_type) NOT IN ('newvisit', 'consultation', 'dressing', 'followup', 'review', 'waiting', 'routine') AND b.tcode IS NULL)
                                                                                         THEN 'SERVICE'
+
+                -- CONSULTATION: doctor consultation fee (evaluated before Lab so consultation items with tcode/group are properly matched)
+                WHEN b.chargetype = 'CONSULTATION'
+                     OR b.chargetype LIKE '%CONSULT%'
+                     OR LOWER(TRIM(b.item_name)) LIKE '%consultation%'
+                     OR LOWER(TRIM(b.test_name)) LIKE '%consultation%'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'dr.%'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'dr %'
+                     OR LOWER(TRIM(b.item_name)) LIKE '%doctor%'
+                     OR (NOT b.op_is_dressing
+                         AND b.op_service_id IS NULL
+                         AND b.service_id IS NULL
+                         AND NOT b.isscan
+                         AND NOT b.islab
+                         AND (b.chargetype IN ('CONSULTATION', 'OP', '') OR b.chargetype IS NULL)
+                         AND (LOWER(b.op_visit_type) IN ('newvisit', 'consultation', 'followup', 'review', 'routine', 'waiting', 'in_consultation', 'completed') OR b.op_visit_type = ''))
+                                                                                        THEN 'CONSULTATION'
 
                 -- LAB: lab tests / investigations
                 WHEN b.islab
@@ -2211,19 +2228,9 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                      OR (b.tcode IS NOT NULL AND b.groupname != '')
                      OR (b.groupname != '' AND NOT b.isscan)
                      OR LOWER(TRIM(b.item_name)) ~ 'test|profile|panel|culture|urine|blood|serum|stool|cbc|esr|smear|biopsy|widal|dengue'
+                     OR b.tcode IS NOT NULL
                                                                                         THEN 'LAB'
 
-                -- CONSULTATION: doctor consultation fee
-                WHEN b.chargetype = 'CONSULTATION'
-                     OR LOWER(TRIM(b.item_name)) LIKE 'dr.%'
-                     OR LOWER(TRIM(b.item_name)) LIKE 'doctor%'
-                     OR LOWER(TRIM(b.item_name)) LIKE '%consultation%'
-                     OR LOWER(TRIM(b.test_name)) LIKE '%consultation%'
-                     OR (b.tcode IS NULL AND (b.groupname IS NULL OR b.groupname = '')
-                         AND (LOWER(b.op_visit_type) IN ('newvisit', 'consultation', 'followup', 'review', 'routine') OR b.chargetype = ''))
-                                                                                        THEN 'CONSULTATION'
-
-                WHEN b.tcode IS NOT NULL                                                THEN 'LAB'
                 ELSE 'SERVICE'
             END AS category,
             CASE WHEN b.bill_lines_total > 0 THEN b.line_net / b.bill_lines_total

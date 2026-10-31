@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using medico_backend.Model;
 using Medico_Backend.Model;
 using Npgsql;
@@ -677,19 +677,32 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     {
                         int? noSlotTcode; double noSlotRate; double noSlotAmount;
                         if (svc != null)
-                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                        else
-                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
                         {
-                            op_id = noSlotData.op_id.ToString(),
-                            custid = noSlotData.custid,
-                            tcode = noSlotTcode,
-                            rate = noSlotRate,
-                            amount = noSlotAmount,
-                            quantity = 1
-                        }, tenant_code);
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                            await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                            {
+                                op_id = noSlotData.op_id.ToString(),
+                                custid = noSlotData.custid,
+                                tcode = noSlotTcode,
+                                rate = noSlotRate,
+                                amount = noSlotAmount,
+                                quantity = 1,
+                                particulars = svc.service_name
+                            }, "SERVICE", tenant_code);
+                        }
+                        else
+                        {
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+                            await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                            {
+                                op_id = noSlotData.op_id.ToString(),
+                                custid = noSlotData.custid,
+                                tcode = noSlotTcode,
+                                rate = noSlotRate,
+                                amount = noSlotAmount,
+                                quantity = 1
+                            }, tenant_code);
+                        }
                     }
 
 
@@ -821,19 +834,32 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                 {
                     int? feeTcode2; double feeRate2; double feeAmount2;
                     if (svc != null)
-                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                    else
-                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
                     {
-                        op_id = data.op_id.ToString(),
-                        custid = data.custid,
-                        tcode = feeTcode2,
-                        rate = feeRate2,
-                        amount = feeAmount2,
-                        quantity = 1
-                    }, tenant_code);
+                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                        await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = data.op_id.ToString(),
+                            custid = data.custid,
+                            tcode = feeTcode2,
+                            rate = feeRate2,
+                            amount = feeAmount2,
+                            quantity = 1,
+                            particulars = svc.service_name
+                        }, "SERVICE", tenant_code);
+                    }
+                    else
+                    {
+                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = data.op_id.ToString(),
+                            custid = data.custid,
+                            tcode = feeTcode2,
+                            rate = feeRate2,
+                            amount = feeAmount2,
+                            quantity = 1
+                        }, tenant_code);
+                    }
                 }
 
                 await db.ExecuteAsync(@"
@@ -2148,15 +2174,16 @@ AND b.tenant_code = @tenant_code
                     {
                         var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
 
-                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
                         {
                             op_id = noSlotData.op_id.ToString(),
                             custid = noSlotData.custid,
                             tcode = noSlotTcode,
                             rate = noSlotRate,
                             amount = noSlotAmount,
-                            quantity = 1
-                        }, tenant_code);
+                            quantity = 1,
+                            particulars = svc.service_name
+                        }, "SERVICE", tenant_code);
                     }
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}|ServiceId:{req.service_id}";
@@ -2258,15 +2285,16 @@ AND b.tenant_code = @tenant_code
                 {
                     var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
 
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
                     {
                         op_id = data.op_id.ToString(),
                         custid = data.custid,
                         tcode = feeTcode,
                         rate = feeRate,
                         amount = feeAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        quantity = 1,
+                        particulars = svc.service_name
+                    }, "SERVICE", tenant_code);
                 }
 
                 await db.ExecuteAsync(@"
@@ -2540,7 +2568,15 @@ AND b.tenant_code = @tenant_code
 
                 if (!primaryDressingDeferred)
                 {
-                    await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                    if (primaryType == "SERVICE")
+                    {
+                        primaryReq.particulars = primarySvc?.service_name;
+                        await _unbilledCls.AddVisitAdditionalCharge(primaryReq, "SERVICE", tenant_code);
+                    }
+                    else
+                    {
+                        await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                    }
                     billableCount++;
                 }
 
