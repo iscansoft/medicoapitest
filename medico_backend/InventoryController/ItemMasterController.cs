@@ -1,4 +1,4 @@
-﻿using medico_backend.InventoryClass;
+using medico_backend.InventoryClass;
 using medico_backend.InventoryModel;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -435,14 +435,14 @@ namespace medico_backend.InventoryController
         }
 
         [HttpGet("getstockbyitem")]
-        public async Task<IActionResult> GetStockByItem(long itemcode)
+        public async Task<IActionResult> GetStockByItem(long itemcode, long? warehousecode = null, bool onlyavailable = false)
         {
             try
             {
                 var tenantcode = GetTenantCode();
                 if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
 
-                var result = await itemclass.GetStockByItem(itemcode, tenantcode);
+                var result = await itemclass.GetStockByItem(itemcode, tenantcode, warehousecode, onlyavailable);
                 return Ok(new { Status = "Success", Data = result });
             }
             catch (Exception ex)
