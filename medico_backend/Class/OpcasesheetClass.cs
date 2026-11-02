@@ -949,10 +949,18 @@ namespace medico_backend.Class
             if (prMst == null) return null;
 
             var prDet = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                @"SELECT * FROM op_prescription_detail
-                  WHERE  pr_id     = @pr_id
-                  AND    isdeleted = false
-                  ORDER  BY sno",
+                @"SELECT pr_det_id, pr_id, pr_code, diag_id, sno,
+         drug_name, drug_code, generic_name, drug_category,
+         morning, afternoon, evening, night,
+         morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
+         before_food, after_food, days, qty, route,
+         rate, mrp, is_billed,
+         batch_no,
+         batch_expiry_date::timestamp AS batch_expiry_date,
+         stockcode, warehousecode,
+         notes, tenant_code, isdeleted, created_at
+  FROM op_prescription_detail
+  WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
                 new { pr_id = prMst.pr_id })).ToList();
 
             return new CaseSheetPrescriptionViewModel
@@ -1473,8 +1481,18 @@ ORDER BY im.created_at DESC;";
             foreach (var m in masters)
             {
                 var items = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                    @"SELECT * FROM op_prescription_detail
-              WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
+                    @"SELECT pr_det_id, pr_id, pr_code, diag_id, sno,
+         drug_name, drug_code, generic_name, drug_category,
+         morning, afternoon, evening, night,
+         morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
+         before_food, after_food, days, qty, route,
+         rate, mrp, is_billed,
+         batch_no,
+         batch_expiry_date::timestamp AS batch_expiry_date,
+         stockcode, warehousecode,
+         notes, tenant_code, isdeleted, created_at
+  FROM op_prescription_detail
+  WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
                     new { pr_id = m.pr_id })).ToList();
 
                 result.Add(new CaseSheetPrescriptionViewModel
