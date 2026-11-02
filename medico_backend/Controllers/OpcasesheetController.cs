@@ -1,4 +1,4 @@
-﻿using medico_backend.Class;
+using medico_backend.Class;
 using medico_backend.Model;
 using Microsoft.AspNetCore.Mvc;
 
@@ -76,7 +76,10 @@ namespace medico_backend.Controllers
         //         "drug_name": "Paracetamol 500mg",
         //         "morning": "1", "afternoon": "1", "evening": "0", "night": "1",
         //         "before_food": false, "after_food": true,
-        //         "days": 5, "qty": 15, "route": "ORAL"
+        //         "days": 5, "qty": 15, "route": "ORAL",
+        //         "rate": 10.0, "mrp": 12.0,
+        //         "batch_no": "B123", "batch_expiry_date": "2027-12-31",
+        //         "stockcode": 100, "warehousecode": 1
         //       }
         //     ]
         //   },
