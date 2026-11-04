@@ -14992,9 +14992,9 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                     WHERE (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
 
-                      AND ip.admitdate >= @fromdate
+                      AND ip.admitdate >= @fromUtc
 
-                      AND ip.admitdate < @todate + INTERVAL '1 day'
+                      AND ip.admitdate < @toUtc
 
                       AND COALESCE(ip.isdeleted, false) = false
 
@@ -15011,7 +15011,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                     sql,
 
-                    new { fromUtc, toUtc, tenant_code },
+                    new { fromUtc, toUtc, tenant_code, fromdate = fromUtc, todate = toUtc },
 
                     commandTimeout: 120))
 
