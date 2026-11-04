@@ -1,4 +1,4 @@
-﻿using Amazon.S3.Model;
+using Amazon.S3.Model;
 using Dapper;
 using medico_backend.InventoryClass;
 using medico_backend.InventoryModel;
@@ -88,6 +88,30 @@ namespace medico_backend.Class
         // Accepts EITHER op_id OR ip_id (or both). Entire operation is
         // wrapped in a single transaction.
         // ─────────────────────────────────────────────────────────
+        private static bool _batchMigrationRan = false;
+        private static readonly object _batchMigrationLock = new object();
+
+        private void EnsurePrescriptionBatchColumns()
+        {
+            if (_batchMigrationRan) return;
+            lock (_batchMigrationLock)
+            {
+                if (_batchMigrationRan) return;
+                try
+                {
+                    using IDbConnection db = new NpgsqlConnection(_db_conn);
+                    db.Execute(@"
+                        ALTER TABLE op_prescription_detail
+                            ADD COLUMN IF NOT EXISTS batch_no          varchar(100),
+                            ADD COLUMN IF NOT EXISTS batch_expiry_date date,
+                            ADD COLUMN IF NOT EXISTS stockcode         bigint,
+                            ADD COLUMN IF NOT EXISTS warehousecode     bigint;");
+                    _batchMigrationRan = true;
+                }
+                catch { }
+            }
+        }
+
         public async Task<string> SaveCaseSheet(SaveCaseSheetRequest req, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
@@ -357,6 +381,7 @@ namespace medico_backend.Class
     int dcode,
     string tenant_code)
         {
+            EnsurePrescriptionBatchColumns();
             bool isNew = string.IsNullOrWhiteSpace(req.pr_code);
             string prCode = isNew
                 ? await GeneratePrCode(db, tx, tenant_code)
@@ -421,7 +446,9 @@ namespace medico_backend.Class
                morning, afternoon, evening, night,
                morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
                before_food, after_food, days, qty, route,
-               rate, mrp, is_billed, notes,
+               rate, mrp,
+               batch_no, batch_expiry_date, stockcode, warehousecode,
+               is_billed, notes,
                tenant_code, isdeleted, created_at)
               VALUES
               (@pr_det_id, @pr_id, @pr_code, @diag_id, @sno,
@@ -429,7 +456,9 @@ namespace medico_backend.Class
                @morning, @afternoon, @evening, @night,
                @morning_dose, @afternoon_dose, @evening_dose, @night_dose, @dose_unit,
                @before_food, @after_food, @days, @qty, @route,
-               @rate, @mrp, false, @notes,
+               @rate, @mrp,
+               @batch_no, @batch_expiry_date, @stockcode, @warehousecode,
+               false, @notes,
                @tenant_code, false, NOW())",
                     new
                     {
@@ -458,6 +487,10 @@ namespace medico_backend.Class
                         item.route,
                         item.rate,
                         item.mrp,
+                        batch_no = string.IsNullOrWhiteSpace(item.batch_no) ? null : item.batch_no.Trim(),
+                        item.batch_expiry_date,
+                        item.stockcode,
+                        item.warehousecode,
                         item.notes,
                         tenant_code
                     }, tx);
@@ -916,10 +949,18 @@ namespace medico_backend.Class
             if (prMst == null) return null;
 
             var prDet = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                @"SELECT * FROM op_prescription_detail
-                  WHERE  pr_id     = @pr_id
-                  AND    isdeleted = false
-                  ORDER  BY sno",
+                @"SELECT pr_det_id, pr_id, pr_code, diag_id, sno,
+         drug_name, drug_code, generic_name, drug_category,
+         morning, afternoon, evening, night,
+         morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
+         before_food, after_food, days, qty, route,
+         rate, mrp, is_billed,
+         batch_no,
+         batch_expiry_date::timestamp AS batch_expiry_date,
+         stockcode, warehousecode,
+         notes, tenant_code, isdeleted, created_at
+  FROM op_prescription_detail
+  WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
                 new { pr_id = prMst.pr_id })).ToList();
 
             return new CaseSheetPrescriptionViewModel
@@ -1440,8 +1481,18 @@ ORDER BY im.created_at DESC;";
             foreach (var m in masters)
             {
                 var items = (await db.QueryAsync<OpPrescriptionDetailModel>(
-                    @"SELECT * FROM op_prescription_detail
-              WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
+                    @"SELECT pr_det_id, pr_id, pr_code, diag_id, sno,
+         drug_name, drug_code, generic_name, drug_category,
+         morning, afternoon, evening, night,
+         morning_dose, afternoon_dose, evening_dose, night_dose, dose_unit,
+         before_food, after_food, days, qty, route,
+         rate, mrp, is_billed,
+         batch_no,
+         batch_expiry_date::timestamp AS batch_expiry_date,
+         stockcode, warehousecode,
+         notes, tenant_code, isdeleted, created_at
+  FROM op_prescription_detail
+  WHERE pr_id = @pr_id AND isdeleted = false ORDER BY sno",
                     new { pr_id = m.pr_id })).ToList();
 
                 result.Add(new CaseSheetPrescriptionViewModel

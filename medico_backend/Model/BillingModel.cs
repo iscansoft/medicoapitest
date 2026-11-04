@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -521,6 +521,11 @@ namespace medico_backend.Model
         public int total_bills { get; set; }
         public double gross_amount { get; set; }
         public double discount_amount { get; set; }
+        public double discount { get; set; }
+        public double gross { get; set; }
+        public double net { get; set; }
+        public double collected { get; set; }
+        public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_cash { get; set; }
         public double collected_card { get; set; }
@@ -820,6 +825,11 @@ namespace medico_backend.Model
         public int item_count { get; set; }
         public double gross_amount { get; set; }
         public double discount_amount { get; set; }
+        public double discount { get; set; }
+        public double gross { get; set; }
+        public double net { get; set; }
+        public double collected { get; set; }
+        public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
@@ -835,6 +845,13 @@ namespace medico_backend.Model
         public int visit_count { get; set; }
         public int item_count { get; set; }
         public string tokens { get; set; } = "";
+        public double gross_amount { get; set; }
+        public double discount_amount { get; set; }
+        public double discount { get; set; }
+        public double gross { get; set; }
+        public double net { get; set; }
+        public double collected { get; set; }
+        public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
@@ -853,6 +870,13 @@ namespace medico_backend.Model
         public Dictionary<string, double> net_by_category { get; set; } = new();
         public Dictionary<string, double> collected_by_category { get; set; } = new();
         public Dictionary<string, double> collected_by_paymode { get; set; } = new();
+        public double gross_amount { get; set; }
+        public double discount_amount { get; set; }
+        public double discount { get; set; }
+        public double gross { get; set; }
+        public double net { get; set; }
+        public double collected { get; set; }
+        public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
@@ -866,9 +890,13 @@ namespace medico_backend.Model
         public int? cntcode { get; set; }
         public int? dcode { get; set; }
         public int total_visits { get; set; }
+        public double total_gross { get; set; }
+        public double total_discount { get; set; }
         public double total_net { get; set; }
         public double total_collected { get; set; }
         public double total_due { get; set; }
+        public double total_ip_cost { get; set; }
+        public double total_pharmacy_cost { get; set; }
         public List<HmsOpPaymodeAmount> paymode_totals { get; set; } = new();
         public List<HmsOpCategoryAmountRow> categories { get; set; } = new();
         public List<HmsOpServiceAmountRow> services { get; set; } = new();
@@ -891,6 +919,7 @@ namespace medico_backend.Model
         public string? service_name { get; set; }
         public string category { get; set; } = "";
         public double gross { get; set; }
+        public double discount { get; set; }
         public double net { get; set; }
         public double paid { get; set; }
         public double ratio { get; set; }

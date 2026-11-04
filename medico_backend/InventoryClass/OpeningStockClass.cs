@@ -1,4 +1,4 @@
-﻿using ClosedXML.Excel;
+using ClosedXML.Excel;
 using Dapper;
 using medico_backend.InventoryModel;
 using Npgsql;
@@ -22,6 +22,7 @@ namespace medico_backend.InventoryClass
         private static readonly string[] ExpAliases = { "expdate", "expirydate", "expiry", "exp" };
         private static readonly string[] StripAliases = { "openingstrip", "openingstrips" };
         private static readonly string[] LooseAliases = { "openingloose" };
+        private static readonly string[] MrpAliases = { "mrp", "mrpstrip", "mrprate", "rate", "price", "mrpunit" };
 
         private sealed class ResolvedRow
         {
@@ -170,6 +171,10 @@ namespace medico_backend.InventoryClass
                 {
                     string key = $"{x.item.itemcode}|{x.row.batchno}";
 
+                    decimal batchMrpUnit = (x.row.mrp.HasValue && x.row.mrp.Value > 0)
+                        ? (x.row.mrp.Value / (x.item.packsize > 0 ? x.item.packsize : 1m))
+                        : (x.item.mrp / (x.item.packsize > 0 ? x.item.packsize : 1m));
+
                     if (existing.TryGetValue(key, out long stockcode))
                     {
                         // Keep other movements intact: closing moves by the CHANGE in opening
@@ -178,6 +183,7 @@ namespace medico_backend.InventoryClass
                             SET
                                 closingstock = closingstock + (@openingstock - openingstock),
                                 stockvalue   = (closingstock + (@openingstock - openingstock)) * unitcost,
+                                mrpunit      = CASE WHEN @mrpunit > 0 THEN @mrpunit ELSE mrpunit END,
                                 openingstock = @openingstock,
                                 openingstrip = @openingstrip,
                                 openingloose = @openingloose,
@@ -192,6 +198,7 @@ namespace medico_backend.InventoryClass
                                 openingstrip = x.row.openingstrip,
                                 openingloose = x.row.openingloose,
                                 expirydate = x.row.expirydate,
+                                mrpunit = batchMrpUnit,
                                 usercode = req.usercode,
                                 stockcode,
                                 tenantcode
@@ -201,8 +208,8 @@ namespace medico_backend.InventoryClass
                     }
                     else
                     {
-                        decimal unitcost = x.item.purchaserate / x.item.packsize;
-                        decimal mrpunit = x.item.mrp / x.item.packsize;
+                        decimal unitcost = x.item.purchaserate / (x.item.packsize > 0 ? x.item.packsize : 1m);
+                        decimal mrpunit = batchMrpUnit;
 
                         await conn.ExecuteAsync(@"
                             INSERT INTO public.stock_master
@@ -247,6 +254,27 @@ namespace medico_backend.InventoryClass
                     }
                 }
 
+                // Refresh master item price to highest active batch MRP
+                foreach (var itemcode in resolved.Select(x => x.item.itemcode).Distinct())
+                {
+                    await conn.ExecuteAsync(@"
+                        UPDATE public.item_master im
+                        SET mrp = ROUND(s.maxunit * COALESCE(NULLIF(im.packsize,0),1), 2)
+                        FROM (
+                            SELECT MAX(mrpunit) AS maxunit
+                            FROM public.stock_master
+                            WHERE itemcode = @itemcode
+                              AND tenantcode = @tenantcode
+                              AND deleted = false
+                              AND closingstock > 0
+                              AND mrpunit > 0
+                        ) s
+                        WHERE im.itemcode = @itemcode
+                          AND im.tenantcode = @tenantcode
+                          AND s.maxunit IS NOT NULL;",
+                        new { itemcode, tenantcode }, tran);
+                }
+
                 await tran.CommitAsync();
 
                 result.success = true;
@@ -270,7 +298,7 @@ namespace medico_backend.InventoryClass
             using var workbook = new XLWorkbook();
             var ws = workbook.Worksheets.Add("OpeningStock");
 
-            string[] headers = { "Item Name", "Batch No", "Exp Date", "Opening Strip", "Opening Loose" };
+            string[] headers = { "Item Name", "Batch No", "Exp Date", "Opening Strip", "Opening Loose", "MRP" };
             for (int i = 0; i < headers.Length; i++)
             {
                 var cell = ws.Cell(1, i + 1);
@@ -324,6 +352,7 @@ namespace medico_backend.InventoryClass
             int colExp = FindCol(headerMap, ExpAliases);
             int colStrip = FindCol(headerMap, StripAliases);
             int colLoose = FindCol(headerMap, LooseAliases);
+            int colMrp = FindCol(headerMap, MrpAliases);
 
             var missing = new List<string>();
             if (colItem == 0) missing.Add("Item Name");
@@ -403,6 +432,11 @@ namespace medico_backend.InventoryClass
                     ok = false;
                 }
                 row.openingloose = loose;
+
+                if (colMrp > 0 && TryParseQty(ws.Cell(r, colMrp), out decimal mrpVal) && mrpVal > 0)
+                {
+                    row.mrp = mrpVal;
+                }
 
                 if (ok) list.Add(row);
             }

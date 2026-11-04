@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using medico_backend.Model;
 using Medico_Backend.Model;
 using Npgsql;
@@ -677,19 +677,32 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                     {
                         int? noSlotTcode; double noSlotRate; double noSlotAmount;
                         if (svc != null)
-                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                        else
-                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
                         {
-                            op_id = noSlotData.op_id.ToString(),
-                            custid = noSlotData.custid,
-                            tcode = noSlotTcode,
-                            rate = noSlotRate,
-                            amount = noSlotAmount,
-                            quantity = 1
-                        }, tenant_code);
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                            await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                            {
+                                op_id = noSlotData.op_id.ToString(),
+                                custid = noSlotData.custid,
+                                tcode = noSlotTcode,
+                                rate = noSlotRate,
+                                amount = noSlotAmount,
+                                quantity = 1,
+                                particulars = svc.service_name
+                            }, "SERVICE", tenant_code);
+                        }
+                        else
+                        {
+                            (noSlotTcode, noSlotRate, noSlotAmount) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+                            await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                            {
+                                op_id = noSlotData.op_id.ToString(),
+                                custid = noSlotData.custid,
+                                tcode = noSlotTcode,
+                                rate = noSlotRate,
+                                amount = noSlotAmount,
+                                quantity = 1
+                            }, tenant_code);
+                        }
                     }
 
 
@@ -821,19 +834,32 @@ ORDER BY o.visit_date DESC, o.queue_no, o.token_no";
                 {
                     int? feeTcode2; double feeRate2; double feeAmount2;
                     if (svc != null)
-                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
-                    else
-                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
-
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
                     {
-                        op_id = data.op_id.ToString(),
-                        custid = data.custid,
-                        tcode = feeTcode2,
-                        rate = feeRate2,
-                        amount = feeAmount2,
-                        quantity = 1
-                    }, tenant_code);
+                        (feeTcode2, feeRate2, feeAmount2) = await GetServiceCharge(db, svc.service_name, tenant_code);
+                        await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = data.op_id.ToString(),
+                            custid = data.custid,
+                            tcode = feeTcode2,
+                            rate = feeRate2,
+                            amount = feeAmount2,
+                            quantity = 1,
+                            particulars = svc.service_name
+                        }, "SERVICE", tenant_code);
+                    }
+                    else
+                    {
+                        (feeTcode2, feeRate2, feeAmount2) = await GetDoctorConsultationFee(db, assignedDcode, tenant_code, req.custid);
+                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        {
+                            op_id = data.op_id.ToString(),
+                            custid = data.custid,
+                            tcode = feeTcode2,
+                            rate = feeRate2,
+                            amount = feeAmount2,
+                            quantity = 1
+                        }, tenant_code);
+                    }
                 }
 
                 await db.ExecuteAsync(@"
@@ -1703,11 +1729,12 @@ AND b.tenant_code = @tenant_code
                             SELECT NULLIF(regexp_replace(o.token_no, '\D', '', 'g'), '')::int AS token_num
                             FROM   op_registration o
                             JOIN   doctor_master d
-                                   ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
+                            ON d.dcode = o.dcode AND d.tenant_code = o.tenant_code
                             WHERE  d.group_id    = @groupId
                             AND    o.tenant_code = @tenant_code
                             AND    o.isdeleted   = false
                             AND    COALESCE(o.is_dressing, false) = false
+                            AND    o.service_id  IS NULL          -- ✅ ADD
                             AND    o.visit_date  = @visit_date
                             UNION ALL
                             SELECT NULLIF(regexp_replace(ab.op_token_no, '\D', '', 'g'), '')::int AS token_num
@@ -1726,23 +1753,24 @@ AND b.tenant_code = @tenant_code
             {
                 lockKey = $"DCODE:{tenant_code}:{dcode}:{dateStr}";
                 sql = @"SELECT COALESCE(MAX(token_num), 0) + 1
-                        FROM (
-                            SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
-                            FROM   op_registration
-                            WHERE  dcode        = @dcode
-                            AND    tenant_code  = @tenant_code
-                            AND    isdeleted    = false
-                            AND    COALESCE(is_dressing, false) = false
-                            AND    visit_date   = @visit_date
-                            UNION ALL
-                            SELECT NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int AS token_num
-                            FROM   appointment_booking
-                            WHERE  dcode             = @dcode
-                            AND    tenant_code       = @tenant_code
-                            AND    isdeleted         = false
-                            AND    booking_status   != 'CANCELLED'
-                            AND    appointment_date  = @visit_date
-                        ) t";
+            FROM (
+                SELECT NULLIF(regexp_replace(token_no, '\D', '', 'g'), '')::int AS token_num
+                FROM   op_registration
+                WHERE  dcode        = @dcode
+                AND    tenant_code  = @tenant_code
+                AND    isdeleted    = false
+                AND    COALESCE(is_dressing, false) = false
+                AND    service_id   IS NULL          -- ✅ ADD: ignore service tokens (i1, etc.)
+                AND    visit_date   = @visit_date
+                UNION ALL
+                SELECT NULLIF(regexp_replace(op_token_no, '\D', '', 'g'), '')::int AS token_num
+                FROM   appointment_booking
+                WHERE  dcode             = @dcode
+                AND    tenant_code       = @tenant_code
+                AND    isdeleted         = false
+                AND    booking_status   != 'CANCELLED'
+                AND    appointment_date  = @visit_date
+            ) t";
                 param = new { dcode, tenant_code, visit_date = visitDateParam };
             }
             else if (sharedSequence)
@@ -2146,15 +2174,16 @@ AND b.tenant_code = @tenant_code
                     {
                         var (noSlotTcode, noSlotRate, noSlotAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
 
-                        await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                        await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
                         {
                             op_id = noSlotData.op_id.ToString(),
                             custid = noSlotData.custid,
                             tcode = noSlotTcode,
                             rate = noSlotRate,
                             amount = noSlotAmount,
-                            quantity = 1
-                        }, tenant_code);
+                            quantity = 1,
+                            particulars = svc.service_name
+                        }, "SERVICE", tenant_code);
                     }
 
                     return $"Success|OpNo:{noSlotData.op_no}|OpId:{noSlotData.op_id}|Token:{noSlotData.token_no}|ServiceId:{req.service_id}";
@@ -2256,15 +2285,16 @@ AND b.tenant_code = @tenant_code
                 {
                     var (feeTcode, feeRate, feeAmount) = await GetServiceCharge(db, svc.service_name, tenant_code);
 
-                    await _unbilledCls.AddConsultationCharge(new AddUnbilledConsultationRequest
+                    await _unbilledCls.AddVisitAdditionalCharge(new AddUnbilledConsultationRequest
                     {
                         op_id = data.op_id.ToString(),
                         custid = data.custid,
                         tcode = feeTcode,
                         rate = feeRate,
                         amount = feeAmount,
-                        quantity = 1
-                    }, tenant_code);
+                        quantity = 1,
+                        particulars = svc.service_name
+                    }, "SERVICE", tenant_code);
                 }
 
                 await db.ExecuteAsync(@"
@@ -2538,7 +2568,15 @@ AND b.tenant_code = @tenant_code
 
                 if (!primaryDressingDeferred)
                 {
-                    await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                    if (primaryType == "SERVICE")
+                    {
+                        primaryReq.particulars = primarySvc?.service_name;
+                        await _unbilledCls.AddVisitAdditionalCharge(primaryReq, "SERVICE", tenant_code);
+                    }
+                    else
+                    {
+                        await _unbilledCls.AddConsultationCharge(primaryReq, tenant_code);
+                    }
                     billableCount++;
                 }
 

@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using Dapper.Contrib.Extensions;
 using medico_backend.InventoryModel;
 using Npgsql;
@@ -21,9 +21,59 @@ namespace medico_backend.InventoryClass
             _hmsCon = config.GetConnectionString("conn") ?? con;
 
         }
+        private static bool _migrationRan = false;
+        private static readonly object _migrationLock = new object();
+
+        private void EnsureStockMrpUnitColumn()
+        {
+            if (_migrationRan) return;
+            lock (_migrationLock)
+            {
+                if (_migrationRan) return;
+                try
+                {
+                    using IDbConnection db = new NpgsqlConnection(con);
+                    db.Execute(@"
+                        ALTER TABLE public.stock_master
+                            ADD COLUMN IF NOT EXISTS mrpunit numeric(18,4) NOT NULL DEFAULT 0;
+
+                        UPDATE public.stock_master s
+                        SET mrpunit = ROUND(im.mrp / NULLIF(COALESCE(NULLIF(im.packsize,0),1),0), 4)
+                        FROM public.item_master im
+                        WHERE im.itemcode = s.itemcode
+                          AND im.tenantcode = s.tenantcode
+                          AND COALESCE(s.mrpunit,0) = 0
+                          AND COALESCE(im.mrp,0) > 0;");
+                    _migrationRan = true;
+                }
+                catch { }
+            }
+        }
+
         // Batch is optional: blank / whitespace => NULL so it matches a no-batch stock row
         private static string? NormBatch(string? batchno) =>
             string.IsNullOrWhiteSpace(batchno) ? null : batchno.Trim();
+
+        // Item master MRP (per pack) = highest batch MRP among batches that still have stock
+        private async Task RefreshItemMasterPrice(IDbConnection db, IDbTransaction? tx, long itemcode, string tenantcode)
+        {
+            await db.ExecuteAsync(@"
+                UPDATE public.item_master im
+                SET mrp = ROUND(s.maxunit * COALESCE(NULLIF(im.packsize,0),1), 2)
+                FROM (
+                    SELECT MAX(mrpunit) AS maxunit
+                    FROM public.stock_master
+                    WHERE itemcode = @itemcode
+                      AND tenantcode = @tenantcode
+                      AND deleted = false
+                      AND closingstock > 0
+                      AND mrpunit > 0
+                ) s
+                WHERE im.itemcode = @itemcode
+                  AND im.tenantcode = @tenantcode
+                  AND s.maxunit IS NOT NULL;",
+                new { itemcode, tenantcode }, tx);
+        }
         // ─── ITEM MASTER ──────────────────────────────────────────────────────────────
 
         public async Task<string> InsertItem(item_master item)
@@ -513,6 +563,9 @@ namespace medico_backend.InventoryClass
                             }
                         }
 
+                        foreach (var itemcode in request.details.Select(d => d.itemcode).Distinct())
+                            await RefreshItemMasterPrice(db, transaction, itemcode, request.master.tenantcode!);
+
                         transaction.Commit();
 
                         return purchasecode;
@@ -741,6 +794,10 @@ namespace medico_backend.InventoryClass
 
                             await ApplyPurchaseStock(db, transaction, item, request.master);
                         }
+
+                        foreach (var itemcode in oldDetails.Select(d => d.itemcode)
+                                                 .Concat(request.details.Select(d => d.itemcode)).Distinct())
+                            await RefreshItemMasterPrice(db, transaction, itemcode, tenantcode);
 
                         transaction.Commit();
 
@@ -1005,16 +1062,18 @@ namespace medico_backend.InventoryClass
         {
             try
             {
+                EnsureStockMrpUnitColumn();
                 using (IDbConnection db = new NpgsqlConnection(con))
                 {
                     db.Open();
+                    using var tx = db.BeginTransaction();
 
                     string query = @"
                         INSERT INTO public.stock_master
                         (
                             itemcode, warehousecode, branchcode, locationcode,
-                            openingstock,openingstrip, openingloose, purchasedqty, soldqty, damagedqty, returnqty, closingstock,
-                            unitcost, stockvalue,
+                            openingstock, openingstrip, openingloose, purchasedqty, soldqty, damagedqty, returnqty, closingstock,
+                            unitcost, mrpunit, stockvalue,
                             batchno, manufacturingdate, expirydate,
                             isactive, deleted, createddate,
                             usercode, tenantcode, companycode
@@ -1022,15 +1081,20 @@ namespace medico_backend.InventoryClass
                         VALUES
                         (
                             @itemcode, @warehousecode, @branchcode, @locationcode,
-                            @openingstock, @openingstrip, @openingloose,@purchasedqty, @soldqty, @damagedqty, @returnqty, @closingstock,
-                            @unitcost, @stockvalue,
+                            @openingstock, @openingstrip, @openingloose, @purchasedqty, @soldqty, @damagedqty, @returnqty, @closingstock,
+                            @unitcost, @mrpunit, @stockvalue,
                             @batchno, @manufacturingdate, @expirydate,
                             @isactive, @deleted, CURRENT_TIMESTAMP,
                             @usercode, @tenantcode, @companycode
                         )
                         RETURNING stockcode;";
 
-                    return await db.ExecuteScalarAsync<long>(query, stock);
+                    long id = await db.ExecuteScalarAsync<long>(query, stock, tx);
+
+                    await RefreshItemMasterPrice(db, tx, stock.itemcode, stock.tenantcode!);
+
+                    tx.Commit();
+                    return id;
                 }
             }
             catch (Exception ex)
@@ -1043,9 +1107,11 @@ namespace medico_backend.InventoryClass
         {
             try
             {
+                EnsureStockMrpUnitColumn();
                 using (IDbConnection db = new NpgsqlConnection(con))
                 {
                     db.Open();
+                    using var tx = db.BeginTransaction();
 
                     string query = @"
                         UPDATE public.stock_master
@@ -1063,6 +1129,7 @@ namespace medico_backend.InventoryClass
                             returnqty         = @returnqty,
                             closingstock      = @closingstock,
                             unitcost          = @unitcost,
+                            mrpunit           = CASE WHEN @mrpunit > 0 THEN @mrpunit ELSE mrpunit END,
                             stockvalue        = @stockvalue,
                             batchno           = @batchno,
                             manufacturingdate = @manufacturingdate,
@@ -1077,6 +1144,11 @@ namespace medico_backend.InventoryClass
                           AND tenantcode = @tenantcode;";
 
                     int rows = await db.ExecuteAsync(query, stock);
+
+                    if (rows > 0)
+                        await RefreshItemMasterPrice(db, tx, stock.itemcode, stock.tenantcode!);
+
+                    tx.Commit();
                     return rows > 0 ? "Success" : "Failed";
                 }
             }
@@ -1192,46 +1264,33 @@ namespace medico_backend.InventoryClass
                 new { stockcode, tenantcode });
         }
 
-        public async Task<IEnumerable<stock_master>> GetStockByItem(long itemcode, string tenantcode)
+        public async Task<IEnumerable<stock_master>> GetStockByItem(
+            long itemcode, string tenantcode, long? warehousecode = null, bool onlyavailable = false)
         {
             using IDbConnection db = new NpgsqlConnection(con);
 
-            return await db.QueryAsync<stock_master>(@"
-        SELECT 
-            stockcode,
-            itemcode,
-            warehousecode,
-            branchcode,
-            locationcode,
-            openingstock,
-            openingstrip,
-            openingloose,
-            purchasedqty,
-            soldqty,
-            damagedqty,
-            returnqty,
-            closingstock,
-            unitcost,
-            mrpunit,
-            stockvalue,
-            batchno,
+            string order = onlyavailable
+                ? "ORDER BY expirydate ASC NULLS LAST, stockcode"
+                : "ORDER BY stockcode DESC";
 
-            manufacturingdate::timestamp AS manufacturingdate,
-            expirydate::timestamp AS expirydate,
-
-            isactive,
-            deleted,
-            createddate,
-            modifieddate,
-            usercode,
-            tenantcode,
-            companycode
-        FROM public.stock_master
-        WHERE itemcode = @itemcode
-          AND tenantcode = @tenantcode
-          AND deleted = false
-        ORDER BY stockcode DESC;",
-                new { itemcode, tenantcode });
+            return await db.QueryAsync<stock_master>($@"
+                SELECT
+                    stockcode, itemcode, warehousecode, branchcode, locationcode,
+                    openingstock, openingstrip, openingloose, purchasedqty, soldqty,
+                    damagedqty, returnqty, closingstock, unitcost, mrpunit, stockvalue,
+                    batchno,
+                    manufacturingdate::timestamp AS manufacturingdate,
+                    expirydate::timestamp AS expirydate,
+                    isactive, deleted, createddate, modifieddate, usercode, tenantcode, companycode
+                FROM public.stock_master
+                WHERE itemcode = @itemcode
+                  AND tenantcode = @tenantcode
+                  AND deleted = false
+                  AND (@warehousecode::bigint IS NULL OR warehousecode = @warehousecode::bigint)
+                  AND (@onlyavailable::boolean = false
+                       OR (closingstock > 0 AND (expirydate IS NULL OR expirydate >= CURRENT_DATE)))
+                {order};",
+                new { itemcode, tenantcode, warehousecode, onlyavailable });
         }
 
         public async Task<long> InsertIndent(indent_request request)
@@ -3037,7 +3096,7 @@ VALUES
                             // Check Stock (batch optional)
                             //---------------------------------------
                             string stockQuery = @"
-SELECT stockcode, closingstock
+SELECT stockcode, closingstock, mrpunit
 FROM stock_master
 WHERE itemcode = @itemcode
   AND warehousecode = @warehousecode
@@ -3067,6 +3126,10 @@ LIMIT 1;";
                             {
                                 throw new Exception($"Insufficient stock for Item : {item.itemcode}");
                             }
+
+                            decimal batchMrp = (decimal)(stock.mrpunit ?? 0m);
+                            if (batchMrp > 0 && item.rate > batchMrp + 0.01m)
+                                throw new Exception($"Rate {item.rate} is higher than batch MRP {batchMrp} for Item : {item.itemcode}, Batch : {item.batchno}");
 
                             //---------------------------------------
                             // Update Stock
@@ -3107,6 +3170,9 @@ WHERE stockcode=@stockcode;";
                             if (marked != ids.Length)
                                 throw new Exception("One or more pharmacy queue items are already billed or cancelled.");
                         }
+
+                        foreach (var itemcode in request.details.Select(d => d.itemcode).Distinct())
+                            await RefreshItemMasterPrice(conn, trans, itemcode, request.master.tenantcode!);
 
                         await trans.CommitAsync();
 
@@ -5408,6 +5474,7 @@ string tenantcode)
                     adjustmenttype,
                     closingstock,
                     unitcost,
+                    mrpunit,
                     stockvalue,
                     batchno,
                     manufacturingdate,
@@ -5438,6 +5505,7 @@ string tenantcode)
                     NULL,
                     @closingstock,
                     @unitcost,
+                    @mrpunit,
                     @stockvalue,
                     @batchno,
                     @manufacturingdate,
@@ -5468,6 +5536,13 @@ string tenantcode)
 
                             unitcost =
                                 detail.unitcost,
+
+                            mrpunit = await conn.ExecuteScalarAsync<decimal?>(@"
+                                SELECT mrpunit FROM stock_master
+                                WHERE warehousecode = @wh AND itemcode = @itemcode AND batchno = @batchno
+                                  AND tenantcode = @tenantcode AND deleted = false LIMIT 1;",
+                                new { wh = master.fromwarehousecode, itemcode = detail.itemcode, detail.batchno, tenantcode },
+                                transaction) ?? 0m,
 
                             stockvalue =
                                 detail.transferqty *
@@ -5997,6 +6072,7 @@ stock_transfer_partial_reject_request request)
                         returnqty,
                         closingstock,
                         unitcost,
+                        mrpunit,
                         stockvalue,
                         batchno,
                         manufacturingdate,
@@ -6023,6 +6099,7 @@ stock_transfer_partial_reject_request request)
                         0,
                         @closingstock,
                         @unitcost,
+                        @mrpunit,
                         @stockvalue,
                         @batchno,
                         @manufacturingdate,
@@ -6054,6 +6131,13 @@ stock_transfer_partial_reject_request request)
 
                                     unitcost =
                                         detail.unitcost,
+
+                                    mrpunit = await conn.ExecuteScalarAsync<decimal?>(@"
+                                        SELECT mrpunit FROM stock_master
+                                        WHERE warehousecode = @wh AND itemcode = @itemcode AND batchno = @batchno
+                                          AND tenantcode = @tenantcode AND deleted = false LIMIT 1;",
+                                        new { wh = master.fromwarehousecode, itemcode = detail.itemcode, detail.batchno, tenantcode },
+                                        transaction) ?? 0m,
 
                                     stockvalue =
                                         stockValue,
