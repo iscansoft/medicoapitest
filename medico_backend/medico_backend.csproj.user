@@ -2,6 +2,6 @@
 <Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <ActiveDebugProfile>https</ActiveDebugProfile>
-    <NameOfLastUsedPublishProfile>E:\Trellisys\medico_backend\medico_backend\Properties\PublishProfiles\IISProfile1.pubxml</NameOfLastUsedPublishProfile>
+    <NameOfLastUsedPublishProfile>D:\Medico_backend%28current%29\medico_backend\medico_backend\Properties\PublishProfiles\IISProfile1.pubxml</NameOfLastUsedPublishProfile>
   </PropertyGroup>
 </Project>

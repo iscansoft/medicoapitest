@@ -14989,9 +14989,9 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                         COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
 
-                        COALESCE(op.token_no, '') AS token_no,
+                        '' AS token_no,
 
-COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
 
                         COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
 
@@ -15665,9 +15665,9 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                         COALESCE(NULLIF(uc_agg.total_uc + lrm_agg.total_lrm, 0), COALESCE(ip.insurance_approved_amount, 0)) AS totalamount,
 
-                        COALESCE(op.token_no, '') AS token_no,
+                        '' AS token_no,
 
-COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0), 0) AS token_amount,
+                        COALESCE(uc_agg.token_uc + lrm_agg.token_lrm, 0) AS token_amount,
 
                         COALESCE(uc_agg.consult_uc + lrm_agg.consult_lrm, 0) AS consultation_amount,
 
@@ -15831,7 +15831,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                         FROM receipt_master rm
 
-                        WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                        WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
 
                           AND COALESCE(rm.deleted, false) = false
 
@@ -17993,7 +17993,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                             FROM receipt_master rm
 
-                            WHERE (rm.ip_id = ip.ip_id OR rm.ip_id::text = ip.ip_no OR rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
+                            WHERE (rm.opvisitid = ip.ip_id::text OR rm.opvisitid = ip.ip_no)
 
                               AND COALESCE(rm.deleted, false) = false
 
