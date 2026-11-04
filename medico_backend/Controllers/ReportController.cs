@@ -127,9 +127,14 @@ namespace medico_backend.Controllers
         }
 
         [HttpGet("getpatientreceipt")]
-        public async Task<IActionResult> PatientReceipt([FromQuery] Guid receiptguid, [FromQuery] bool? isletterhead = false)
+        public async Task<IActionResult> PatientReceipt(
+            [FromQuery] Guid receiptguid,
+            [FromQuery] Guid? requestguid = null,
+            [FromQuery] string? billno = null,
+            [FromQuery] int? custid = null,
+            [FromQuery] bool? isletterhead = false)
         {
-            var res = await _reportClass.PatientReceiptPDF(receiptguid, T, isletterhead);
+            var res = await _reportClass.PatientReceiptPDF(receiptguid, T, isletterhead, requestguid, billno, custid);
             return Ok(res);
         }
 
@@ -563,5 +568,102 @@ namespace medico_backend.Controllers
             var res = await _reportClass.GetConsolidatedListsDataAsync(T, fromdate, todate, type, search);
             return Ok(res);
         }
+    
+        // ─── ITEM-WISE PATIENT SALES / MOVEMENT REPORT ────────────────────────────
+        [AllowAnonymous]
+        [HttpGet("getitemsforsalesreport")]
+        [HttpGet("item-sales-report/items")]
+        public async Task<IActionResult> GetItemsForSalesReport(
+            [FromQuery] string? search = null,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null)
+        {
+            try
+            {
+                string t = !string.IsNullOrWhiteSpace(tenantcode) ? tenantcode : (!string.IsNullOrWhiteSpace(tenant_code) ? tenant_code : T);
+                if (string.IsNullOrWhiteSpace(t))
+                    return BadRequest(new { Status = "Failed", Message = "Header or query parameter 'tenant_code' or 'tenantcode' is required." });
+
+                var items = await _reportClass.GetItemsForSalesReport(t, search);
+                return Ok(new { Status = "Success", Data = items });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [AllowAnonymous]
+        [HttpGet("getitempatientsalesreport")]
+        [HttpGet("item-sales-report/details")]
+        public async Task<IActionResult> GetItemPatientSalesReport(
+            [FromQuery] long itemcode,
+            [FromQuery] DateTime? fromdate = null,
+            [FromQuery] DateTime? todate = null,
+            [FromQuery] string? batchno = null,
+            [FromQuery] string? salestype = null,
+            [FromQuery] long? warehousecode = null,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null)
+        {
+            try
+            {
+                string t = !string.IsNullOrWhiteSpace(tenantcode) ? tenantcode : (!string.IsNullOrWhiteSpace(tenant_code) ? tenant_code : T);
+                if (string.IsNullOrWhiteSpace(t))
+                    return BadRequest(new { Status = "Failed", Message = "Header or query parameter 'tenant_code' or 'tenantcode' is required." });
+
+                if (itemcode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid 'itemcode' is required." });
+
+                var report = await _reportClass.GetItemPatientSalesReport(itemcode, fromdate, todate, batchno, salestype, warehousecode, t);
+                if (report == null)
+                    return NotFound(new { Status = "Failed", Message = "Item not found." });
+
+                return Ok(new { Status = "Success", Data = report });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        [AllowAnonymous]
+        [HttpGet("getitempatientsalesreportpdf")]
+        public async Task<IActionResult> GetItemPatientSalesReportPdf(
+            [FromQuery] long itemcode,
+            [FromQuery] DateTime? fromdate = null,
+            [FromQuery] DateTime? todate = null,
+            [FromQuery] string? batchno = null,
+            [FromQuery] string? salestype = null,
+            [FromQuery] long? warehousecode = null,
+            [FromQuery] string? format = null,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null)
+        {
+            try
+            {
+                string t = !string.IsNullOrWhiteSpace(tenantcode) ? tenantcode : (!string.IsNullOrWhiteSpace(tenant_code) ? tenant_code : T);
+                if (string.IsNullOrWhiteSpace(t))
+                    return BadRequest(new { Status = "Failed", Message = "Header or query parameter 'tenant_code' or 'tenantcode' is required." });
+
+                if (itemcode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid 'itemcode' is required." });
+
+                var pdf = await _reportClass.GetItemPatientSalesReportPDF(itemcode, fromdate, todate, batchno, salestype, warehousecode, t);
+                if (string.IsNullOrWhiteSpace(pdf))
+                    return NotFound(new { Status = "Failed", Message = "Could not generate report PDF." });
+
+                if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase))
+                {
+                    var bytes = Convert.FromBase64String(pdf);
+                    return File(bytes, "application/pdf", $"ItemSalesReport_{itemcode}.pdf");
+                }
+
+                return Ok(new { Status = "Success", Data = pdf });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
     }
+}    }
 }

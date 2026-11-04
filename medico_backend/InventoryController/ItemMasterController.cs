@@ -3214,10 +3214,64 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+    
+        // â”€â”€â”€ ITEM-WISE PATIENT SALES / MOVEMENT REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        /// <summary>
+        /// 1. Endpoint to search/list medicines/items for the report dropdown
+        /// GET /api/ItemMaster/item-sales-report/items?search=carbo
+        /// </summary>
+        [HttpGet("item-sales-report/items")]
+        public async Task<IActionResult> GetItemsForSalesReport([FromQuery] string? search = null)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var items = await itemclass.GetItemsForSalesReport(tenantcode, search);
+                return Ok(new { Status = "Success", Data = items });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
+
+        /// <summary>
+        /// 2. Endpoint to get patient sales report for the selected item
+        /// GET /api/ItemMaster/getitempatientsalesreport?itemcode=105&fromdate=2026-04-01&todate=2026-10-31&salestype=ALL&warehousecode=37
+        /// </summary>
+        [AllowAnonymous]
+        [HttpGet("getitempatientsalesreport")]
+        [HttpGet("item-sales-report/details")]
+        public async Task<IActionResult> GetItemPatientSalesReport(
+            [FromQuery] long itemcode,
+            [FromQuery] DateTime? fromdate = null,
+            [FromQuery] DateTime? todate = null,
+            [FromQuery] string? batchno = null,
+            [FromQuery] string? salestype = null,
+            [FromQuery] long? warehousecode = null,
+            [FromQuery] string? tenantcode = null,
+            [FromQuery] string? tenant_code = null)
+        {
+            try
+            {
+                var tc = !string.IsNullOrWhiteSpace(tenantcode) ? tenantcode : (!string.IsNullOrWhiteSpace(tenant_code) ? tenant_code : GetTenantCode());
+                if (string.IsNullOrEmpty(tc)) return MissingTenantCode();
+
+                if (itemcode <= 0)
+                    return BadRequest(new { Status = "Failed", Message = "Valid 'itemcode' is required." });
+
+                var report = await itemclass.GetItemPatientSalesReport(itemcode, fromdate, todate, batchno, salestype, warehousecode, tc);
+                if (report == null)
+                    return NotFound(new { Status = "Failed", Message = "Item not found." });
+
+                return Ok(new { Status = "Success", Data = report });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Status = "Failed", Message = ex.Message });
+            }
+        }
     }
 }
-    
-        
-    
-    
-

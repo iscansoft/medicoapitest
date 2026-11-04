@@ -1,4 +1,4 @@
-﻿using Dapper.Contrib.Extensions;
+using Dapper.Contrib.Extensions;
 
 namespace medico_backend.Model
 {
@@ -128,6 +128,12 @@ namespace medico_backend.Model
             public bool isdeleted { get; set; } = false;
             public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
             public DateTime updated_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+            // Attached charge info from unbilledcharges (not columns on ip_nurse_note_service)
+            [Write(false)] public decimal? quantity { get; set; }
+            [Write(false)] public decimal? rate { get; set; }
+            [Write(false)] public decimal? amount { get; set; }
+            [Write(false)] public bool? billedstatus { get; set; }
+            [Write(false)] public string? billno { get; set; }
         }
 
         public class AddServiceRequest
@@ -141,6 +147,7 @@ namespace medico_backend.Model
             public string service_name { get; set; } = string.Empty;   // resolved against test_master
             public string? action { get; set; }
             public decimal quantity { get; set; } = 1;                  // used to compute the unbilled amount
+            public decimal? rate { get; set; }                          // optional custom/override rate
             public string? remarks { get; set; }
         }
 
@@ -153,6 +160,7 @@ namespace medico_backend.Model
             public string service_name { get; set; } = string.Empty;
             public string? action { get; set; }
             public decimal? quantity { get; set; }                  // NEW — used to re-price the fee (defaults to 1)
+            public decimal? rate { get; set; }                          // optional custom/override rate
             public string? remarks { get; set; }
         }
 
@@ -178,6 +186,8 @@ namespace medico_backend.Model
             public int? usercode { get; set; }
             public string? tenant_code { get; set; }
             public bool isdeleted { get; set; } = false;
+            public bool sent_to_pharmacy { get; set; } = false;
+            public DateTime? sent_to_pharmacy_at { get; set; }
             public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
             public DateTime updated_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
         }

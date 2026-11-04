@@ -476,5 +476,216 @@ namespace medico_backend.Controllers
                 return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
-    }
+        // ═══════════════════════════════════════════════════════════════════════
+        //  8c. CANCEL ADVANCE DEPOSIT
+        //
+        //  POST /api/HmsDueCollection/advance/cancel
+        //  Body: { "receiptguid": "...", "usercode": 10, "reason": "Entered by mistake" }
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/cancel")]
+        public async Task<IActionResult> CancelAdvance([FromBody] HmsAdvanceCancelRequest req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, data) = await _service.CancelAdvance(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message = status });
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Advance deposit cancelled successfully.",
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cancelling advance receipt={rg}", req?.receiptguid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+        // ═══════════════════════════════════════════════════════════════════════
+        //  12. ADVANCE COLLECTION REQUEST TO CASH COUNTER
+        //
+        //  POST /api/HmsDueCollection/advance/request
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/request")]
+        public async Task<IActionResult> CreateAdvanceRequest([FromBody] HmsCreateAdvanceRequestDto req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, data) = await _service.CreateAdvanceRequest(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message = status });
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Advance collection request sent to cash counter.",
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating advance request for custid={c}", req?.custid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  13. LIST ADVANCE COLLECTION REQUESTS
+        //
+        //  POST /api/HmsDueCollection/advance/requests
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/requests")]
+        public async Task<IActionResult> GetAdvanceRequests([FromBody] HmsAdvanceRequestFilterDto filter)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (data, totalCount, summary) = await _service.GetAdvanceRequests(filter, tenant);
+
+                return Ok(new
+                {
+                    success = true,
+                    totalCount,
+                    page = filter.page,
+                    pagesize = filter.pagesize,
+                    summary,
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching advance requests.");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  14. RECEIVE / COLLECT ADVANCE REQUEST AT CASH COUNTER
+        //
+        //  POST /api/HmsDueCollection/advance/request/receive
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/request/receive")]
+        public async Task<IActionResult> ReceiveAdvanceRequest([FromBody] HmsCollectAdvanceRequestDto req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, data) = await _service.ReceiveAdvanceRequest(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message = status });
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Advance received and deposited successfully.",
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error receiving advance request={id}", req?.request_id);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  15. CANCEL ADVANCE COLLECTION REQUEST
+        //
+        //  POST /api/HmsDueCollection/advance/request/cancel
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/request/cancel")]
+        public async Task<IActionResult> CancelAdvanceRequest([FromBody] HmsCancelAdvanceRequestDto req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, message) = await _service.CancelAdvanceRequest(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message });
+
+                return Ok(new { success = true, message });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cancelling advance request={id}", req?.request_id);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  16. PATIENTS WHO HAVE DEPOSITED ADVANCE (WITH AVAILABLE BALANCE / REFUND QUEUE)
+        //
+        //  POST /api/HmsDueCollection/advance/patient-deposits
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/patient-deposits")]
+        public async Task<IActionResult> GetPatientAdvanceDeposits([FromBody] HmsPatientAdvanceDepositFilterRequest filter)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (data, totalCount, summary) = await _service.GetPatientAdvanceDeposits(filter, tenant);
+
+                return Ok(new
+                {
+                    success = true,
+                    totalCount,
+                    page = filter.page,
+                    pagesize = filter.pagesize,
+                    summary,
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching patient advance deposits.");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  17. ADVANCE REFUND HISTORY
+        //
+        //  POST /api/HmsDueCollection/advance/refund-history
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/refund-history")]
+        public async Task<IActionResult> GetAdvanceRefundHistory([FromBody] HmsAdvanceRefundFilterRequest filter)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (data, totalCount, summary) = await _service.GetAdvanceRefundHistory(filter, tenant);
+
+                return Ok(new
+                {
+                    success = true,
+                    totalCount,
+                    page = filter.page,
+                    pagesize = filter.pagesize,
+                    summary,
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching advance refund history.");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+}
 }

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -378,6 +378,8 @@ namespace medico_backend.Model
         public double due_after { get; set; }
         public bool is_fully_settled { get; set; }
         public string? advance_receipt_guid { get; set; }
+        public string? receipt_guid { get; set; }
+        public string? receipt_no { get; set; }
 
         // ── NEW: echo back the effective payment details used for this item ───
         public string? collection_type { get; set; }
@@ -445,6 +447,7 @@ namespace medico_backend.Model
         public DateTime? receiptdate { get; set; }
         public string? receiptsnoprint { get; set; }
         public string? transaction_type { get; set; }
+        public string? bill_no { get; set; }
     }
 
     public class HmsDueCollectionSummary
@@ -452,6 +455,8 @@ namespace medico_backend.Model
         public string? receipt_guid { get; set; }
         public string? receipt_no { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
+        public string? bill_guid { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -539,6 +544,7 @@ namespace medico_backend.Model
         public DateTime? receiptdate { get; set; }
         public double? amount { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -622,6 +628,7 @@ namespace medico_backend.Model
         public string? receipt_type { get; set; }
         public DateTime? receipt_date { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -683,5 +690,203 @@ namespace medico_backend.Model
         public double advance_balance_after { get; set; }
         public int bills_settled { get; set; }
         public List<HmsAdvanceUseItemResult> items { get; set; } = new();
+    }
+    public class HmsAdvanceCancelRequest
+    {
+        public string receiptguid { get; set; } = string.Empty;
+        public int? usercode { get; set; }
+        public string? reason { get; set; }
+    }
+
+    public class HmsAdvanceCancelResponse
+    {
+        public string receipt_guid { get; set; } = string.Empty;
+        public string? receipt_no { get; set; }
+        public decimal? custid { get; set; }
+        public double cancelled_amount { get; set; }
+        public double advance_balance_before { get; set; }
+        public double advance_balance_after { get; set; }
+        public DateTime cancelled_date { get; set; }
+    }
+    // ═════════════════════════════════════════════════════════════════════════
+    //  ADVANCE REQUEST & PATIENT DEPOSIT / REFUND QUEUE MODELS
+    // ═════════════════════════════════════════════════════════════════════════
+
+    [Table("hms_advance_request")]
+    public class HmsAdvanceRequestRow
+    {
+        [ExplicitKey] public Guid request_id { get; set; } = Guid.NewGuid();
+        public string request_no { get; set; } = string.Empty;
+        public DateTime request_date { get; set; } = DateTime.UtcNow;
+        public decimal custid { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobile_no { get; set; }
+        public string? opvisitid { get; set; }
+        public Guid? ip_id { get; set; }
+        public double amount { get; set; }
+        public string? purpose { get; set; }
+        public string? remarks { get; set; }
+        public string status { get; set; } = "PENDING"; // PENDING, COLLECTED, CANCELLED
+        public int? requested_by { get; set; }
+        public string? requested_by_name { get; set; }
+        public int? target_cntcode { get; set; }
+        public int? target_bhcode { get; set; }
+        public int? collected_by { get; set; }
+        public string? collected_by_name { get; set; }
+        public DateTime? collected_date { get; set; }
+        public string? receiptguid { get; set; }
+        public string? receiptsnoprint { get; set; }
+        public string? cancel_reason { get; set; }
+        public int? cancelled_by { get; set; }
+        public DateTime? cancelled_date { get; set; }
+        public string tenant_code { get; set; } = string.Empty;
+        public DateTime created_at { get; set; } = DateTime.UtcNow;
+        public DateTime updated_at { get; set; } = DateTime.UtcNow;
+    }
+
+    public class HmsCreateAdvanceRequestDto
+    {
+        public decimal custid { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobile_no { get; set; }
+        public string? opvisitid { get; set; }
+        public Guid? ip_id { get; set; }
+        public double amount { get; set; }
+        public string? purpose { get; set; } // e.g. "IP Admission Deposit", "Surgery Advance"
+        public string? remarks { get; set; }
+        public int? target_cntcode { get; set; }
+        public int? target_bhcode { get; set; }
+        public int? usercode { get; set; }
+        public string? user_name { get; set; }
+    }
+
+    public class HmsAdvanceRequestFilterDto
+    {
+        public string? status { get; set; } // "PENDING", "COLLECTED", "CANCELLED", or null for all
+        public decimal? custid { get; set; }
+        public int? cntcode { get; set; }
+        public int? bhcode { get; set; }
+        public DateTime? fromdate { get; set; }
+        public DateTime? todate { get; set; }
+        public string? search { get; set; }
+        public int page { get; set; } = 1;
+        public int pagesize { get; set; } = 20;
+    }
+
+    public class HmsAdvanceRequestListSummary
+    {
+        public int total_requests { get; set; }
+        public int pending_count { get; set; }
+        public double pending_amount { get; set; }
+        public int collected_count { get; set; }
+        public double collected_amount { get; set; }
+        public int cancelled_count { get; set; }
+        public double cancelled_amount { get; set; }
+    }
+
+    public class HmsCollectAdvanceRequestDto
+    {
+        public Guid request_id { get; set; }
+        public double? amount { get; set; } // allows updating/confirming the actual received amount
+        public string collection_type { get; set; } = "CASH"; // CASH, CARD, UPI, CHEQUE, etc.
+        public string? reference_no { get; set; }
+        public string? bank_name { get; set; }
+        public string? card_no { get; set; }
+        public DateTime? cheque_date { get; set; }
+        public int? enteredbhcode { get; set; }
+        public int? cntcode { get; set; }
+        public string? cnttid { get; set; }
+        public decimal? pmcode { get; set; }
+        public decimal? ctcode { get; set; }
+        public decimal? tmcode { get; set; }
+        public int? usercode { get; set; }
+        public string? user_name { get; set; }
+        public int? computercode { get; set; }
+        public string? remarks { get; set; }
+    }
+
+    public class HmsCancelAdvanceRequestDto
+    {
+        public Guid request_id { get; set; }
+        public string? cancel_reason { get; set; }
+        public int? usercode { get; set; }
+    }
+
+    public class HmsPatientAdvanceDepositFilterRequest
+    {
+        public string? search { get; set; } // patient name, mobile, custcode, custid
+        public DateTime? fromdate { get; set; }
+        public DateTime? todate { get; set; }
+        public string? balance_status { get; set; } = "ALL"; // "ALL", "HAS_BALANCE", "ZERO_BALANCE"
+        public int? bhcode { get; set; }
+        public int? cntcode { get; set; }
+        public int page { get; set; } = 1;
+        public int pagesize { get; set; } = 20;
+    }
+
+    public class HmsPatientAdvanceDepositRow
+    {
+        public decimal custid { get; set; }
+        public string custcode { get; set; } = string.Empty;
+        public string patient_name { get; set; } = string.Empty;
+        public string mobile_no { get; set; } = string.Empty;
+        public string gender { get; set; } = string.Empty;
+        public int age { get; set; }
+        public double total_deposited { get; set; }
+        public double total_used { get; set; }
+        public double total_refunded { get; set; }
+        public double available_balance { get; set; }
+        public DateTime? first_deposit_date { get; set; }
+        public DateTime? last_deposit_date { get; set; }
+        public string? last_receipt_no { get; set; }
+        public int deposit_count { get; set; }
+        public string status { get; set; } = "ACTIVE"; // "HAS_BALANCE" | "EXHAUSTED"
+    }
+
+    public class HmsPatientAdvanceDepositSummary
+    {
+        public int total_patients { get; set; }
+        public double total_deposited { get; set; }
+        public double total_used { get; set; }
+        public double total_refunded { get; set; }
+        public double total_available_balance { get; set; }
+    }
+
+    public class HmsAdvanceRefundFilterRequest
+    {
+        public decimal? custid { get; set; }
+        public string? search { get; set; }
+        public DateTime? fromdate { get; set; }
+        public DateTime? todate { get; set; }
+        public int? bhcode { get; set; }
+        public int? cntcode { get; set; }
+        public int page { get; set; } = 1;
+        public int pagesize { get; set; } = 20;
+    }
+
+    public class HmsAdvanceRefundHistoryRow
+    {
+        public string receiptguid { get; set; } = string.Empty;
+        public string? receipt_no { get; set; }
+        public string? receiptbarcode { get; set; }
+        public DateTime receiptdate { get; set; }
+        public decimal custid { get; set; }
+        public string custcode { get; set; } = string.Empty;
+        public string patient_name { get; set; } = string.Empty;
+        public string mobile_no { get; set; } = string.Empty;
+        public double refund_amount { get; set; }
+        public int? usercode { get; set; }
+        public string? entered_by { get; set; }
+        public int? cntcode { get; set; }
+        public string? counter_name { get; set; }
+        public int? enteredbhcode { get; set; }
+        public string? branch_name { get; set; }
+        public string? remarks { get; set; }
+    }
+
+    public class HmsAdvanceRefundSummary
+    {
+        public int total_refund_count { get; set; }
+        public double total_refund_amount { get; set; }
     }
 }

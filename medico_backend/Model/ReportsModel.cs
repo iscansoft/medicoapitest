@@ -646,6 +646,8 @@ namespace medico_backend.Model
 
         public string Age { get; set; }
 
+        public DateTime? DateOfBirth { get; set; }
+
         public string Gender { get; set; }
 
         public string PatientAddress { get; set; }
@@ -855,6 +857,8 @@ namespace medico_backend.Model
         public string PatientName { get; set; }
 
         public string Age { get; set; }
+
+        public DateTime? DateOfBirth { get; set; }
 
         public string Gender { get; set; }
 

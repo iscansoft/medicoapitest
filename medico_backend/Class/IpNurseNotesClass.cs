@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using medico_backend.Model;
 using Npgsql;
 using System.Data;
@@ -34,6 +34,27 @@ namespace medico_backend.Class
             _itemMasterCls = itemMasterCls;
         }
 
+        private static bool _nurseMedicineColumnsRan = false;
+        private static readonly object _nurseMedicineColumnsLock = new object();
+
+        private void EnsureNurseMedicineColumns()
+        {
+            if (_nurseMedicineColumnsRan) return;
+            lock (_nurseMedicineColumnsLock)
+            {
+                if (_nurseMedicineColumnsRan) return;
+                try
+                {
+                    using IDbConnection db = new NpgsqlConnection(_db_conn);
+                    db.Execute(@"
+                        ALTER TABLE ip_nurse_note_medicine
+                            ADD COLUMN IF NOT EXISTS sent_to_pharmacy    boolean DEFAULT false,
+                            ADD COLUMN IF NOT EXISTS sent_to_pharmacy_at timestamp with time zone;");
+                    _nurseMedicineColumnsRan = true;
+                }
+                catch { }
+            }
+        }
         private async Task<bool> IpExists(IDbConnection db, Guid ip_id, string tenant_code)
         {
             // Step 1 — does this ip_id exist at all, regardless of tenant_code?
@@ -277,11 +298,18 @@ namespace medico_backend.Class
             if (string.IsNullOrWhiteSpace(req.service_name))
                 return "service_name is required";
 
-            // Resolve tcode + rate from test_master by name — same helper OP uses
-            // for Dressing/Service registration, now shared via UnbilledChargesClass.
+            if (req.custid <= 0)
+            {
+                var cid = await db.QueryFirstOrDefaultAsync<decimal?>(
+                    "SELECT custid FROM ip_registration WHERE ip_id = @ip_id AND tenant_code = @tenant_code LIMIT 1",
+                    new { req.ip_id, tenant_code });
+                if (cid.HasValue && cid.Value > 0)
+                    req.custid = cid.Value;
+            }
+
+            // Resolve tcode + rate from test_master by name
             var (tcode, rate) = await _unbilledCls.GetTestMasterRateByName(db, null, req.service_name, tenant_code);
-            if (tcode == null)
-                return $"Service '{req.service_name}' not configured in test master for this tenant";
+            decimal effectiveRate = (req.rate.HasValue && req.rate.Value > 0) ? req.rate.Value : rate;
 
             var data = new NurseServiceModel
             {
@@ -323,15 +351,26 @@ namespace medico_backend.Class
                 });
 
             // Push into unbilledcharges — only place pricing lives.
-            decimal amount = rate * req.quantity;
-            await _unbilledCls.AddOtChargeRow(
-                db, null, op_id: null, ip_id: req.ip_id, custid: req.custid, tenant_code: tenant_code,
-                entryType: "IP_SERVICE",
-                entryId: data.service_id.ToString(),
-                itemName: data.service_name,
-                quantity: req.quantity,
-                rate: rate,
-                amount: amount);
+            bool alreadyCharged = await db.ExecuteScalarAsync<bool>(
+                @"SELECT EXISTS (SELECT 1 FROM unbilledcharges
+                                 WHERE (entrytype = 'SERVICE' OR entrytype = 'IP_SERVICE') AND entryid = @entryid
+                                   AND tenant_code = @tenant_code)",
+                new { entryid = data.service_id.ToString(), tenant_code });
+
+            if (!alreadyCharged)
+            {
+                decimal qty = req.quantity > 0 ? req.quantity : 1;
+                decimal amount = effectiveRate * qty;
+                await _unbilledCls.AddOtChargeRow(
+                    db, null, op_id: null, ip_id: req.ip_id, custid: req.custid, tenant_code: tenant_code,
+                    entryType: "SERVICE",
+                    entryId: data.service_id.ToString(),
+                    itemName: data.service_name,
+                    quantity: qty,
+                    rate: effectiveRate,
+                    amount: amount,
+                    tcode: tcode);
+            }
 
             return $"Success|Id:{data.service_id}";
         }
@@ -358,7 +397,7 @@ namespace medico_backend.Class
             // 2. Block if the charge is already billed
             bool isBilled = await db.ExecuteScalarAsync<bool>(
                 @"SELECT EXISTS (SELECT 1 FROM unbilledcharges
-                                 WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid
+                                 WHERE (entrytype = 'SERVICE' OR entrytype = 'IP_SERVICE') AND entryid = @entryid
                                  AND tenant_code = @tenant_code AND billedstatus = true)",
                 new { entryid = req.service_id.ToString(), tenant_code });
             if (isBilled)
@@ -366,10 +405,8 @@ namespace medico_backend.Class
 
             // 3. Re-resolve rate from test_master for the (possibly new) service name
             var (tcode, rate) = await _unbilledCls.GetTestMasterRateByName(db, null, req.service_name, tenant_code);
-            if (tcode == null)
-                return $"Service '{req.service_name}' not configured in test master for this tenant";
-
-            decimal qty = req.quantity ?? 1;
+            decimal qty = (req.quantity.HasValue && req.quantity.Value > 0) ? req.quantity.Value : 1;
+            decimal effectiveRate = (req.rate.HasValue && req.rate.Value > 0) ? req.rate.Value : rate;
 
             using var tx = db.BeginTransaction();
             try
@@ -397,18 +434,19 @@ namespace medico_backend.Class
                 // 5. Fee: remove pending charge row, re-insert via the same helper as AddService
                 await db.ExecuteAsync(@"
                     DELETE FROM unbilledcharges
-                    WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid AND tenant_code = @tenant_code
+                    WHERE (entrytype = 'SERVICE' OR entrytype = 'IP_SERVICE') AND entryid = @entryid AND tenant_code = @tenant_code
                       AND (billedstatus = false OR billedstatus IS NULL)",
                     new { entryid = req.service_id.ToString(), tenant_code }, tx);
 
                 await _unbilledCls.AddOtChargeRow(
                     db, tx, op_id: null, ip_id: (Guid)note.ip_id, custid: (decimal)note.custid, tenant_code: tenant_code,
-                    entryType: "IP_SERVICE",
+                    entryType: "SERVICE",
                     entryId: req.service_id.ToString(),
                     itemName: req.service_name,
                     quantity: qty,
-                    rate: rate,
-                    amount: rate * qty);
+                    rate: effectiveRate,
+                    amount: effectiveRate * qty,
+                    tcode: tcode);
 
                 tx.Commit();
                 return "Success";
@@ -424,9 +462,15 @@ namespace medico_backend.Class
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             var res = await db.QueryAsync<NurseServiceModel>(
-                @"SELECT * FROM ip_nurse_note_service
-                  WHERE ip_id = @ip_id AND tenant_code = @tenant_code AND isdeleted = false
-                  ORDER BY entry_date DESC, entry_time DESC",
+                @"SELECT s.*,
+                         uc.quantity, uc.rate, uc.amount, uc.billedstatus, uc.billno
+                  FROM ip_nurse_note_service s
+                  LEFT JOIN unbilledcharges uc
+                    ON (uc.entrytype = 'SERVICE' OR uc.entrytype = 'IP_SERVICE')
+                   AND uc.entryid = s.service_id::text
+                   AND uc.tenant_code = s.tenant_code
+                  WHERE s.ip_id = @ip_id AND s.tenant_code = @tenant_code AND s.isdeleted = false
+                  ORDER BY s.entry_date DESC, s.entry_time DESC",
                 new { ip_id, tenant_code });
             return res.ToList();
         }
@@ -443,7 +487,7 @@ namespace medico_backend.Class
 
             await db.ExecuteAsync(
                 @"DELETE FROM unbilledcharges
-          WHERE entrytype = 'IP_SERVICE' AND entryid = @entryid AND tenant_code = @tenant_code
+          WHERE (entrytype = 'SERVICE' OR entrytype = 'IP_SERVICE') AND entryid = @entryid AND tenant_code = @tenant_code
           AND (billedstatus = false OR billedstatus IS NULL)",
                 new { entryid = service_id.ToString(), tenant_code });
 
@@ -455,8 +499,20 @@ namespace medico_backend.Class
         // ═══════════════════════════════════════════════════════
         public async Task<string> AddMedicine(AddMedicineRequest req, int usercode, string tenant_code)
         {
+            EnsureNurseMedicineColumns();
             using IDbConnection db = new NpgsqlConnection(_db_conn);
+            db.Open();
+
             if (!await IpExists(db, req.ip_id, tenant_code)) return "IP Registration not found";
+
+            if (req.custid <= 0)
+            {
+                var cid = await db.QueryFirstOrDefaultAsync<decimal?>(
+                    "SELECT custid FROM ip_registration WHERE ip_id = @ip_id AND tenant_code = @tenant_code LIMIT 1",
+                    new { req.ip_id, tenant_code });
+                if (cid.HasValue && cid.Value > 0)
+                    req.custid = cid.Value;
+            }
 
             var data = new NurseMedicineModel
             {
@@ -469,83 +525,48 @@ namespace medico_backend.Class
                 dose = req.dose,
                 unit = req.unit,
                 route = req.route,
-                quantity = req.quantity,
+                quantity = req.quantity > 0 ? req.quantity : 1,
                 status = string.IsNullOrWhiteSpace(req.status) ? "GIVEN" : req.status.ToUpper(),
                 remarks = req.remarks,
                 usercode = usercode,
-                tenant_code = tenant_code
+                tenant_code = tenant_code,
+                sent_to_pharmacy = false
             };
 
             await db.ExecuteAsync(@"
                 INSERT INTO ip_nurse_note_medicine
                 (med_id, ip_id, custid, entry_date, entry_time, shift, medicine_name, dose, unit,
-                 route,quantity, status, remarks, usercode, tenant_code, isdeleted, created_at, updated_at)
+                 route, quantity, status, remarks, usercode, tenant_code, isdeleted, sent_to_pharmacy, created_at, updated_at)
                 VALUES
                 (@med_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @medicine_name, @dose, @unit,
-                 @route,@quantity, @status, @remarks, @usercode, @tenant_code, @isdeleted, @created_at, @updated_at)",
-     new
-     {
-         data.med_id,
-         data.ip_id,
-         data.custid,
-         entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
-         entry_time = data.entry_time.ToTimeSpan(),
-         data.shift,
-         data.medicine_name,
-         data.dose,
-         data.unit,
-         data.route,
-         data.quantity,
-         data.status,
-         data.remarks,
-         data.usercode,
-         data.tenant_code,
-         data.isdeleted,
-         data.created_at,
-         data.updated_at
-     });
+                 @route, @quantity, @status, @remarks, @usercode, @tenant_code, @isdeleted, @sent_to_pharmacy, @created_at, @updated_at)",
+                new
+                {
+                    data.med_id,
+                    data.ip_id,
+                    data.custid,
+                    entry_date = data.entry_date.ToDateTime(TimeOnly.MinValue),
+                    entry_time = data.entry_time.ToTimeSpan(),
+                    data.shift,
+                    data.medicine_name,
+                    data.dose,
+                    data.unit,
+                    data.route,
+                    data.quantity,
+                    data.status,
+                    data.remarks,
+                    data.usercode,
+                    data.tenant_code,
+                    data.isdeleted,
+                    data.sent_to_pharmacy,
+                    data.created_at,
+                    data.updated_at
+                });
 
-            // ... existing INSERT INTO ip_nurse_note_medicine stays exactly as is ...
+            // Immediately send unsent medicines to the pharmacy queue
+            string pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
 
-            // ── NEW: push to pharmacy queue (best-effort, same as FinalizeCaseSheet) ──
-            //string pharmacyTag;
-            //try
-            //{
-            //    var pharmacyReq = new ReceivePrescriptionRequest
-            //    {
-            //        custid = req.custid,
-            //        op_id = null,
-            //        ip_id = req.ip_id.ToString(),
-            //        sheet_id = null,
-            //        // one group per patient per day, so the pharmacist sees one list
-            //        pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{req.ip_id.ToString()[..8]}",
-            //        items = new List<PrescriptionQueueItem>
-            //{
-            //    new PrescriptionQueueItem
-            //    {
-            //        pr_det_id = data.med_id.ToString(),   // links queue row back to the nurse note
-            //        drug_name = data.medicine_name,
-            //        qty = data.quantity,
-            //        route     = data.route,
-            //        notes     = string.IsNullOrWhiteSpace(data.remarks)
-            //                        ? (data.dose.HasValue ? $"Dose: {data.dose} {data.unit}" : null)
-            //                        : data.remarks
-            //    }
-            //}
-            //    };
-
-            //    var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
-            //    pharmacyTag = pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase)
-            //        ? "|Pharmacy:Sent"
-            //        : $"|Pharmacy:Failed({pharmRes})";
-            //}
-            //catch (Exception ex)
-            //{
-            //    // Nurse note is already saved. Don't block the nurse on a pharmacy hiccup.
-            //    pharmacyTag = $"|Pharmacy:Failed({ex.Message})";
-            //}
-
-            return $"Success|Id:{data.med_id}";  // was: return $"Success|Id:{data.med_id}";
+            return $"Success|Id:{data.med_id}" + pharmacyTag;
         }
 
 
@@ -712,8 +733,14 @@ namespace medico_backend.Class
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
             return await db.QueryFirstOrDefaultAsync<NurseServiceModel>(
-                @"SELECT * FROM ip_nurse_note_service
-                  WHERE ip_id = @ip_id AND service_id = @service_id AND tenant_code = @tenant_code AND isdeleted = false",
+                @"SELECT s.*,
+                         uc.quantity, uc.rate, uc.amount, uc.billedstatus, uc.billno
+                  FROM ip_nurse_note_service s
+                  LEFT JOIN unbilledcharges uc
+                    ON (uc.entrytype = 'SERVICE' OR uc.entrytype = 'IP_SERVICE')
+                   AND uc.entryid = s.service_id::text
+                   AND uc.tenant_code = s.tenant_code
+                  WHERE s.ip_id = @ip_id AND s.service_id = @service_id AND s.tenant_code = @tenant_code AND s.isdeleted = false",
                 new { ip_id, service_id, tenant_code });
         }
         // GET single Medicine record by ip_id + med_id
@@ -1031,34 +1058,56 @@ namespace medico_backend.Class
           WHERE ip_id = @ip_id AND tenant_code = @tenant_code",
                 new { ip_id, tenant_code });
         }
-        // Pushes every not-yet-sent medicine of this admission to the pharmacy queue.
-        // Best-effort: authorization is already saved, so a pharmacy failure never blocks it.
         private async Task<string> SendMedicinesToPharmacy(IDbConnection db, Guid ip_id, string tenant_code)
         {
+            EnsureNurseMedicineColumns();
+            if (db.State != ConnectionState.Open) db.Open();
+            using var tx = db.BeginTransaction();
             try
             {
+                // Atomically claim only the not-yet-sent rows. A concurrent call blocks on the
+                // row lock, then re-checks the condition and finds nothing left to claim.
                 var meds = (await db.QueryAsync<NurseMedicineModel>(@"
-            SELECT * FROM ip_nurse_note_medicine
-            WHERE ip_id = @ip_id AND tenant_code = @tenant_code
-              AND isdeleted = false
-              AND COALESCE(sent_to_pharmacy, false) = false
-            ORDER BY entry_date, entry_time",
-                    new { ip_id, tenant_code })).ToList();
+                    UPDATE ip_nurse_note_medicine
+                    SET sent_to_pharmacy = true,
+                        sent_to_pharmacy_at = now(),
+                        updated_at = now()
+                    WHERE ip_id = @ip_id
+                      AND tenant_code = @tenant_code
+                      AND isdeleted = false
+                      AND (sent_to_pharmacy = false OR sent_to_pharmacy IS NULL)
+                    RETURNING *",
+                    new { ip_id, tenant_code }, tx)).ToList();
 
-                if (meds.Count == 0) return "|Pharmacy:NothingToSend";
+                if (meds.Count == 0)
+                {
+                    tx.Commit();
+                    return "|Pharmacy:NothingToSend";
+                }
+
+                decimal resolvedCustId = meds[0].custid;
+                if (resolvedCustId <= 0)
+                {
+                    var cid = await db.QueryFirstOrDefaultAsync<decimal?>(
+                        "SELECT custid FROM ip_registration WHERE ip_id = @ip_id AND tenant_code = @tenant_code LIMIT 1",
+                        new { ip_id, tenant_code }, tx);
+                    if (cid.HasValue && cid.Value > 0)
+                        resolvedCustId = cid.Value;
+                }
 
                 var pharmacyReq = new ReceivePrescriptionRequest
                 {
-                    custid = meds[0].custid,
+                    custid = resolvedCustId,
                     op_id = null,
                     ip_id = ip_id.ToString(),
                     sheet_id = null,
-                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMdd}/{ip_id.ToString()[..8]}",
+                    // timestamp suffix so a second batch the same day doesn't collide on pr_code
+                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMddHHmmss}/{ip_id.ToString()[..8]}",
                     items = meds.Select(m => new PrescriptionQueueItem
                     {
-                        pr_det_id = m.med_id.ToString(),   // links queue row back to the nurse note
+                        pr_det_id = m.med_id.ToString(),
                         drug_name = m.medicine_name,
-                        qty = m.quantity,
+                        qty = m.quantity > 0 ? m.quantity : 1,
                         route = m.route,
                         notes = string.IsNullOrWhiteSpace(m.remarks)
                                     ? (m.dose.HasValue ? $"Dose: {m.dose} {m.unit}" : null)
@@ -1068,18 +1117,17 @@ namespace medico_backend.Class
 
                 var pharmRes = await _itemMasterCls.ReceivePrescription(pharmacyReq, tenant_code);
                 if (!pharmRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
+                {
+                    tx.Rollback();   // flags revert -> will be retried on next authorize or add
                     return $"|Pharmacy:Failed({pharmRes})";
+                }
 
-                await db.ExecuteAsync(@"
-            UPDATE ip_nurse_note_medicine
-            SET sent_to_pharmacy = true, updated_at = now()
-            WHERE med_id = ANY(@ids) AND tenant_code = @tenant_code",
-                    new { ids = meds.Select(m => m.med_id).ToArray(), tenant_code });
-
+                tx.Commit();
                 return $"|Pharmacy:Sent({meds.Count})";
             }
             catch (Exception ex)
             {
+                try { tx.Rollback(); } catch { }
                 return $"|Pharmacy:Failed({ex.Message})";
             }
         }

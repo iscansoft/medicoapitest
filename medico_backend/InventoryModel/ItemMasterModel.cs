@@ -1,4 +1,4 @@
-﻿using Dapper.Contrib.Extensions;
+using Dapper.Contrib.Extensions;
 
 namespace medico_backend.InventoryModel
 {
@@ -1514,5 +1514,144 @@ public long? customercode { get; set; }
         public int bills { get; set; }
         public decimal collected { get; set; }
     }
-}
 
+    // ===============================================================================
+    // ITEM-WISE PATIENT SALES / MOVEMENT REPORT MODELS
+    // ===============================================================================
+    public class ItemSalesReportSearchItemDto
+    {
+        public long itemcode { get; set; }
+        public string itemname { get; set; } = string.Empty;
+        public string? drugname { get; set; }
+        public string? packaging { get; set; }
+        public decimal packsize { get; set; }
+        public decimal mrp { get; set; }
+        public decimal salesrate { get; set; }
+        public decimal currentstock { get; set; }
+    }
+    public class ItemSalesReportItemHeader
+    {
+        public long itemcode { get; set; }
+        public string itemname { get; set; } = string.Empty;
+        public string? drugname { get; set; }
+        public string? packaging { get; set; }
+        public decimal packsize { get; set; }
+        public decimal mrp { get; set; }
+        public decimal salesrate { get; set; }
+        public decimal purchaserate { get; set; }
+        public decimal currentstock { get; set; }
+        public decimal gstpercentage { get; set; }
+    }
+    public class ItemSalesReportRowDto
+    {
+        public DateTime trans_date { get; set; }
+        public string bill_no { get; set; } = string.Empty;
+        public string transaction_type { get; set; } = "SALES"; // "SALES" or "PURCHASE"
+        public string movement_type { get; set; } = "ISSUE";    // "ISSUE" (Sales) or "RECEIVE" (Purchase)
+        
+        // Patient / Particulars
+        public string particulars { get; set; } = string.Empty;
+        public string? patient_id { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobile_no { get; set; }
+        public string? doctor_name { get; set; }
+        public string? sales_type { get; set; } // OP, IP, COUNTER, PURCHASE
+        
+        // Batch & Quantities
+        public string? batch_no { get; set; }
+        public DateTime? expiry_date { get; set; }
+        public decimal receive_qty { get; set; }
+        public decimal issue_qty { get; set; }
+        public decimal balance_qty { get; set; }
+        
+        // Financials
+        public decimal rate { get; set; }
+        public decimal total_amount { get; set; }
+    }
+    public class ItemSalesReportSummary
+    {
+        public decimal opening_balance { get; set; }
+        public decimal total_received { get; set; }
+        public decimal total_issued { get; set; }
+        public decimal closing_balance { get; set; }
+        public decimal total_sales_amount { get; set; }
+    }
+    public class ItemSalesReportResponse
+    {
+        public ItemSalesReportItemHeader Item { get; set; } = new();
+        public ItemSalesReportSummary Summary { get; set; } = new();
+        public List<ItemSalesReportRowDto> Transactions { get; set; } = new();
+    }
+
+    public class ItemSalesReportHeaderInfo
+    {
+        public string? CompanyName { get; set; }
+        public string? BranchName { get; set; }
+        public string? CompanyAddress { get; set; }
+        public string? CompanyContactNo { get; set; }
+        public string? CompanyEmail { get; set; }
+        public byte[]? LogoImage { get; set; }
+
+        public string? PharmacyName { get; set; }
+        public string? LicenseNo { get; set; }
+        public string? PharmacyRCNo { get; set; }
+        public string? GSTNo { get; set; }
+        public string? MSMENo { get; set; }
+        public string? Address { get; set; }
+        public string? Branch { get; set; }
+        public long? WarehouseCode { get; set; }
+        public DateTime PeriodFrom { get; set; }
+        public DateTime PeriodTo { get; set; }
+        public DateTime GeneratedDate { get; set; } = DateTime.Now;
+
+        // Item Header Info
+        public long ItemCode { get; set; }
+        public string ItemName { get; set; } = string.Empty;
+        public string? DrugName { get; set; }
+        public string? Packaging { get; set; }
+        public decimal PackSize { get; set; } = 1;
+        public decimal Mrp { get; set; }
+        public decimal SalesRate { get; set; }
+        public decimal PurchaseRate { get; set; }
+        public decimal CurrentStock { get; set; }
+        public decimal GstPercentage { get; set; }
+    }
+
+    public class ItemSalesReportRowInfo
+    {
+        public int SNo { get; set; }
+        public DateTime TransDate { get; set; }
+        public string BillNo { get; set; } = string.Empty;
+        public string TransactionType { get; set; } = "SALES";
+        public string MovementType { get; set; } = "ISSUE";
+        public string Particulars { get; set; } = string.Empty;
+        public string? PatientId { get; set; }
+        public string? PatientName { get; set; }
+        public string? MobileNo { get; set; }
+        public string? DoctorName { get; set; }
+        public string? SalesType { get; set; }
+        public string? BatchNo { get; set; }
+        public DateTime? ExpiryDate { get; set; }
+        public decimal ReceiveQty { get; set; }
+        public decimal IssueQty { get; set; }
+        public decimal BalanceQty { get; set; }
+        public decimal Rate { get; set; }
+        public decimal TotalAmount { get; set; }
+    }
+
+    public class ItemSalesReportSummaryInfo
+    {
+        public decimal OpeningBalance { get; set; }
+        public decimal TotalReceived { get; set; }
+        public decimal TotalIssued { get; set; }
+        public decimal ClosingBalance { get; set; }
+        public decimal TotalSalesAmount { get; set; }
+    }
+
+    public class ItemPatientSalesReportPdfModel
+    {
+        public ItemSalesReportHeaderInfo Header { get; set; } = new();
+        public ItemSalesReportSummaryInfo Summary { get; set; } = new();
+        public List<ItemSalesReportRowInfo> Transactions { get; set; } = new();
+    }
+}

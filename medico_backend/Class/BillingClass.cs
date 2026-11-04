@@ -2144,10 +2144,7 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
               FROM service_type_master s
              WHERE s.tenant_code = lrm.tenant_code
                AND COALESCE(s.deleted, false) = false
-               AND (
-                   LOWER(TRIM(s.service_name)) = LOWER(TRIM(COALESCE(NULLIF(lrd.item_name, ''), tm.name, '')))
-                   OR (op.service_id IS NOT NULL AND s.service_id = op.service_id)
-               )
+               AND LOWER(TRIM(s.service_name)) = LOWER(TRIM(COALESCE(NULLIF(lrd.item_name, ''), tm.name, '')))
              LIMIT 1
         ) svc ON true
         WHERE lrm.tenant_code = @t
@@ -2171,12 +2168,13 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                      OR LOWER(TRIM(b.item_name)) LIKE 'observation%'
                      OR LOWER(TRIM(b.item_name)) = 'obs'                                THEN 'OBSERVATION'
 
-                -- DRESSING: registered as dressing or chargetype or item name
-                WHEN b.op_is_dressing
-                     OR b.chargetype = 'DRESSING'
-                     OR LOWER(b.op_visit_type) LIKE '%dressing%'
-                     OR LOWER(COALESCE(b.service_name, '')) LIKE '%dressing%'
-                     OR LOWER(b.item_name || ' ' || b.test_name) LIKE '%dressing%'      THEN 'DRESSING'
+                -- SERVICE (by service master name, only when the line is not a test_master item)
+                WHEN b.service_id IS NOT NULL AND b.tcode IS NULL                          THEN 'SERVICE'
+
+                -- DRESSING: based on the item / test master name only (not the visit type)
+                WHEN b.chargetype LIKE 'DRESS%'
+                     OR LOWER(TRIM(b.item_name)) ~ '\mdress'
+                     OR LOWER(TRIM(b.test_name)) ~ '\mdress'                            THEN 'DRESSING'
 
                 -- PHYSIO / ECG / ECHO: chargetype, group, or item name that STARTS with the word
                 WHEN b.chargetype IN ('PHYSIO', 'PHYSIOTHERAPY', 'FISHO')
@@ -2197,13 +2195,10 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                      OR LOWER(b.groupname)
                         ~ 'x-?ray|radio|scan|usg|ultrasound|\m(ct|mri)\M'               THEN 'SCAN'
 
-                -- SERVICE: registered as service in op_registration OR matched in service_type_master OR chargetype SERVICE
-                WHEN b.op_service_id IS NOT NULL
-                     OR b.service_id IS NOT NULL
+                -- SERVICE: matched in service_type_master OR chargetype SERVICE
+                WHEN b.service_id IS NOT NULL
                      OR b.chargetype = 'SERVICE'
-                     OR LOWER(TRIM(b.item_name)) LIKE 'service%'
-                     OR (b.op_visit_type != '' AND LOWER(b.op_visit_type) NOT IN ('newvisit', 'consultation', 'dressing', 'followup', 'review', 'waiting', 'routine') AND b.tcode IS NULL)
-                                                                                        THEN 'SERVICE'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'service%'                        THEN 'SERVICE'
 
                 -- CONSULTATION: doctor consultation fee (evaluated before Lab so consultation items with tcode/group are properly matched)
                 WHEN b.chargetype = 'CONSULTATION'
@@ -2213,9 +2208,7 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                      OR LOWER(TRIM(b.item_name)) LIKE 'dr.%'
                      OR LOWER(TRIM(b.item_name)) LIKE 'dr %'
                      OR LOWER(TRIM(b.item_name)) LIKE '%doctor%'
-                     OR (NOT b.op_is_dressing
-                         AND b.op_service_id IS NULL
-                         AND b.service_id IS NULL
+                     OR (b.service_id IS NULL
                          AND NOT b.isscan
                          AND NOT b.islab
                          AND (b.chargetype IN ('CONSULTATION', 'OP', '') OR b.chargetype IS NULL)

@@ -3584,7 +3584,7 @@ WHERE stockcode=@stockcode;";
        AND stk.tenantcode    = pd.tenantcode
        AND stk.deleted       = false
     WHERE pd.itemcode = @itemcode
-      AND (@batchno IS NULL OR pd.batchno = @batchno)
+      AND (@batchno::text IS NULL OR pd.batchno = @batchno::text)
       AND pm.deleted = false
       AND pd.tenantcode = @tenantcode
     ORDER BY pd.purchasedetailcode DESC;";
@@ -3895,7 +3895,7 @@ LEFT JOIN public.stock_master stk
    AND stk.tenantcode    = sd.tenantcode
    AND stk.deleted       = false
 WHERE sd.itemcode = @itemcode
-  AND (@batchno IS NULL OR sd.batchno = @batchno)
+  AND (@batchno::text IS NULL OR sd.batchno = @batchno::text)
   AND sm.deleted = false
   AND sd.tenantcode = @tenantcode
 ORDER BY sd.salesdetailcode DESC;";
@@ -9344,6 +9344,218 @@ AND deleted = false;";
                 throw new Exception("Bulk due collection failed: " + ex.Message);
             }
         }
+    
+        // â”€â”€â”€ 1. LIST / SEARCH ITEMS FOR REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        public async Task<List<ItemSalesReportSearchItemDto>> GetItemsForSalesReport(string tenantcode, string? search = null)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            string sql = @"
+                SELECT 
+                    im.itemcode,
+                    im.itemname,
+                    im.drugname,
+                    im.packaging,
+                    COALESCE(NULLIF(im.packsize, 0), 1) AS packsize,
+                    COALESCE(im.mrp, 0) AS mrp,
+                    COALESCE(im.salesrate, 0) AS salesrate,
+                    COALESCE(im.currentstock, 0) AS currentstock
+                FROM public.item_master im
+                WHERE im.tenantcode = @tenantcode
+                  AND COALESCE(im.deleted, false) = false
+                  AND (
+                      @search::text IS NULL OR @search::text = ''
+                      OR im.itemname ILIKE '%' || @search::text || '%'
+                      OR im.drugname ILIKE '%' || @search::text || '%'
+                      OR im.itemcode::text = @search::text
+                  )
+                ORDER BY im.itemname ASC
+                LIMIT 100;";
+            return (await db.QueryAsync<ItemSalesReportSearchItemDto>(sql, new { tenantcode, search = search?.Trim() })).ToList();
+        }
+
+        // â”€â”€â”€ 2. GET ITEM PATIENT SALES & MOVEMENT REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        public async Task<ItemSalesReportResponse?> GetItemPatientSalesReport(
+            long itemcode, 
+            DateTime? fromdate, 
+            DateTime? todate, 
+            string? batchno, 
+            string? salestype, 
+            long? warehousecode,
+            string tenantcode)
+        {
+            using IDbConnection db = new NpgsqlConnection(con);
+            string? whCodeStr = (warehousecode.HasValue && warehousecode.Value > 0) ? warehousecode.Value.ToString() : null;
+
+            // A. Fetch Item Header
+            string itemSql = @"
+                SELECT 
+                    im.itemcode,
+                    im.itemname,
+                    im.drugname,
+                    im.packaging,
+                    COALESCE(NULLIF(im.packsize, 0), 1) AS packsize,
+                    COALESCE(im.mrp, 0) AS mrp,
+                    COALESCE(im.salesrate, 0) AS salesrate,
+                    COALESCE(im.purchaserate, 0) AS purchaserate,
+                    COALESCE((
+                        SELECT SUM(sm.closingstock)
+                        FROM public.stock_master sm
+                        WHERE sm.itemcode = im.itemcode 
+                          AND sm.tenantcode = im.tenantcode 
+                          AND COALESCE(sm.deleted, false) = false
+                          AND (@warehousecode::text IS NULL OR sm.warehousecode::text = @warehousecode::text)
+                    ), im.currentstock, 0) AS currentstock,
+                    COALESCE(im.gstpercentage, 0) AS gstpercentage
+                FROM public.item_master im
+                WHERE im.itemcode = @itemcode
+                  AND im.tenantcode = @tenantcode
+                  AND COALESCE(im.deleted, false) = false;";
+            var itemParams = new DynamicParameters();
+            itemParams.Add("itemcode", itemcode, System.Data.DbType.Int64);
+            itemParams.Add("tenantcode", tenantcode, System.Data.DbType.String);
+            itemParams.Add("warehousecode", whCodeStr, System.Data.DbType.String);
+            var item = await db.QueryFirstOrDefaultAsync<ItemSalesReportItemHeader>(itemSql, itemParams);
+            if (item == null) return null;
+
+            // Normalizing dates
+            DateTime? fromUtc = fromdate?.Date;
+            DateTime? toUtc = todate?.Date.AddDays(1).AddSeconds(-1);
+            var p = new DynamicParameters();
+            p.Add("itemcode", itemcode, System.Data.DbType.Int64);
+            p.Add("tenantcode", tenantcode, System.Data.DbType.String);
+            p.Add("batchno", string.IsNullOrWhiteSpace(batchno) ? null : batchno.Trim(), System.Data.DbType.String);
+            p.Add("salestype", string.IsNullOrWhiteSpace(salestype) || salestype.Equals("ALL", StringComparison.OrdinalIgnoreCase) ? null : salestype.Trim(), System.Data.DbType.String);
+            p.Add("warehousecode", whCodeStr, System.Data.DbType.String);
+            p.Add("fromdate", fromUtc, System.Data.DbType.DateTime);
+            p.Add("todate", toUtc, System.Data.DbType.DateTime);
+
+            // B. Calculate Opening Balance before fromdate
+            decimal openingBalance = 0;
+            if (fromUtc.HasValue)
+            {
+                string openSql = @"
+                    SELECT 
+                        COALESCE((
+                            SELECT SUM(pd.quantity + COALESCE(pd.freequantity, 0))
+                            FROM public.purchase_detail pd
+                            JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                            WHERE pd.itemcode = @itemcode AND pd.tenantcode = @tenantcode AND COALESCE(pm.deleted, false) = false
+                              AND (@batchno::text IS NULL OR pd.batchno = @batchno::text)
+                              AND (@warehousecode::text IS NULL OR pd.warehousecode IS NULL OR pd.warehousecode::text = @warehousecode::text)
+                              AND COALESCE(pm.billdate, pm.invoicedate, pm.createddate) < @fromdate::timestamp
+                        ), 0)
+                        -
+                        COALESCE((
+                            SELECT SUM(sd.quantity)
+                            FROM public.sales_detail sd
+                            JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                            WHERE sd.itemcode = @itemcode AND sd.tenantcode = @tenantcode AND COALESCE(sm.deleted, false) = false
+                              AND (@batchno::text IS NULL OR sd.batchno = @batchno::text)
+                              AND (@salestype::text IS NULL OR UPPER(sm.salestype) = UPPER(@salestype::text))
+                              AND (@warehousecode::text IS NULL OR sm.warehousefield::text = @warehousecode::text OR sm.warehousecode::text = @warehousecode::text OR sd.warehousecode::text = @warehousecode::text)
+                              AND sm.billdate < @fromdate::timestamp
+                        ), 0);";
+                openingBalance = await db.ExecuteScalarAsync<decimal>(openSql, p);
+            }
+
+            // C. Query Transactions: Patient Sales (ISSUE) + Purchases (RECEIVE)
+            string transSql = @"
+                SELECT * FROM (
+                    -- 1. Patient Sales (ISSUE)
+                    SELECT 
+                        sm.billdate AS trans_date,
+                        sm.billno AS bill_no,
+                        'SALES' AS transaction_type,
+                        'ISSUE' AS movement_type,
+                        COALESCE(NULLIF(TRIM(sm.patientname), ''), 'Cash Customer') AS particulars,
+                        sm.patientid AS patient_id,
+                        sm.patientname AS patient_name,
+                        sm.mobileno AS mobile_no,
+                        sm.consultant AS doctor_name,
+                        UPPER(COALESCE(NULLIF(TRIM(sm.salestype), ''), 'COUNTER')) AS sales_type,
+                        sd.batchno AS batch_no,
+                        sd.expirydate AS expiry_date,
+                        0::numeric AS receive_qty,
+                        COALESCE(sd.quantity, 0)::numeric AS issue_qty,
+                        COALESCE(sd.rate, 0)::numeric AS rate,
+                        COALESCE(sd.totalamount, sd.amount, (COALESCE(sd.rate,0) * COALESCE(sd.quantity,0)))::numeric AS total_amount
+                    FROM public.sales_detail sd
+                    JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                    WHERE sd.itemcode = @itemcode
+                      AND sd.tenantcode = @tenantcode
+                      AND COALESCE(sm.deleted, false) = false
+                      AND (@batchno::text IS NULL OR sd.batchno = @batchno::text)
+                      AND (@salestype::text IS NULL OR UPPER(sm.salestype) = UPPER(@salestype::text))
+                      AND (@warehousecode::text IS NULL OR sm.warehousefield::text = @warehousecode::text OR sm.warehousecode::text = @warehousecode::text OR sd.warehousecode::text = @warehousecode::text)
+                      AND (@fromdate::timestamp IS NULL OR sm.billdate >= @fromdate::timestamp)
+                      AND (@todate::timestamp IS NULL OR sm.billdate <= @todate::timestamp)
+
+                    UNION ALL
+
+                    -- 2. Purchases from Suppliers (RECEIVE)
+                    SELECT 
+                        COALESCE(pm.billdate, pm.invoicedate, pm.createddate) AS trans_date,
+                        COALESCE(pm.invoiceno, pm.billno, pm.purchasecode::text) AS bill_no,
+                        'PURCHASE' AS transaction_type,
+                        'RECEIVE' AS movement_type,
+                        COALESCE(vm.vendorname, 'Supplier Purchase') AS particulars,
+                        '' AS patient_id,
+                        '' AS patient_name,
+                        COALESCE(vm.phonenumber, '') AS mobile_no,
+                        '' AS doctor_name,
+                        'PURCHASE' AS sales_type,
+                        pd.batchno AS batch_no,
+                        pd.expirydate AS expiry_date,
+                        (COALESCE(pd.quantity, 0) + COALESCE(pd.freequantity, 0))::numeric AS receive_qty,
+                        0::numeric AS issue_qty,
+                        COALESCE(pd.rate, 0)::numeric AS rate,
+                        COALESCE(pd.totalamount, pd.amount, (COALESCE(pd.rate,0) * COALESCE(pd.quantity,0)))::numeric AS total_amount
+                    FROM public.purchase_detail pd
+                    JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                    LEFT JOIN public.vendor_master vm ON vm.vendorcode = pm.vendorcode AND vm.tenantcode = pm.tenantcode
+                    WHERE pd.itemcode = @itemcode
+                      AND pd.tenantcode = @tenantcode
+                      AND COALESCE(pm.deleted, false) = false
+                      AND (@batchno::text IS NULL OR pd.batchno = @batchno::text)
+                      AND (@warehousecode::text IS NULL OR pd.warehousecode IS NULL OR pd.warehousecode::text = @warehousecode::text)
+                      AND (@salestype IS NULL) -- Purchases not filtered out by OP/IP
+                      AND (@fromdate::timestamp IS NULL OR COALESCE(pm.billdate, pm.invoicedate, pm.createddate) >= @fromdate::timestamp)
+                      AND (@todate::timestamp IS NULL OR COALESCE(pm.billdate, pm.invoicedate, pm.createddate) <= @todate::timestamp)
+                ) raw_trans
+                ORDER BY trans_date ASC, bill_no ASC;";
+
+            var transactions = (await db.QueryAsync<ItemSalesReportRowDto>(transSql, p)).ToList();
+
+            // D. Calculate Running Balance
+            decimal runningBalance = openingBalance;
+            decimal totalReceived = 0;
+            decimal totalIssued = 0;
+            decimal totalSalesAmount = 0;
+            foreach (var row in transactions)
+            {
+                runningBalance = runningBalance + row.receive_qty - row.issue_qty;
+                row.balance_qty = runningBalance;
+                totalReceived += row.receive_qty;
+                totalIssued += row.issue_qty;
+                if (row.transaction_type == "SALES")
+                {
+                    totalSalesAmount += row.total_amount;
+                }
+            }
+
+            return new ItemSalesReportResponse
+            {
+                Item = item,
+                Summary = new ItemSalesReportSummary
+                {
+                    opening_balance = openingBalance,
+                    total_received = totalReceived,
+                    total_issued = totalIssued,
+                    closing_balance = runningBalance,
+                    total_sales_amount = totalSalesAmount
+                },
+                Transactions = transactions
+            };
+        }
     }
 }
-
