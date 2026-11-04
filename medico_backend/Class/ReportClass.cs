@@ -2790,7 +2790,13 @@ namespace medico_backend.Class
 
 
 
-        public async Task<string?> PatientReceiptPDF(Guid receiptguid, string tenant_code, bool? isletterhead = false)
+        public async Task<string?> PatientReceiptPDF(
+            Guid receiptguid, 
+            string tenant_code, 
+            bool? isletterhead = false,
+            Guid? requestguid = null,
+            string? billno = null,
+            int? custid = null)
 
         {
 
@@ -2803,322 +2809,146 @@ namespace medico_backend.Class
 
 
                 string sql = @"
-
-                    SELECT
-
-                        rm.receiptsnoprint                                                          AS ReceiptNo,
-
-                        rm.receiptdate                                                              AS ReceiptDate,
-
-
-
-                        COALESCE(pat.custcode, '')                                                  AS PatientId,
-
-                        COALESCE(pat.name, '')                                                      AS PatientName,
-
-                        pat.age                                                                     AS Age,
-
-                        COALESCE(pat.gender, '')                                                    AS Gender,
-
-                        pat.mobileno                                                                AS MobileNo,
-
-                        pat.address                                                                 AS Address,
-
-
-
-                        COALESCE(NULLIF(pat.doctorfullname,''), NULLIF(pat.docname,''), 'SELF')     AS ReferralName,
-
-
-
-                        bm.name                                                                     AS BranchName,
-
-
-
-                        t.legal_name                                                                AS CompanyName,
-
-                        CONCAT_WS(', ',
-
-                            NULLIF(t.address_line1, ''),
-
-                            NULLIF(t.address_line2, ''),
-
-                            NULLIF(t.city,          ''),
-
-                            NULLIF(t.state,         ''),
-
-                            NULLIF(t.pincode,       '')
-
-                        )                                                                           AS CompanyAddress,
-
-                        t.contact_number                                                            AS CompanyContactNo,
-
-                        t.contact_email                                                             AS CompanyEmail,
-
-
-
-                        CAST(CASE WHEN amt.HasRows THEN COALESCE(amt.TotalBillAmount, 0) ELSE COALESCE(rm.amounttotal, 0) END AS DECIMAL(18,2)) AS TotalAmount,
-
-                        CAST(COALESCE(rm.amountpaid,  0) AS DECIMAL(18,2))                         AS PaidAmount,
-
-                        CAST(CASE WHEN amt.HasRows THEN COALESCE(amt.BalanceAmount, 0) ELSE COALESCE(rm.amounttotal - rm.amountpaid, 0) END AS DECIMAL(18,2)) AS BalanceAmount,
-
-
-
-                        pm.name                                                                     AS PaymentMode,
-
-
-
-                        CAST(0 AS DECIMAL(18,2))                                                    AS PreviousPaid
-
-
-
-                    FROM receipt_master rm
-
-
-
-                    LEFT JOIN receipt_details rd
-
-                           ON rd.receiptguid = rm.receiptguid
-
-                          AND rd.tenant_code = rm.tenant_code
-
-                          AND (rd.deleted = false OR rd.deleted IS NULL)
-
-
-
-                    LEFT JOIN paymode_master pm
-
-                           ON pm.pmcode = CAST(rm.pmcode AS INT)
-
-
-
-                    LEFT JOIN mastertenant.branch_master bm
-
-                           ON bm.bh_code = rm.enteredbhcode
-
-
-
-                    LEFT JOIN mastertenant.tenants t
-
-                           ON t.tenant_code = rm.tenant_code
-
-
-
-                    LEFT JOIN LATERAL (
-
-                        SELECT
-
-                            COUNT(rguid.requestguid) > 0 AS HasRows,
-
-                            -- Total outstanding before this receipt's payments/concessions/refunds
-
-                            COALESCE(SUM(
-
-                                COALESCE(lrm.totalamount, 0)
-
-                                - COALESCE(trans.paid_before, 0)
-
-                                - COALESCE(trans.concession_before, 0)
-
-                                + COALESCE(trans.refund_before, 0)
-
-                            ), 0) AS TotalBillAmount,
-
-                            
-
-                            -- Total outstanding after this receipt's payments/concessions/refunds
-
-                            COALESCE(SUM(
-
-                                COALESCE(lrm.totalamount, 0)
-
-                                - (COALESCE(trans.paid_before, 0) + COALESCE(trans.paid_current, 0))
-
-                                - (COALESCE(trans.concession_before, 0) + COALESCE(trans.concession_current, 0))
-
-                                + (COALESCE(trans.refund_before, 0) + COALESCE(trans.refund_current, 0))
-
-                            ), 0) AS BalanceAmount
-
-                        FROM (
-
-                            SELECT requestguid FROM receipt_details WHERE receiptguid = rm.receiptguid AND (deleted = false OR deleted IS NULL)
-
-                            UNION
-
-                            SELECT request_guid AS requestguid FROM balancecollectionby WHERE receipt_guid = rm.receiptguid AND (deleted = false OR deleted IS NULL)
-
-                        ) rguid
-
-                        JOIN lab_request_master lrm ON lrm.requestguid = rguid.requestguid AND lrm.tenant_code = rm.tenant_code
-
-                        LEFT JOIN LATERAL (
-
-                            SELECT
-
-                                COALESCE(SUM(CASE WHEN category = 'before' THEN receipt_amount ELSE 0 END), 0) AS paid_before,
-
-                                COALESCE(SUM(CASE WHEN category = 'before' THEN discount_amount ELSE 0 END), 0) AS concession_before,
-
-                                COALESCE(SUM(CASE WHEN category = 'before' THEN refund_amount ELSE 0 END), 0) AS refund_before,
-
-                                
-
-                                COALESCE(SUM(CASE WHEN category = 'current' THEN receipt_amount ELSE 0 END), 0) AS paid_current,
-
-                                COALESCE(SUM(CASE WHEN category = 'current' THEN discount_amount ELSE 0 END), 0) AS concession_current,
-
-                                COALESCE(SUM(CASE WHEN category = 'current' THEN refund_amount ELSE 0 END), 0) AS refund_current
-
-                            FROM (
-
-                                SELECT 
-
-                                    rd_sub.receiptamount AS receipt_amount,
-
-                                    rd_sub.discount_amount,
-
-                                    rd_sub.refund_amount,
-
-                                    CASE 
-
-                                        WHEN rm_sub.receiptguid = rm.receiptguid THEN 'current'
-
-                                        WHEN rm_sub.receiptdate < rm.receiptdate OR (rm_sub.receiptdate = rm.receiptdate AND rm_sub.receiptsno < rm.receiptsno) THEN 'before'
-
-                                        ELSE 'future'
-
-                                    END AS category
-
-                                FROM receipt_details rd_sub
-
-                                JOIN receipt_master rm_sub ON rm_sub.receiptguid = rd_sub.receiptguid
-
-                                WHERE rd_sub.requestguid = lrm.requestguid
-
-                                  AND (rd_sub.deleted = false OR rd_sub.deleted IS NULL)
-
-                                  AND (rm_sub.deleted = false OR rm_sub.deleted IS NULL)
-
-                            ) t
-
-                        ) trans ON true
-
-                    ) amt ON true
-
-
-
-                    LEFT JOIN LATERAL (
-
-                        SELECT
-
-                            cm.custcode,
-
-                            lrm.name,
-
-                            CONCAT(
-
-                                CASE WHEN COALESCE(lrm.ageyears::int, 0) = 0 AND COALESCE(lrm.agemonths::int, 0) = 0 AND COALESCE(lrm.agedays::int, 0) = 0 THEN COALESCE(cm.ageyears::text, '0') ELSE COALESCE(lrm.ageyears, '0') END, ' Y ',
-
-                                CASE WHEN COALESCE(lrm.ageyears::int, 0) = 0 AND COALESCE(lrm.agemonths::int, 0) = 0 AND COALESCE(lrm.agedays::int, 0) = 0 THEN COALESCE(cm.agemonths::text, '0') ELSE COALESCE(lrm.agemonths, '0') END, ' M'
-
-                            ) AS age,
-
-                            lrm.gender,
-
-                            lrm.mobileno,
-
-                            lrm.address,
-
-                            dm.doctorfullname,
-
-                            dm.name AS docname
-
-                        FROM receipt_details rd2
-
-                        JOIN lab_request_master lrm
-
-                          ON lrm.requestguid = rd2.requestguid
-
-                          AND lrm.tenant_code = rd2.tenant_code
-
-                        LEFT JOIN customerdb.customer_master cm
-
-                          ON cm.custid = lrm.custid
-
-                        LEFT JOIN doctor_master dm
-
-                          ON dm.dcode = CAST(lrm.dcode AS INT)
-
-                        WHERE rd2.receiptguid = rm.receiptguid
-
-                          AND rd2.tenant_code = rm.tenant_code
-
-                          AND (rd2.deleted = false OR rd2.deleted IS NULL)
-
-                          AND rd2.requestguid IS NOT NULL
-
-                        LIMIT 1
-
-                    ) pat ON true
-
-
-
-                    WHERE rm.receiptguid = @receiptguid
-
-                      AND rm.tenant_code = @tenant_code
-
-                      AND (rm.deleted = false OR rm.deleted IS NULL)
-
-
-
-                    GROUP BY
-
-                        rm.receiptsnoprint,
-
-                        rm.receiptdate,
-
-                        pat.custcode,
-
-                        pat.name,
-
-                        pat.age,
-
-                        pat.gender,
-
-                        pat.mobileno,
-
-                        pat.address,
-
-                        pat.doctorfullname,
-
-                        pat.docname,
-
-                        bm.name,
-
-                        t.legal_name, t.address_line1, t.address_line2,
-
-                        t.city, t.state, t.pincode,
-
-                        t.contact_number, t.contact_email,
-
-                        rm.amounttotal,
-
-                        rm.amountpaid,
-
-                        pm.name,
-
-                        amt.HasRows,
-
-                        amt.TotalBillAmount,
-
-                        amt.BalanceAmount";
-
-
-
+    SELECT
+        rm.receiptsnoprint                                                          AS ReceiptNo,
+        rm.receiptdate                                                              AS ReceiptDate,
+        COALESCE(pat.custcode, '')                                                  AS PatientId,
+        COALESCE(pat.name, '')                                                      AS PatientName,
+        pat.age                                                                     AS Age,
+        COALESCE(pat.gender, '')                                                    AS Gender,
+        pat.mobileno                                                                AS MobileNo,
+        pat.address                                                                 AS Address,
+        COALESCE(NULLIF(pat.doctorfullname,''), NULLIF(pat.docname,''), 'SELF')     AS ReferralName,
+        bm.name                                                                     AS BranchName,
+        t.legal_name                                                                AS CompanyName,
+        CONCAT_WS(', ',
+            NULLIF(t.address_line1, ''),
+            NULLIF(t.address_line2, ''),
+            NULLIF(t.city,          ''),
+            NULLIF(t.state,         ''),
+            NULLIF(t.pincode,       '')
+        )                                                                           AS CompanyAddress,
+        t.contact_number                                                            AS CompanyContactNo,
+        t.contact_email                                                             AS CompanyEmail,
+        CAST(CASE WHEN amt.HasRows THEN COALESCE(amt.TotalBillAmount, 0) ELSE COALESCE(pat.item_paid, rm.amounttotal, 0) END AS DECIMAL(18,2)) AS TotalAmount,
+        CAST(COALESCE(pat.item_paid, rm.amountpaid,  0) AS DECIMAL(18,2))          AS PaidAmount,
+        CAST(CASE WHEN amt.HasRows THEN COALESCE(amt.BalanceAmount, 0) ELSE 0 END AS DECIMAL(18,2)) AS BalanceAmount,
+        pm.name                                                                     AS PaymentMode,
+        CAST(0 AS DECIMAL(18,2))                                                    AS PreviousPaid
+    FROM receipt_master rm
+    LEFT JOIN paymode_master pm
+           ON pm.pmcode = CAST(rm.pmcode AS INT)
+    LEFT JOIN mastertenant.branch_master bm
+           ON bm.bh_code = rm.enteredbhcode
+    LEFT JOIN mastertenant.tenants t
+           ON t.tenant_code = rm.tenant_code
+    -- 1. Identify specific patient / bill row
+    LEFT JOIN LATERAL (
+        SELECT
+            rd2.requestguid,
+            COALESCE(rd2.receiptamount, 0) AS item_paid,
+            COALESCE(crm.custcode, cm.custcode, '') AS custcode,
+            lrm.name,
+            CASE 
+                WHEN NULLIF(TRIM(COALESCE(lrm.ageyears, '')), '') IS NOT NULL AND TRIM(lrm.ageyears) != '0' THEN
+                    CONCAT(
+                        TRIM(lrm.ageyears), ' Yrs',
+                        CASE WHEN NULLIF(TRIM(COALESCE(lrm.agemonths, '')), '') IS NOT NULL AND TRIM(lrm.agemonths) != '0' 
+                             THEN CONCAT(' ', TRIM(lrm.agemonths), ' M') ELSE '' END
+                    )
+                WHEN COALESCE(cm.ageyears, 0) > 0 OR COALESCE(cm.agemonths, 0) > 0 OR COALESCE(cm.agedays, 0) > 0 THEN
+                    CONCAT(
+                        CASE WHEN COALESCE(cm.ageyears, 0) > 0 THEN CONCAT(cm.ageyears::text, ' Yrs') ELSE '' END,
+                        CASE WHEN COALESCE(cm.agemonths, 0) > 0 THEN CONCAT(' ', cm.agemonths::text, ' M') ELSE '' END,
+                        CASE WHEN COALESCE(cm.agedays, 0) > 0 AND COALESCE(cm.ageyears, 0) = 0 AND COALESCE(cm.agemonths, 0) = 0 THEN CONCAT(cm.agedays::text, ' Days') ELSE '' END
+                    )
+                WHEN cm.dateofbirth IS NOT NULL THEN
+                    CONCAT(DATE_PART('year', AGE(COALESCE(lrm.requestdatetime, rm.receiptdate), cm.dateofbirth))::text, ' Yrs')
+                ELSE ''
+            END AS age,
+            COALESCE(NULLIF(TRIM(lrm.gender), ''), NULLIF(TRIM(cm.gender), ''), '') AS gender,
+            lrm.mobileno,
+            lrm.address,
+            dm.doctorfullname,
+            dm.name AS docname
+        FROM receipt_details rd2
+        JOIN lab_request_master lrm
+          ON lrm.requestguid = rd2.requestguid
+          AND lrm.tenant_code = rd2.tenant_code
+        LEFT JOIN customerdb.customer_master cm
+          ON cm.custid = COALESCE(lrm.custid, rd2.custid, rm.custid)
+        LEFT JOIN customerdb.customer_registration_master crm
+          ON crm.custid = COALESCE(lrm.custid, rd2.custid, rm.custid)
+         AND (LOWER(crm.tenant_code) = LOWER(rm.tenant_code) OR crm.tenant_code IS NULL OR crm.tenant_code = '')
+        LEFT JOIN doctor_master dm
+          ON dm.dcode = CAST(lrm.dcode AS INT)
+        WHERE rd2.receiptguid = rm.receiptguid
+          AND rd2.tenant_code = rm.tenant_code
+          AND (rd2.deleted = false OR rd2.deleted IS NULL)
+          AND rd2.requestguid IS NOT NULL
+          AND (@requestguid IS NULL OR rd2.requestguid = @requestguid)
+          AND (@custid IS NULL OR rd2.custid = @custid OR lrm.custid = @custid)
+          AND (@billno IS NULL OR lrm.requestsnoprint = @billno OR lrm.requestsno::text = @billno)
+        LIMIT 1
+    ) pat ON true
+    -- 2. Calculate balance scoped to this specific bill
+    LEFT JOIN LATERAL (
+        SELECT
+            COUNT(rguid.requestguid) > 0 AS HasRows,
+            COALESCE(SUM(
+                COALESCE(lrm.totalamount, 0)
+                - COALESCE(trans.paid_before, 0)
+                - COALESCE(trans.concession_before, 0)
+                + COALESCE(trans.refund_before, 0)
+            ), 0) AS TotalBillAmount,
+            COALESCE(SUM(
+                COALESCE(lrm.totalamount, 0)
+                - (COALESCE(trans.paid_before, 0) + COALESCE(trans.paid_current, 0))
+                - (COALESCE(trans.concession_before, 0) + COALESCE(trans.concession_current, 0))
+                + (COALESCE(trans.refund_before, 0) + COALESCE(trans.refund_current, 0))
+            ), 0) AS BalanceAmount
+        FROM (
+            SELECT pat.requestguid AS requestguid
+        ) rguid
+        JOIN lab_request_master lrm ON lrm.requestguid = rguid.requestguid AND lrm.tenant_code = rm.tenant_code
+        LEFT JOIN LATERAL (
+            SELECT
+                COALESCE(SUM(CASE WHEN category = 'before' THEN receipt_amount ELSE 0 END), 0) AS paid_before,
+                COALESCE(SUM(CASE WHEN category = 'before' THEN discount_amount ELSE 0 END), 0) AS concession_before,
+                COALESCE(SUM(CASE WHEN category = 'before' THEN refund_amount ELSE 0 END), 0) AS refund_before,
+                COALESCE(SUM(CASE WHEN category = 'current' THEN receipt_amount ELSE 0 END), 0) AS paid_current,
+                COALESCE(SUM(CASE WHEN category = 'current' THEN discount_amount ELSE 0 END), 0) AS concession_current,
+                COALESCE(SUM(CASE WHEN category = 'current' THEN refund_amount ELSE 0 END), 0) AS refund_current
+            FROM (
+                SELECT 
+                    rd_sub.receiptamount AS receipt_amount,
+                    rd_sub.discount_amount,
+                    rd_sub.refund_amount,
+                    CASE 
+                        WHEN rm_sub.receiptguid = rm.receiptguid THEN 'current'
+                        WHEN rm_sub.receiptdate < rm.receiptdate OR (rm_sub.receiptdate = rm.receiptdate AND rm_sub.receiptsno < rm.receiptsno) THEN 'before'
+                        ELSE 'future'
+                    END AS category
+                FROM receipt_details rd_sub
+                JOIN receipt_master rm_sub ON rm_sub.receiptguid = rd_sub.receiptguid
+                WHERE rd_sub.requestguid = lrm.requestguid
+                  AND (rd_sub.deleted = false OR rd_sub.deleted IS NULL)
+                  AND (rm_sub.deleted = false OR rm_sub.deleted IS NULL)
+            ) t
+        ) trans ON true
+    ) amt ON true
+    WHERE rm.receiptguid = @receiptguid
+      AND rm.tenant_code = @tenant_code
+      AND (rm.deleted = false OR rm.deleted IS NULL);
+";
                 var receiptData = await db.QueryFirstOrDefaultAsync<PatientReceiptPdfModel>(
-
-                    sql, new { receiptguid = receiptguid.ToString(), tenant_code });
+                    sql, new { 
+                        receiptguid = receiptguid.ToString(), 
+                        tenant_code,
+                        requestguid = requestguid?.ToString(),
+                        billno,
+                        custid
+                    });
 
 
 
@@ -3898,13 +3728,28 @@ namespace medico_backend.Class
 
                 COALESCE(lrm.name,    '')                                    AS PatientName,
 
-                CONCAT(
-
-                    COALESCE(lrm.ageyears,  '0'), ' Y ',
-
-                    COALESCE(lrm.agemonths, '0'), ' M'
-
-                )                                                            AS Age,
+                CASE 
+                    -- 1. Use lrm.ageyears / lrm.agemonths if non-zero
+                    WHEN NULLIF(TRIM(COALESCE(lrm.ageyears, '')), '') IS NOT NULL AND TRIM(lrm.ageyears) != '0' THEN
+                        CONCAT(
+                            TRIM(lrm.ageyears), ' Y',
+                            CASE WHEN NULLIF(TRIM(COALESCE(lrm.agemonths, '')), '') IS NOT NULL AND TRIM(lrm.agemonths) != '0' 
+                                 THEN CONCAT(' ', TRIM(lrm.agemonths), ' M') ELSE '' END
+                        )
+                    -- 2. Fall back to customer_master cm (ageyears, agemonths, agedays)
+                    WHEN COALESCE(cm.ageyears, 0) > 0 OR COALESCE(cm.agemonths, 0) > 0 OR COALESCE(cm.agedays, 0) > 0 THEN
+                        CONCAT(
+                            CASE WHEN COALESCE(cm.ageyears, 0) > 0 THEN CONCAT(cm.ageyears::text, ' Y ') ELSE '' END,
+                            CASE WHEN COALESCE(cm.agemonths, 0) > 0 THEN CONCAT(cm.agemonths::text, ' M ') ELSE '' END,
+                            CASE WHEN COALESCE(cm.agedays, 0) > 0 THEN CONCAT(cm.agedays::text, ' D') ELSE '' END
+                        )
+                    -- 3. Fall back to customer_master DOB if available
+                    WHEN cm.dateofbirth IS NOT NULL THEN
+                        CONCAT(DATE_PART('year', AGE(lrm.requestdatetime, cm.dateofbirth))::text, ' Y')
+                    -- 4. If age not present anywhere, return empty string (never return 0 Y 0 M)
+                    ELSE ''
+                END                                                          AS Age,
+                cm.dateofbirth                                               AS DateOfBirth,
 
                 COALESCE(lrm.mobileno, '')                                   AS CusMobileNo,
 
@@ -14461,7 +14306,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                       AND (@toDate IS NULL OR op.visit_date <= @toDate)
 
-                      AND (@search IS NULL OR @search = '' 
+                      AND (@search::text IS NULL OR @search::text = '' 
 
                            OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
 
@@ -14567,7 +14412,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                       AND (@toDate IS NULL OR ip.admitdate <= @toDate)
 
-                      AND (@search IS NULL OR @search = '' 
+                      AND (@search::text IS NULL OR @search::text = '' 
 
                            OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
 
@@ -17843,7 +17688,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND op.visit_date >= @fDate AND op.visit_date < @tDate
 
-                          AND (@search IS NULL OR @search = '' 
+                          AND (@search::text IS NULL OR @search::text = '' 
 
                                OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
 
@@ -18011,7 +17856,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND ip.admitdate >= @fDate AND ip.admitdate < @tDate
 
-                          AND (@search IS NULL OR @search = '' 
+                          AND (@search::text IS NULL OR @search::text = '' 
 
                                OR LOWER(cm.name) LIKE LOWER(CONCAT('%', @search, '%'))
 
@@ -18125,7 +17970,7 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
                           AND lrm.requestdatetime >= @fDate AND lrm.requestdatetime < @tDate
 
-                          AND (@search IS NULL OR @search = '' 
+                          AND (@search::text IS NULL OR @search::text = '' 
 
                                OR LOWER(lrm.name) LIKE LOWER(CONCAT('%', @search, '%'))
 
@@ -18466,7 +18311,345 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
 
         }
 
+    
+        // â”€â”€â”€ ITEM-WISE PATIENT SALES / MOVEMENT REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        public async Task<List<ItemSalesReportSearchItemDto>> GetItemsForSalesReport(string tenantcode, string? search = null)
+        {
+            string inventoryConn = _config.GetConnectionString("inventory_conn");
+            using IDbConnection db = new NpgsqlConnection(inventoryConn);
+            string sql = @"
+                SELECT 
+                    im.itemcode,
+                    im.itemname,
+                    im.drugname,
+                    im.packaging,
+                    COALESCE(NULLIF(im.packsize, 0), 1) AS packsize,
+                    COALESCE(im.mrp, 0) AS mrp,
+                    COALESCE(im.salesrate, 0) AS salesrate,
+                    COALESCE(im.currentstock, 0) AS currentstock
+                FROM public.item_master im
+                WHERE im.tenantcode = @tenantcode
+                  AND COALESCE(im.deleted, false) = false
+                  AND (
+                      @search::text IS NULL OR @search::text = ''
+                      OR im.itemname ILIKE '%' || @search::text || '%'
+                      OR im.drugname ILIKE '%' || @search::text || '%'
+                      OR im.itemcode::text = @search::text
+                  )
+                ORDER BY im.itemname ASC
+                LIMIT 100;";
+            return (await db.QueryAsync<ItemSalesReportSearchItemDto>(sql, new { tenantcode, search = search?.Trim() })).ToList();
+        }
+
+        public async Task<ItemSalesReportResponse?> GetItemPatientSalesReport(
+            long itemcode, 
+            DateTime? fromdate, 
+            DateTime? todate, 
+            string? batchno, 
+            string? salestype, 
+            long? warehousecode,
+            string tenantcode)
+        {
+            string inventoryConn = _config.GetConnectionString("inventory_conn");
+            using IDbConnection db = new NpgsqlConnection(inventoryConn);
+            string? whCodeStr = (warehousecode.HasValue && warehousecode.Value > 0) ? warehousecode.Value.ToString() : null;
+
+            // A. Fetch Item Header
+            string itemSql = @"
+                SELECT 
+                    im.itemcode,
+                    im.itemname,
+                    im.drugname,
+                    im.packaging,
+                    COALESCE(NULLIF(im.packsize, 0), 1) AS packsize,
+                    COALESCE(im.mrp, 0) AS mrp,
+                    COALESCE(im.salesrate, 0) AS salesrate,
+                    COALESCE(im.purchaserate, 0) AS purchaserate,
+                    COALESCE((
+                        SELECT SUM(sm.closingstock)
+                        FROM public.stock_master sm
+                        WHERE sm.itemcode = im.itemcode 
+                          AND sm.tenantcode = im.tenantcode 
+                          AND COALESCE(sm.deleted, false) = false
+                          AND (@warehousecode::text IS NULL OR sm.warehousecode::text = @warehousecode::text)
+                    ), im.currentstock, 0) AS currentstock,
+                    COALESCE(im.gstpercentage, 0) AS gstpercentage
+                FROM public.item_master im
+                WHERE im.itemcode = @itemcode
+                  AND im.tenantcode = @tenantcode
+                  AND COALESCE(im.deleted, false) = false;";
+            var itemParams = new DynamicParameters();
+            itemParams.Add("itemcode", itemcode, System.Data.DbType.Int64);
+            itemParams.Add("tenantcode", tenantcode, System.Data.DbType.String);
+            itemParams.Add("warehousecode", whCodeStr, System.Data.DbType.String);
+            var item = await db.QueryFirstOrDefaultAsync<ItemSalesReportItemHeader>(itemSql, itemParams);
+            if (item == null) return null;
+
+            // Normalizing dates
+            DateTime? fromUtc = fromdate?.Date;
+            DateTime? toUtc = todate?.Date.AddDays(1).AddSeconds(-1);
+            var p = new DynamicParameters();
+            p.Add("itemcode", itemcode, System.Data.DbType.Int64);
+            p.Add("tenantcode", tenantcode, System.Data.DbType.String);
+            p.Add("batchno", string.IsNullOrWhiteSpace(batchno) ? null : batchno.Trim(), System.Data.DbType.String);
+            p.Add("salestype", string.IsNullOrWhiteSpace(salestype) || salestype.Equals("ALL", StringComparison.OrdinalIgnoreCase) ? null : salestype.Trim(), System.Data.DbType.String);
+            p.Add("warehousecode", whCodeStr, System.Data.DbType.String);
+            p.Add("fromdate", fromUtc, System.Data.DbType.DateTime);
+            p.Add("todate", toUtc, System.Data.DbType.DateTime);
+
+            // B. Calculate Opening Balance before fromdate
+            decimal openingBalance = 0;
+            if (fromUtc.HasValue)
+            {
+                string openSql = @"
+                    SELECT 
+                        COALESCE((
+                            SELECT SUM(pd.quantity + COALESCE(pd.freequantity, 0))
+                            FROM public.purchase_detail pd
+                            JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                            WHERE pd.itemcode = @itemcode AND pd.tenantcode = @tenantcode AND COALESCE(pm.deleted, false) = false
+                              AND (@batchno::text IS NULL OR pd.batchno = @batchno::text)
+                              AND (@warehousecode::text IS NULL OR pd.warehousecode IS NULL OR pd.warehousecode::text = @warehousecode::text)
+                              AND COALESCE(pm.billdate, pm.invoicedate, pm.createddate) < @fromdate::timestamp
+                        ), 0)
+                        -
+                        COALESCE((
+                            SELECT SUM(sd.quantity)
+                            FROM public.sales_detail sd
+                            JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                            WHERE sd.itemcode = @itemcode AND sd.tenantcode = @tenantcode AND COALESCE(sm.deleted, false) = false
+                              AND (@batchno::text IS NULL OR sd.batchno = @batchno::text)
+                              AND (@salestype::text IS NULL OR UPPER(sm.salestype) = UPPER(@salestype::text))
+                              AND (@warehousecode::text IS NULL OR sm.warehousefield::text = @warehousecode::text OR sm.warehousecode::text = @warehousecode::text OR sd.warehousecode::text = @warehousecode::text)
+                              AND sm.billdate < @fromdate::timestamp
+                        ), 0);";
+                openingBalance = await db.ExecuteScalarAsync<decimal>(openSql, p);
+            }
+
+            // C. Query Transactions: Patient Sales (ISSUE) + Purchases (RECEIVE)
+            string transSql = @"
+                SELECT * FROM (
+                    -- 1. Patient Sales (ISSUE)
+                    SELECT 
+                        sm.billdate AS trans_date,
+                        sm.billno AS bill_no,
+                        'SALES' AS transaction_type,
+                        'ISSUE' AS movement_type,
+                        COALESCE(NULLIF(TRIM(sm.patientname), ''), 'Cash Customer') AS particulars,
+                        sm.patientid AS patient_id,
+                        sm.patientname AS patient_name,
+                        sm.mobileno AS mobile_no,
+                        sm.consultant AS doctor_name,
+                        UPPER(COALESCE(NULLIF(TRIM(sm.salestype), ''), 'COUNTER')) AS sales_type,
+                        sd.batchno AS batch_no,
+                        sd.expirydate AS expiry_date,
+                        0::numeric AS receive_qty,
+                        COALESCE(sd.quantity, 0)::numeric AS issue_qty,
+                        COALESCE(sd.rate, 0)::numeric AS rate,
+                        COALESCE(sd.totalamount, sd.amount, (COALESCE(sd.rate,0) * COALESCE(sd.quantity,0)))::numeric AS total_amount
+                    FROM public.sales_detail sd
+                    JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                    WHERE sd.itemcode = @itemcode
+                      AND sd.tenantcode = @tenantcode
+                      AND COALESCE(sm.deleted, false) = false
+                      AND (@batchno::text IS NULL OR sd.batchno = @batchno::text)
+                      AND (@salestype::text IS NULL OR UPPER(sm.salestype) = UPPER(@salestype::text))
+                      AND (@warehousecode::text IS NULL OR sm.warehousefield::text = @warehousecode::text OR sm.warehousecode::text = @warehousecode::text OR sd.warehousecode::text = @warehousecode::text)
+                      AND (@fromdate::timestamp IS NULL OR sm.billdate >= @fromdate::timestamp)
+                      AND (@todate::timestamp IS NULL OR sm.billdate <= @todate::timestamp)
+
+                    UNION ALL
+
+                    -- 2. Purchases from Suppliers (RECEIVE)
+                    SELECT 
+                        COALESCE(pm.billdate, pm.invoicedate, pm.createddate) AS trans_date,
+                        COALESCE(pm.invoiceno, pm.billno, pm.purchasecode::text) AS bill_no,
+                        'PURCHASE' AS transaction_type,
+                        'RECEIVE' AS movement_type,
+                        COALESCE(vm.vendorname, 'Supplier Purchase') AS particulars,
+                        '' AS patient_id,
+                        '' AS patient_name,
+                        COALESCE(vm.phonenumber, '') AS mobile_no,
+                        '' AS doctor_name,
+                        'PURCHASE' AS sales_type,
+                        pd.batchno AS batch_no,
+                        pd.expirydate AS expiry_date,
+                        (COALESCE(pd.quantity, 0) + COALESCE(pd.freequantity, 0))::numeric AS receive_qty,
+                        0::numeric AS issue_qty,
+                        COALESCE(pd.rate, 0)::numeric AS rate,
+                        COALESCE(pd.totalamount, pd.amount, (COALESCE(pd.rate,0) * COALESCE(pd.quantity,0)))::numeric AS total_amount
+                    FROM public.purchase_detail pd
+                    JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                    LEFT JOIN public.vendor_master vm ON vm.vendorcode = pm.vendorcode AND vm.tenantcode = pm.tenantcode
+                    WHERE pd.itemcode = @itemcode
+                      AND pd.tenantcode = @tenantcode
+                      AND COALESCE(pm.deleted, false) = false
+                      AND (@batchno::text IS NULL OR pd.batchno = @batchno::text)
+                      AND (@warehousecode::text IS NULL OR pd.warehousecode IS NULL OR pd.warehousecode::text = @warehousecode::text)
+                      AND (@salestype IS NULL) -- Purchases not filtered out by OP/IP
+                      AND (@fromdate::timestamp IS NULL OR COALESCE(pm.billdate, pm.invoicedate, pm.createddate) >= @fromdate::timestamp)
+                      AND (@todate::timestamp IS NULL OR COALESCE(pm.billdate, pm.invoicedate, pm.createddate) <= @todate::timestamp)
+                ) raw_trans
+                ORDER BY trans_date ASC, bill_no ASC;";
+
+            var transactions = (await db.QueryAsync<ItemSalesReportRowDto>(transSql, p)).ToList();
+
+            // D. Calculate Running Balance
+            decimal runningBalance = openingBalance;
+            decimal totalReceived = 0;
+            decimal totalIssued = 0;
+            decimal totalSalesAmount = 0;
+            foreach (var row in transactions)
+            {
+                runningBalance = runningBalance + row.receive_qty - row.issue_qty;
+                row.balance_qty = runningBalance;
+                totalReceived += row.receive_qty;
+                totalIssued += row.issue_qty;
+                if (row.transaction_type == "SALES")
+                {
+                    totalSalesAmount += row.total_amount;
+                }
+            }
+
+            return new ItemSalesReportResponse
+            {
+                Item = item,
+                Summary = new ItemSalesReportSummary
+                {
+                    opening_balance = openingBalance,
+                    total_received = totalReceived,
+                    total_issued = totalIssued,
+                    closing_balance = runningBalance,
+                    total_sales_amount = totalSalesAmount
+                },
+                Transactions = transactions
+            };
+        }
+
+
+        public async Task<string?> GetItemPatientSalesReportPDF(
+            long itemcode,
+            DateTime? fromdate,
+            DateTime? todate,
+            string? batchno,
+            string? salestype,
+            long? warehousecode,
+            string tenant_code)
+        {
+            try
+            {
+                var data = await GetItemPatientSalesReport(itemcode, fromdate, todate, batchno, salestype, warehousecode, tenant_code);
+                if (data == null) return null;
+
+                warehouse_master warehouse = new warehouse_master();
+                if (warehousecode.HasValue && warehousecode.Value > 0)
+                {
+                    using (IDbConnection dbInv = new NpgsqlConnection(_config.GetConnectionString("inventory_conn")))
+                    {
+                        var sqlWh = "SELECT * FROM public.warehouse_master WHERE warehousecode = @warehousecode LIMIT 1";
+                        warehouse = await dbInv.QueryFirstOrDefaultAsync<warehouse_master>(sqlWh, new { warehousecode }) ?? new warehouse_master();
+                    }
+                }
+
+                dynamic? companyInfo = null;
+                byte[]? logoImage = null;
+                using (IDbConnection db = new NpgsqlConnection(_conn))
+                {
+                    string sqlCompany = "SELECT * FROM mastertenant.tenants WHERE tenant_code = @tenant_code LIMIT 1";
+                    companyInfo = await db.QueryFirstOrDefaultAsync(sqlCompany, new { tenant_code });
+
+                    try
+                    {
+                        var sqlLogo = "SELECT file_data FROM mastertenant.upload_file WHERE tenant_code = @tenant_code AND is_deleted = false ORDER BY id DESC LIMIT 1";
+                        logoImage = await db.QueryFirstOrDefaultAsync<byte[]>(sqlLogo, new { tenant_code });
+                    }
+                    catch { }
+                }
+
+                int sno = 1;
+                var reportModel = new ItemPatientSalesReportPdfModel
+                {
+                    Header = new ItemSalesReportHeaderInfo
+                    {
+                        CompanyName = companyInfo?.legal_name,
+                        BranchName = warehouse.warehousename ?? companyInfo?.legal_name,
+                        CompanyAddress = companyInfo?.address_line1,
+                        CompanyContactNo = companyInfo?.contact_number,
+                        CompanyEmail = companyInfo?.contact_email,
+                        LogoImage = logoImage,
+
+                        PharmacyName = companyInfo?.legal_name,
+                        LicenseNo = warehouse.pharmacyregistrationno,
+                        PharmacyRCNo = warehouse.pharmacyregistrationno,
+                        GSTNo = warehouse.gstno,
+                        MSMENo = warehouse.msmeno,
+                        Address = companyInfo?.address_line1,
+                        Branch = warehouse.warehousename,
+                        WarehouseCode = warehouse.warehousecode,
+                        PeriodFrom = fromdate ?? DateTime.Today.AddMonths(-1),
+                        PeriodTo = todate ?? DateTime.Today,
+                        GeneratedDate = DateTime.Now,
+
+                        ItemCode = data.Item.itemcode,
+                        ItemName = data.Item.itemname,
+                        DrugName = data.Item.drugname,
+                        Packaging = data.Item.packaging,
+                        PackSize = data.Item.packsize,
+                        Mrp = data.Item.mrp,
+                        SalesRate = data.Item.salesrate,
+                        PurchaseRate = data.Item.purchaserate,
+                        CurrentStock = data.Item.currentstock,
+                        GstPercentage = data.Item.gstpercentage
+                    },
+                    Summary = new ItemSalesReportSummaryInfo
+                    {
+                        OpeningBalance = data.Summary.opening_balance,
+                        TotalReceived = data.Summary.total_received,
+                        TotalIssued = data.Summary.total_issued,
+                        ClosingBalance = data.Summary.closing_balance,
+                        TotalSalesAmount = data.Summary.total_sales_amount
+                    },
+                    Transactions = data.Transactions.Select(t => new ItemSalesReportRowInfo
+                    {
+                        SNo = sno++,
+                        TransDate = t.trans_date,
+                        BillNo = t.bill_no,
+                        TransactionType = t.transaction_type,
+                        MovementType = t.movement_type,
+                        Particulars = t.particulars,
+                        PatientId = t.patient_id,
+                        PatientName = t.patient_name,
+                        MobileNo = t.mobile_no,
+                        DoctorName = t.doctor_name,
+                        SalesType = t.sales_type,
+                        BatchNo = t.batch_no,
+                        ExpiryDate = t.expiry_date,
+                        ReceiveQty = t.receive_qty,
+                        IssueQty = t.issue_qty,
+                        BalanceQty = t.balance_qty,
+                        Rate = t.rate,
+                        TotalAmount = t.total_amount
+                    }).ToList()
+                };
+
+                var client = _httpClientFactory.CreateClient("ReportServer");
+                var json = JsonSerializer.Serialize(reportModel);
+                var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+                var response = await client.PostAsync("/api/ItemPatientSalesReport/getitempatientsalesreport", content);
+                if (!response.IsSuccessStatusCode)
+                {
+                    var error = await response.Content.ReadAsStringAsync();
+                    throw new Exception($"Report server error {response.StatusCode}: {error}");
+                }
+
+                var pdfBase64 = await response.Content.ReadAsStringAsync();
+                return pdfBase64.Trim('"');
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"GetItemPatientSalesReportPDF Exception: {ex.Message}");
+                throw;
     }
-
+}    }
 }
-

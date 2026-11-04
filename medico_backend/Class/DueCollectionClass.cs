@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -533,287 +533,227 @@ namespace medico_backend.Class
                 if (receiptCfg == null)
                     return ("Receipt number sequence configuration not found in billno_master.", null);
 
-                var seqInfo = await GetNextReceiptSequence(
-                    db, tx, receiptCfg, req.enteredbhcode ?? 0, req.cntcode ?? 0, tenantCode);
-
-                string batchReceiptGuid = Guid.NewGuid().ToString();
-                double batchCashTotal = req.items.Sum(i => Math.Round(i.cash_collected, 2));
-
-                var batchReceipt = new HmsDueReceiptMaster
-                {
-                    receiptguid = batchReceiptGuid,
-                    receiptdate = DateTime.UtcNow,
-                    receiptsno = seqInfo.sno,
-                    receiptsnoprint = seqInfo.snoprint,
-                    receiptbarcode = seqInfo.barcode,
-                    receiptcovertedbarcode = seqInfo.barcode,
-                    cntcode = req.cntcode,
-                    cnttid = shift.cnttid,
-                    tmcode = req.tmcode,
-                    pmcode = req.pmcode,
-                    ctcode = req.ctcode,
-                    payledgercode = req.payledgercode,
-                    bankname = req.bank_name,
-                    paymentreference = req.reference_no,
-                    cardno = req.card_no,
-                    chequedate = req.cheque_date,
-                    carddate = req.card_date,
-                    amountpaid = batchCashTotal,
-                    amountadjusted = batchCashTotal,
-                    amounttotal = batchCashTotal,
-                    deleted = false,
-                    isdeleted = false,
-                    isbill = batchIsbillFlag,
-                    ispatient = batchIspatientFlag,
-                    isrefund = req.isrefund ?? false,
-                    isrefferal = batchIsrefferalFlag,
-                    ismonthly = batchIsmonthlyFlag,
-                    receipttype = "DUE",
-                    enteredbhcode = req.enteredbhcode,
-                    usercode = req.usercode,
-                    computercode = req.computercode,
-                    entereddate = DateTime.UtcNow,
-                    ibsdate = DateTime.UtcNow,
-                    tenant_code = tenantCode
-                };
-                await db.InsertAsync(batchReceipt, tx);
-
                 var itemResults = new List<HmsBulkDueItemResult>();
                 double batchAdvanceUsed = 0;
                 double batchCashCollected = 0;
+                string? firstReceiptGuid = null;
+                string? firstReceiptNo = null;
+                string? firstReceiptBarcode = null;
 
+                // 1. Group items by patient (custid)
+                var itemsByPatient = new Dictionary<int, List<HmsBulkDueCollectionItem>>();
                 foreach (var item in req.items)
                 {
-                    // Resolve effective per-item values (item override → batch default)
-                    string itemCollectionType = (item.collection_type ?? req.collection_type).ToUpper();
-                    string? itemReferenceNo = item.reference_no ?? req.reference_no;
-                    string? itemBankName = item.bank_name ?? req.bank_name;
-                    string? itemCardNo = item.card_no ?? req.card_no;
-                    DateTime? itemChequeDate = item.cheque_date ?? req.cheque_date;
-                    string? itemRemarks = item.remarks ?? req.remarks;
+                    var billCustId = await db.QueryFirstOrDefaultAsync<int?>(
+                        "SELECT custid FROM lab_request_master WHERE requestguid = @rg AND tenant_code = @t",
+                        new { rg = item.requestguid, t = tenantCode }, tx) ?? 0;
+                    if (!itemsByPatient.ContainsKey(billCustId))
+                        itemsByPatient[billCustId] = new List<HmsBulkDueCollectionItem>();
+                    itemsByPatient[billCustId].Add(item);
+                }
 
-                    // Per-item provision flags, falling back to batch defaults
-                    bool itemIsbillFlag = item.isbill ?? batchIsbillFlag;
-                    bool itemIsrefferalFlag = item.isrefferal ?? batchIsrefferalFlag;
-                    bool itemIsmonthlyFlag = item.ismonthly ?? batchIsmonthlyFlag;
-                    bool itemIspatientFlag = item.ispatient
-                        ?? (item.isrefferal.HasValue ? !itemIsrefferalFlag : batchIspatientFlag);
-                    bool itemIsrefundFlag = item.isrefund ?? (req.isrefund ?? false);
+                // 2. Create a separate receipt for EACH patient
+                foreach (var kvp in itemsByPatient)
+                {
+                    int patientCustId = kvp.Key;
+                    var patientItems = kvp.Value;
+                    double patientCashTotal = patientItems.Sum(i => Math.Round(i.cash_collected, 2));
 
-                    // Lock this bill
-                    var bill = await db.QueryFirstOrDefaultAsync<HmsLabRequestMaster>(
-                        @"SELECT * FROM lab_request_master
-                   WHERE requestguid = @rg AND tenant_code = @t
-                   FOR UPDATE",
-                        new { rg = item.requestguid, t = tenantCode }, tx);
-
-                    if (bill == null)
-                    {
-                        itemResults.Add(new HmsBulkDueItemResult
-                        {
-                            requestguid = item.requestguid,
-                            status = "skipped",
-                            message = "Bill not found.",
-                            collection_type = itemCollectionType,
-                            reference_no = itemReferenceNo,
-                            bank_name = itemBankName,
-                            card_no = itemCardNo,
-                            cheque_date = itemChequeDate,
-                            remarks = itemRemarks
-                        });
+                    if (patientCashTotal <= 0 && !patientItems.Any(i => i.advance_to_use > 0))
                         continue;
+
+                    // Generate distinct receipt number and GUID for this patient
+                    var seqInfo = await GetNextReceiptSequence(
+                        db, tx, receiptCfg, req.enteredbhcode ?? 0, req.cntcode ?? 0, tenantCode);
+
+                    string patientReceiptGuid = Guid.NewGuid().ToString();
+
+                    if (firstReceiptGuid == null)
+                    {
+                        firstReceiptGuid = patientReceiptGuid;
+                        firstReceiptNo = seqInfo.snoprint;
+                        firstReceiptBarcode = seqInfo.barcode;
                     }
 
-                    if (bill.isdeleted == true || bill.deleted == true)
+                    var patientReceipt = new HmsDueReceiptMaster
                     {
-                        itemResults.Add(new HmsBulkDueItemResult
-                        {
-                            requestguid = item.requestguid,
-                            bill_no = bill.requestsnoprint,
-                            patient_name = bill.name,
-                            status = "skipped",
-                            message = "Bill is cancelled.",
-                            collection_type = itemCollectionType,
-                            reference_no = itemReferenceNo,
-                            bank_name = itemBankName,
-                            card_no = itemCardNo,
-                            cheque_date = itemChequeDate,
-                            remarks = itemRemarks
-                        });
-                        continue;
-                    }
-
-                    double totalBill = bill.totalamount ?? 0;
-                    double previousPaid = bill.paidamount ?? 0;
-                    double currentDue = Math.Round(Math.Max(totalBill - previousPaid, 0), 2);
-
-                    if (currentDue <= 0.01)
-                    {
-                        itemResults.Add(new HmsBulkDueItemResult
-                        {
-                            requestguid = item.requestguid,
-                            bill_no = bill.requestsnoprint,
-                            patient_name = bill.name,
-                            status = "skipped",
-                            message = "No outstanding due.",
-                            due_before = 0,
-                            due_after = 0,
-                            is_fully_settled = true,
-                            collection_type = itemCollectionType,
-                            reference_no = itemReferenceNo,
-                            bank_name = itemBankName,
-                            card_no = itemCardNo,
-                            cheque_date = itemChequeDate,
-                            remarks = itemRemarks
-                        });
-                        continue;
-                    }
-
-                    double itemAdvanceToUse = Math.Round(item.advance_to_use, 2);
-                    double itemCashCollected = Math.Round(item.cash_collected, 2);
-
-                    if (itemAdvanceToUse > 0.01)
-                    {
-                        double advBal = await GetPatientAdvanceBalance(db, bill.custid, tenantCode, tx);
-                        if (itemAdvanceToUse > advBal + 0.01)
-                            itemAdvanceToUse = Math.Round(advBal, 2);
-                        if (itemAdvanceToUse > currentDue + 0.01)
-                            itemAdvanceToUse = Math.Round(currentDue, 2);
-                    }
-
-                    double dueAfterAdvance = Math.Round(Math.Max(currentDue - itemAdvanceToUse, 0), 2);
-
-                    if (itemCashCollected > dueAfterAdvance + 0.01)
-                        itemCashCollected = Math.Round(dueAfterAdvance, 2);
-
-                    double itemTotalSettled = Math.Round(itemAdvanceToUse + itemCashCollected, 2);
-                    double itemDueAfter = Math.Round(Math.Max(currentDue - itemTotalSettled, 0), 2);
-
-                    // receipt_details — link this bill to the batch receipt, carry per-item attribution
-                    await db.InsertAsync(new HmsDueReceiptDetail
-                    {
-                        receiptdetailsid = Guid.NewGuid().ToString(),
-                        receiptguid = batchReceiptGuid,
-                        requestguid = item.requestguid,
-                        receiptamount = itemCashCollected,
-                        discount_amount = 0,
-                        refund_amount = 0,
+                        receiptguid = patientReceiptGuid,
+                        receiptdate = DateTime.UtcNow,
+                        receiptsno = seqInfo.sno,
+                        receiptsnoprint = seqInfo.snoprint,
+                        receiptbarcode = seqInfo.barcode,
+                        receiptcovertedbarcode = seqInfo.barcode,
+                        cntcode = req.cntcode,
+                        cnttid = shift.cnttid,
+                        tmcode = req.tmcode,
+                        pmcode = req.pmcode,
+                        ctcode = req.ctcode,
+                        payledgercode = req.payledgercode,
+                        bankname = req.bank_name,
+                        paymentreference = req.reference_no,
+                        cardno = req.card_no,
+                        chequedate = req.cheque_date,
+                        carddate = req.card_date,
+                        amountpaid = patientCashTotal,
+                        amountadjusted = patientCashTotal,
+                        amounttotal = patientCashTotal,
                         deleted = false,
+                        isdeleted = false,
+                        isbill = batchIsbillFlag,
+                        ispatient = batchIspatientFlag,
+                        isrefund = req.isrefund ?? false,
+                        isrefferal = batchIsrefferalFlag,
+                        ismonthly = batchIsmonthlyFlag,
+                        receipttype = "DUE",
+                        custid = patientCustId > 0 ? patientCustId : null,
+                        enteredbhcode = req.enteredbhcode,
                         usercode = req.usercode,
                         computercode = req.computercode,
                         entereddate = DateTime.UtcNow,
                         ibsdate = DateTime.UtcNow,
-                        tenant_code = tenantCode,
-                        custid = (int?)bill.custid,
-                        opvisitid = bill.opvisitid,
-                        enteredbhcode = req.enteredbhcode,
-                        isbill = itemIsbillFlag,
-                        ispatient = itemIspatientFlag,
-                        isrefund = itemIsrefundFlag
-                    }, tx);
+                        tenant_code = tenantCode
+                    };
+                    await db.InsertAsync(patientReceipt, tx);
 
-                    // balancecollectionby — cash portion (per-item payment mode/reference)
-                    if (itemCashCollected > 0.01)
+                    foreach (var item in patientItems)
                     {
-                        await db.ExecuteAsync(
-                            @"INSERT INTO balancecollectionby (
-                          balancecollectionbyid,
-                          bhcode,
-                          collecteddate, collectiontype, receiptguid, requestguid,
-                          collected_date, collection_type, receipt_guid, request_guid,
-                          collectedamount, deleted,
-                          usercode, computercode,
-                          entereddate, ibsdate,
-                          tmcode, cntcode, cnttid, pmcode, ctcode,
-                          tenant_code)
-                      VALUES (
-                          @id, @bh,
-                          @dt, @ct, @rg, @req,
-                          @dt, @ct, @rg, @req,
-                          @amt, false,
-                          @uc, @cc,
-                          @dt, @dt,
-                          @tm, @cnt, @cnttid, @pm, @cct,
-                          @t)",
-                            new
-                            {
-                                id = Guid.NewGuid().ToString(),
-                                bh = req.enteredbhcode,
-                                dt = DateTime.UtcNow,
-                                ct = itemCollectionType,
-                                rg = batchReceiptGuid,
-                                req = item.requestguid,
-                                amt = itemCashCollected,
-                                uc = req.usercode,
-                                cc = req.computercode,
-                                tm = item.tmcode ?? req.tmcode ?? bill.tmcode,
-                                cnt = req.cntcode,
-                                cnttid = shift.cnttid,
-                                pm = item.pmcode ?? req.pmcode ?? bill.pmcode,
-                                cct = item.ctcode ?? req.ctcode ?? bill.ctcode,
-                                t = tenantCode
-                            }, tx);
-                    }
+                        // Resolve effective per-item values (item override â†’ batch default)
+                        string itemCollectionType = (item.collection_type ?? req.collection_type).ToUpper();
+                        string? itemReferenceNo = item.reference_no ?? req.reference_no;
+                        string? itemBankName = item.bank_name ?? req.bank_name;
+                        string? itemCardNo = item.card_no ?? req.card_no;
+                        DateTime? itemChequeDate = item.cheque_date ?? req.cheque_date;
+                        string? itemRemarks = item.remarks ?? req.remarks;
 
-                    // Advance FIFO for this item
-                    string? itemAdvReceiptGuid = null;
-                    if (itemAdvanceToUse > 0.01)
-                    {
-                        var deposits = (await db.QueryAsync<dynamic>(
-                            @"SELECT ra.receiptadvanceid,
-                             ra.receiptguid,
-                             ra.receiptamount,
-                             COALESCE(
-                                 (SELECT SUM(u.receiptamount)
-                                    FROM receipt_advances u
-                                   WHERE u.receiptguid  = ra.receiptguid
-                                     AND u.requestguid IS NOT NULL
-                                     AND COALESCE(u.deleted, false) = false),
-                             0) AS used_amount
-                        FROM receipt_advances ra
-                       WHERE ra.requestguid IS NULL
-                         AND COALESCE(ra.deleted, false) = false
-                         AND ra.receiptguid IN (
-                             SELECT rm.receiptguid
-                               FROM receipt_master rm
-                              WHERE rm.custid      = @custid
-                                AND rm.tenant_code = @t
-                                AND rm.receipttype = 'ADVANCE'
-                                AND COALESCE(rm.isdeleted, false) = false
-                         )
-                       ORDER BY ra.receiptadvanceid ASC",
-                            new { custid = (int?)bill.custid, t = tenantCode }, tx)).ToList();
+                        // Per-item provision flags, falling back to batch defaults
+                        bool itemIsbillFlag = item.isbill ?? batchIsbillFlag;
+                        bool itemIsrefferalFlag = item.isrefferal ?? batchIsrefferalFlag;
+                        bool itemIsmonthlyFlag = item.ismonthly ?? batchIsmonthlyFlag;
+                        bool itemIspatientFlag = item.ispatient
+                            ?? (item.isrefferal.HasValue ? !itemIsrefferalFlag : batchIspatientFlag);
+                        bool itemIsrefundFlag = item.isrefund ?? (req.isrefund ?? false);
 
-                        double remaining = itemAdvanceToUse;
+                        // Lock this bill
+                        var bill = await db.QueryFirstOrDefaultAsync<HmsLabRequestMaster>(
+                            @"SELECT * FROM lab_request_master
+                       WHERE requestguid = @rg AND tenant_code = @t
+                       FOR UPDATE",
+                            new { rg = item.requestguid, t = tenantCode }, tx);
 
-                        foreach (var dep in deposits)
+                        if (bill == null)
                         {
-                            if (remaining <= 0.01) break;
+                            itemResults.Add(new HmsBulkDueItemResult
+                            {
+                                requestguid = item.requestguid,
+                                status = "skipped",
+                                message = "Bill not found.",
+                                receipt_guid = patientReceiptGuid,
+                                receipt_no = seqInfo.snoprint,
+                                collection_type = itemCollectionType,
+                                reference_no = itemReferenceNo,
+                                bank_name = itemBankName,
+                                card_no = itemCardNo,
+                                cheque_date = itemChequeDate,
+                                remarks = itemRemarks
+                            });
+                            continue;
+                        }
 
-                            double avail = Math.Round((double)dep.receiptamount - (double)dep.used_amount, 2);
-                            if (avail <= 0.01) continue;
+                        if (bill.isdeleted == true || bill.deleted == true)
+                        {
+                            itemResults.Add(new HmsBulkDueItemResult
+                            {
+                                requestguid = item.requestguid,
+                                bill_no = bill.requestsnoprint,
+                                patient_name = bill.name,
+                                status = "skipped",
+                                message = "Bill is cancelled.",
+                                receipt_guid = patientReceiptGuid,
+                                receipt_no = seqInfo.snoprint,
+                                collection_type = itemCollectionType,
+                                reference_no = itemReferenceNo,
+                                bank_name = itemBankName,
+                                card_no = itemCardNo,
+                                cheque_date = itemChequeDate,
+                                remarks = itemRemarks
+                            });
+                            continue;
+                        }
 
-                            double debit = Math.Round(Math.Min(avail, remaining), 2);
+                        double totalBill = bill.totalamount ?? 0;
+                        double previousPaid = bill.paidamount ?? 0;
+                        double currentDue = Math.Round(Math.Max(totalBill - previousPaid, 0), 2);
 
-                            await db.ExecuteAsync(
-                                @"INSERT INTO receipt_advances
-                            (receiptadvanceid, receiptguid, requestguid, receiptamount,
-                             deleted, tenant_code, usercode, computercode, entereddate, ibsdate)
-                          VALUES
-                            (@id, @rg, @billGuid, @amt,
-                             false, @t, @uc, @cc, @dt, @dt)",
-                                new
-                                {
-                                    id = Guid.NewGuid().ToString(),
-                                    rg = (string)dep.receiptguid,
-                                    billGuid = item.requestguid,
-                                    amt = debit,
-                                    t = tenantCode,
-                                    uc = req.usercode,
-                                    cc = req.computercode,
-                                    dt = DateTime.UtcNow
-                                }, tx);
+                        if (currentDue <= 0.01)
+                        {
+                            itemResults.Add(new HmsBulkDueItemResult
+                            {
+                                requestguid = item.requestguid,
+                                bill_no = bill.requestsnoprint,
+                                patient_name = bill.name,
+                                status = "skipped",
+                                message = "No outstanding due.",
+                                due_before = 0,
+                                due_after = 0,
+                                is_fully_settled = true,
+                                receipt_guid = patientReceiptGuid,
+                                receipt_no = seqInfo.snoprint,
+                                collection_type = itemCollectionType,
+                                reference_no = itemReferenceNo,
+                                bank_name = itemBankName,
+                                card_no = itemCardNo,
+                                cheque_date = itemChequeDate,
+                                remarks = itemRemarks
+                            });
+                            continue;
+                        }
 
+                        double itemAdvanceToUse = Math.Round(item.advance_to_use, 2);
+                        double itemCashCollected = Math.Round(item.cash_collected, 2);
+
+                        if (itemAdvanceToUse > 0.01)
+                        {
+                            double advBal = await GetPatientAdvanceBalance(db, bill.custid, tenantCode, tx);
+                            if (itemAdvanceToUse > advBal + 0.01)
+                                itemAdvanceToUse = Math.Round(advBal, 2);
+                            if (itemAdvanceToUse > currentDue + 0.01)
+                                itemAdvanceToUse = Math.Round(currentDue, 2);
+                        }
+
+                        double dueAfterAdvance = Math.Round(Math.Max(currentDue - itemAdvanceToUse, 0), 2);
+
+                        if (itemCashCollected > dueAfterAdvance + 0.01)
+                            itemCashCollected = Math.Round(dueAfterAdvance, 2);
+
+                        double itemTotalSettled = Math.Round(itemAdvanceToUse + itemCashCollected, 2);
+                        double itemDueAfter = Math.Round(Math.Max(currentDue - itemTotalSettled, 0), 2);
+
+                        // receipt_details â€” link this bill to the patient's receipt, carry per-item attribution
+                        await db.InsertAsync(new HmsDueReceiptDetail
+                        {
+                            receiptdetailsid = Guid.NewGuid().ToString(),
+                            receiptguid = patientReceiptGuid,
+                            requestguid = item.requestguid,
+                            receiptamount = itemCashCollected,
+                            discount_amount = 0,
+                            refund_amount = 0,
+                            deleted = false,
+                            usercode = req.usercode,
+                            computercode = req.computercode,
+                            entereddate = DateTime.UtcNow,
+                            ibsdate = DateTime.UtcNow,
+                            tenant_code = tenantCode,
+                            custid = (int?)bill.custid,
+                            opvisitid = bill.opvisitid,
+                            enteredbhcode = req.enteredbhcode,
+                            isbill = itemIsbillFlag,
+                            ispatient = itemIspatientFlag,
+                            isrefund = itemIsrefundFlag
+                        }, tx);
+
+                        // balancecollectionby â€” cash portion (per-item payment mode/reference)
+                        if (itemCashCollected > 0.01)
+                        {
                             await db.ExecuteAsync(
                                 @"INSERT INTO balancecollectionby (
                               balancecollectionbyid,
@@ -827,8 +767,8 @@ namespace medico_backend.Class
                               tenant_code)
                           VALUES (
                               @id, @bh,
-                              @dt, 'ADVANCE', @rg, @req,
-                              @dt, 'ADVANCE', @rg, @req,
+                              @dt, @ct, @rg, @req,
+                              @dt, @ct, @rg, @req,
                               @amt, false,
                               @uc, @cc,
                               @dt, @dt,
@@ -839,9 +779,10 @@ namespace medico_backend.Class
                                     id = Guid.NewGuid().ToString(),
                                     bh = req.enteredbhcode,
                                     dt = DateTime.UtcNow,
-                                    rg = (string)dep.receiptguid,
+                                    ct = itemCollectionType,
+                                    rg = patientReceiptGuid,
                                     req = item.requestguid,
-                                    amt = debit,
+                                    amt = itemCashCollected,
                                     uc = req.usercode,
                                     cc = req.computercode,
                                     tm = item.tmcode ?? req.tmcode ?? bill.tmcode,
@@ -851,81 +792,182 @@ namespace medico_backend.Class
                                     cct = item.ctcode ?? req.ctcode ?? bill.ctcode,
                                     t = tenantCode
                                 }, tx);
-
-                            if (itemAdvReceiptGuid == null)
-                                itemAdvReceiptGuid = (string)dep.receiptguid;
-
-                            remaining = Math.Round(remaining - debit, 2);
                         }
 
-                        itemAdvanceToUse = Math.Round(itemAdvanceToUse - remaining, 2);
-                        itemTotalSettled = Math.Round(itemAdvanceToUse + itemCashCollected, 2);
-                        itemDueAfter = Math.Round(Math.Max(currentDue - itemTotalSettled, 0), 2);
-                    }
-
-                    // Update lab_request_master
-                    await db.ExecuteAsync(
-                        @"UPDATE lab_request_master
-                     SET paidamount     = COALESCE(paidamount,     0) + @total,
-                         paidviareceipt = COALESCE(paidviareceipt, 0) + @cash
-                   WHERE requestguid = @rg AND tenant_code = @t",
-                        new
+                        // Advance FIFO for this item
+                        string? itemAdvReceiptGuid = null;
+                        if (itemAdvanceToUse > 0.01)
                         {
-                            total = itemTotalSettled,
-                            cash = itemCashCollected,
-                            rg = item.requestguid,
-                            t = tenantCode
-                        }, tx);
+                            var deposits = (await db.QueryAsync<dynamic>(
+                                @"SELECT ra.receiptadvanceid,
+                                 ra.receiptguid,
+                                 ra.receiptamount,
+                                 COALESCE(
+                                     (SELECT SUM(u.receiptamount)
+                                        FROM receipt_advances u
+                                       WHERE u.receiptguid  = ra.receiptguid
+                                         AND u.requestguid IS NOT NULL
+                                         AND COALESCE(u.deleted, false) = false),
+                                 0) AS used_amount
+                            FROM receipt_advances ra
+                           WHERE ra.requestguid IS NULL
+                             AND COALESCE(ra.deleted, false) = false
+                             AND ra.receiptguid IN (
+                                 SELECT rm.receiptguid
+                                   FROM receipt_master rm
+                                  WHERE rm.custid      = @custid
+                                    AND rm.tenant_code = @t
+                                    AND rm.receipttype = 'ADVANCE'
+                                    AND COALESCE(rm.isdeleted, false) = false
+                             )
+                           ORDER BY ra.receiptadvanceid ASC",
+                                new { custid = (int?)bill.custid, t = tenantCode }, tx)).ToList();
 
-                    // Mark tests settled if fully paid
-                    if (itemDueAfter <= 0.05)
-                    {
+                            double remaining = itemAdvanceToUse;
+
+                            foreach (var dep in deposits)
+                            {
+                                if (remaining <= 0.01) break;
+
+                                double avail = Math.Round((double)dep.receiptamount - (double)dep.used_amount, 2);
+                                if (avail <= 0.01) continue;
+
+                                double debit = Math.Round(Math.Min(avail, remaining), 2);
+
+                                await db.ExecuteAsync(
+                                    @"INSERT INTO receipt_advances
+                                (receiptadvanceid, receiptguid, requestguid, receiptamount,
+                                 deleted, tenant_code, usercode, computercode, entereddate, ibsdate)
+                              VALUES
+                                (@id, @rg, @billGuid, @amt,
+                                 false, @t, @uc, @cc, @dt, @dt)",
+                                    new
+                                    {
+                                        id = Guid.NewGuid().ToString(),
+                                        rg = (string)dep.receiptguid,
+                                        billGuid = item.requestguid,
+                                        amt = debit,
+                                        t = tenantCode,
+                                        uc = req.usercode,
+                                        cc = req.computercode,
+                                        dt = DateTime.UtcNow
+                                    }, tx);
+
+                                await db.ExecuteAsync(
+                                    @"INSERT INTO balancecollectionby (
+                                  balancecollectionbyid,
+                                  bhcode,
+                                  collecteddate, collectiontype, receiptguid, requestguid,
+                                  collected_date, collection_type, receipt_guid, request_guid,
+                                  collectedamount, deleted,
+                                  usercode, computercode,
+                                  entereddate, ibsdate,
+                                  tmcode, cntcode, cnttid, pmcode, ctcode,
+                                  tenant_code)
+                              VALUES (
+                                  @id, @bh,
+                                  @dt, 'ADVANCE', @rg, @req,
+                                  @dt, 'ADVANCE', @rg, @req,
+                                  @amt, false,
+                                  @uc, @cc,
+                                  @dt, @dt,
+                                  @tm, @cnt, @cnttid, @pm, @cct,
+                                  @t)",
+                                    new
+                                    {
+                                        id = Guid.NewGuid().ToString(),
+                                        bh = req.enteredbhcode,
+                                        dt = DateTime.UtcNow,
+                                        rg = (string)dep.receiptguid,
+                                        req = item.requestguid,
+                                        amt = debit,
+                                        uc = req.usercode,
+                                        cc = req.computercode,
+                                        tm = item.tmcode ?? req.tmcode ?? bill.tmcode,
+                                        cnt = req.cntcode,
+                                        cnttid = shift.cnttid,
+                                        pm = item.pmcode ?? req.pmcode ?? bill.pmcode,
+                                        cct = item.ctcode ?? req.ctcode ?? bill.ctcode,
+                                        t = tenantCode
+                                    }, tx);
+
+                                if (itemAdvReceiptGuid == null)
+                                    itemAdvReceiptGuid = (string)dep.receiptguid;
+
+                                remaining = Math.Round(remaining - debit, 2);
+                            }
+
+                            itemAdvanceToUse = Math.Round(itemAdvanceToUse - remaining, 2);
+                            itemTotalSettled = Math.Round(itemAdvanceToUse + itemCashCollected, 2);
+                            itemDueAfter = Math.Round(Math.Max(currentDue - itemTotalSettled, 0), 2);
+                        }
+
+                        // Update lab_request_master
                         await db.ExecuteAsync(
-                            @"UPDATE balancecollectionbytest
-                         SET requeststatus = true
-                       WHERE balancecollectionbyid IN (
-                           SELECT balancecollectionbyid
-                             FROM balancecollectionby
-                            WHERE request_guid = @rg
-                              AND tenant_code  = @t
-                              AND COALESCE(deleted, false) = false
-                       )",
-                            new { rg = item.requestguid, t = tenantCode }, tx);
+                            @"UPDATE lab_request_master
+                         SET paidamount     = COALESCE(paidamount,     0) + @total,
+                             paidviareceipt = COALESCE(paidviareceipt, 0) + @cash
+                       WHERE requestguid = @rg AND tenant_code = @t",
+                            new
+                            {
+                                total = itemTotalSettled,
+                                cash = itemCashCollected,
+                                rg = item.requestguid,
+                                t = tenantCode
+                            }, tx);
+
+                        // Mark tests settled if fully paid
+                        if (itemDueAfter <= 0.05)
+                        {
+                            await db.ExecuteAsync(
+                                @"UPDATE balancecollectionbytest
+                             SET requeststatus = true
+                           WHERE balancecollectionbyid IN (
+                               SELECT balancecollectionbyid
+                                 FROM balancecollectionby
+                                WHERE request_guid = @rg
+                                  AND tenant_code  = @t
+                                  AND COALESCE(deleted, false) = false
+                           )",
+                                new { rg = item.requestguid, t = tenantCode }, tx);
+                        }
+
+                        batchAdvanceUsed += itemAdvanceToUse;
+                        batchCashCollected += itemCashCollected;
+
+                        itemResults.Add(new HmsBulkDueItemResult
+                        {
+                            requestguid = item.requestguid,
+                            bill_no = bill.requestsnoprint,
+                            patient_name = bill.name,
+                            advance_used = itemAdvanceToUse,
+                            cash_collected = itemCashCollected,
+                            total_settled = itemTotalSettled,
+                            due_before = currentDue,
+                            due_after = itemDueAfter,
+                            is_fully_settled = itemDueAfter <= 0.05,
+                            advance_receipt_guid = itemAdvReceiptGuid,
+                            receipt_guid = patientReceiptGuid,
+                            receipt_no = seqInfo.snoprint,
+                            collection_type = itemCollectionType,
+                            reference_no = itemReferenceNo,
+                            bank_name = itemBankName,
+                            card_no = itemCardNo,
+                            cheque_date = itemChequeDate,
+                            remarks = itemRemarks,
+                            status = "collected",
+                            message = "OK"
+                        });
                     }
-
-                    batchAdvanceUsed += itemAdvanceToUse;
-                    batchCashCollected += itemCashCollected;
-
-                    itemResults.Add(new HmsBulkDueItemResult
-                    {
-                        requestguid = item.requestguid,
-                        bill_no = bill.requestsnoprint,
-                        patient_name = bill.name,
-                        advance_used = itemAdvanceToUse,
-                        cash_collected = itemCashCollected,
-                        total_settled = itemTotalSettled,
-                        due_before = currentDue,
-                        due_after = itemDueAfter,
-                        is_fully_settled = itemDueAfter <= 0.05,
-                        advance_receipt_guid = itemAdvReceiptGuid,
-                        collection_type = itemCollectionType,
-                        reference_no = itemReferenceNo,
-                        bank_name = itemBankName,
-                        card_no = itemCardNo,
-                        cheque_date = itemChequeDate,
-                        remarks = itemRemarks,
-                        status = "collected",
-                        message = "OK"
-                    });
                 }
 
                 tx.Commit();
 
                 return ("SUCCESS", new HmsBulkDueCollectionResponse
                 {
-                    batch_receipt_guid = batchReceiptGuid,
-                    receipt_no = seqInfo.snoprint,
-                    receipt_barcode = seqInfo.barcode,
+                    batch_receipt_guid = firstReceiptGuid ?? "",
+                    receipt_no = firstReceiptNo,
+                    receipt_barcode = firstReceiptBarcode,
                     collection_type = req.collection_type.ToUpper(),
                     total_advance_used = Math.Round(batchAdvanceUsed, 2),
                     total_cash_collected = Math.Round(batchCashCollected, 2),
@@ -1507,6 +1549,8 @@ LEFT JOIN lab_request_master lrm
     SELECT
         r.receiptguid                                               AS receipt_guid,
         r.receiptsnoprint                                           AS receipt_no,
+        COALESCE(crm.custcode, '')                                  AS patient_id,
+        rd.requestguid                                              AS bill_guid,
         lrm.name                                                    AS patient_name,
         lrm.mobileno,
         lrm.requestsnoprint                                         AS bill_no,
@@ -1539,6 +1583,9 @@ LEFT JOIN lab_request_master lrm
     LEFT JOIN lab_request_master lrm
            ON lrm.requestguid = rd.requestguid
           AND lrm.tenant_code = rd.tenant_code
+    LEFT JOIN customerdb.customer_registration_master crm
+           ON crm.custid = lrm.custid
+          AND (crm.tenant_code = r.tenant_code OR crm.tenant_code IS NULL)
     LEFT JOIN LATERAL (
         SELECT name FROM doctor_master
          WHERE dcode = lrm.dcode AND tenant_code = lrm.tenant_code
@@ -1813,6 +1860,9 @@ INNER JOIN receipt_details rd
 LEFT JOIN lab_request_master lrm
        ON lrm.requestguid = rd.requestguid
       AND lrm.tenant_code = rm.tenant_code
+LEFT JOIN customerdb.customer_registration_master crm
+       ON crm.custid = lrm.custid
+      AND (crm.tenant_code = rm.tenant_code OR crm.tenant_code IS NULL)
 LEFT JOIN LATERAL (
     SELECT name FROM doctor_master
      WHERE dcode = lrm.dcode AND tenant_code = lrm.tenant_code
@@ -1880,6 +1930,7 @@ LEFT JOIN LATERAL (
        COALESCE(rd.receiptamount, 0) AS amount,
 
        rm.custid,
+       COALESCE(crm.custcode, '')  AS patient_id,
        lrm.name                    AS patient_name,
        lrm.mobileno,
        lrm.requestsnoprint         AS bill_no,
@@ -2489,6 +2540,8 @@ LEFT JOIN doctor_master dm
         rm.receiptguid                                               AS receipt_guid,
         rm.receiptsnoprint                                           AS receipt_no,
         rm.custid,
+        COALESCE(crm.custcode, '')                                  AS patient_id,
+        rd.requestguid                                              AS bill_guid,
         lrm.name                                                     AS patient_name,
         lrm.mobileno,
         lrm.requestsnoprint                                          AS bill_no,
@@ -2517,6 +2570,9 @@ LEFT JOIN doctor_master dm
           AND COALESCE(rd.deleted, false) = false
     LEFT JOIN lab_request_master lrm
            ON lrm.requestguid = rd.requestguid AND lrm.tenant_code = rd.tenant_code
+    LEFT JOIN customerdb.customer_registration_master crm
+           ON crm.custid = lrm.custid
+          AND (crm.tenant_code = rm.tenant_code OR crm.tenant_code IS NULL)
     LEFT JOIN LATERAL (
         SELECT name FROM doctor_master
          WHERE dcode = lrm.dcode AND tenant_code = lrm.tenant_code
@@ -2802,6 +2858,123 @@ LEFT JOIN doctor_master dm
                 tx.Rollback();
                 _logger.LogError(ex, "UseAdvance failed for custid={c}", req.custid);
                 return ($"Transaction error: {ex.Message}", null);
+            }
+        }
+        // ═══════════════════════════════════════════════════════════════════════
+        //  4c. CANCEL ADVANCE DEPOSIT
+        //
+        //  Reverses an ADVANCE receipt (deposit) if, and only if, none of it has
+        //  been consumed (usage rows) or refunded (refund rows).
+        //    - soft-deletes receipt_master (ADVANCE)
+        //    - soft-deletes the deposit row in receipt_advances
+        //    - soft-deletes the deposit's balancecollectionby row
+        //  Balance is derived from these tables, so it updates automatically.
+        // ═══════════════════════════════════════════════════════════════════════
+
+        public async Task<(string status, HmsAdvanceCancelResponse? data)> CancelAdvance(
+            HmsAdvanceCancelRequest req, string tenantCode)
+        {
+            if (string.IsNullOrWhiteSpace(req.receiptguid))
+                return ("Advance receipt reference (receiptguid) is required.", null);
+
+            using var db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // Lock the receipt row so two cancels can't run concurrently
+                var receipt = await db.QueryFirstOrDefaultAsync<HmsDueReceiptMaster>(
+                    @"SELECT * FROM receipt_master
+               WHERE receiptguid = @rg AND tenant_code = @t
+               FOR UPDATE",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                if (receipt == null)
+                    return ("Advance receipt not found.", null);
+                if (receipt.isdeleted == true || receipt.deleted == true)
+                    return ("Advance receipt is already cancelled.", null);
+                if (receipt.receipttype != "ADVANCE")
+                    return ("Only ADVANCE deposit receipts can be cancelled through this endpoint. " +
+                            "Use the due-collection cancel for DUE receipts.", null);
+
+                // Deposited amount (requestguid IS NULL)
+                double deposited = await db.ExecuteScalarAsync<double>(
+                    @"SELECT COALESCE(SUM(receiptamount), 0)
+                FROM receipt_advances
+               WHERE receiptguid = @rg
+                 AND tenant_code = @t
+                 AND requestguid IS NULL
+                 AND COALESCE(deleted, false) = false",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                // Consumed amount (usage rows → bill guid, refund rows → refund receipt guid)
+                double consumed = await db.ExecuteScalarAsync<double>(
+                    @"SELECT COALESCE(SUM(receiptamount), 0)
+                FROM receipt_advances
+               WHERE receiptguid = @rg
+                 AND tenant_code = @t
+                 AND requestguid IS NOT NULL
+                 AND COALESCE(deleted, false) = false",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                if (consumed > 0.01)
+                    return ($"Cannot cancel: {consumed:F2} of this advance ({deposited:F2}) has already " +
+                            "been used against bills or refunded. Cancel those collections/refunds first.", null);
+
+                double balanceBefore = await GetPatientAdvanceBalance(db, receipt.custid, tenantCode, tx);
+
+                // Soft-delete deposit rows
+                await db.ExecuteAsync(
+                    @"UPDATE receipt_advances
+                 SET deleted = true
+               WHERE receiptguid = @rg
+                 AND tenant_code = @t
+                 AND requestguid IS NULL
+                 AND COALESCE(deleted, false) = false",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                // Soft-delete the deposit's cash-flow ledger row(s)
+                await db.ExecuteAsync(
+                    @"UPDATE balancecollectionby
+                 SET deleted = true
+               WHERE receipt_guid = @rg
+                 AND tenant_code  = @t
+                 AND request_guid IS NULL
+                 AND COALESCE(deleted, false) = false",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                // Soft-delete the receipt itself
+                await db.ExecuteAsync(
+                    @"UPDATE receipt_master
+                 SET isdeleted = true, deleted = true
+               WHERE receiptguid = @rg AND tenant_code = @t",
+                    new { rg = req.receiptguid, t = tenantCode }, tx);
+
+                double balanceAfter = await GetPatientAdvanceBalance(db, receipt.custid, tenantCode, tx);
+
+                tx.Commit();
+
+                _logger.LogInformation(
+                    "Advance receipt {rg} cancelled by user={u}, amount={a}, reason={r}",
+                    req.receiptguid, req.usercode, deposited, req.reason);
+
+                return ("SUCCESS", new HmsAdvanceCancelResponse
+                {
+                    receipt_guid = req.receiptguid,
+                    receipt_no = receipt.receiptsnoprint,
+                    custid = receipt.custid,
+                    cancelled_amount = Math.Round(deposited, 2),
+                    advance_balance_before = balanceBefore,
+                    advance_balance_after = balanceAfter,
+                    cancelled_date = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                _logger.LogError(ex, "CancelAdvance failed for receiptguid={rg}", req.receiptguid);
+                return ($"Cancellation error: {ex.Message}", null);
             }
         }
     }

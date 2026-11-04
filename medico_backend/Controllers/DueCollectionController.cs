@@ -476,5 +476,36 @@ namespace medico_backend.Controllers
                 return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
+        // ═══════════════════════════════════════════════════════════════════════
+        //  8c. CANCEL ADVANCE DEPOSIT
+        //
+        //  POST /api/HmsDueCollection/advance/cancel
+        //  Body: { "receiptguid": "...", "usercode": 10, "reason": "Entered by mistake" }
+        // ═══════════════════════════════════════════════════════════════════════
+
+        [HttpPost("advance/cancel")]
+        public async Task<IActionResult> CancelAdvance([FromBody] HmsAdvanceCancelRequest req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, data) = await _service.CancelAdvance(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message = status });
+
+                return Ok(new
+                {
+                    success = true,
+                    message = "Advance deposit cancelled successfully.",
+                    data
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cancelling advance receipt={rg}", req?.receiptguid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
     }
 }

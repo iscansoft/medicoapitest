@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -378,6 +378,8 @@ namespace medico_backend.Model
         public double due_after { get; set; }
         public bool is_fully_settled { get; set; }
         public string? advance_receipt_guid { get; set; }
+        public string? receipt_guid { get; set; }
+        public string? receipt_no { get; set; }
 
         // ── NEW: echo back the effective payment details used for this item ───
         public string? collection_type { get; set; }
@@ -452,6 +454,8 @@ namespace medico_backend.Model
         public string? receipt_guid { get; set; }
         public string? receipt_no { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
+        public string? bill_guid { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -539,6 +543,7 @@ namespace medico_backend.Model
         public DateTime? receiptdate { get; set; }
         public double? amount { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -622,6 +627,7 @@ namespace medico_backend.Model
         public string? receipt_type { get; set; }
         public DateTime? receipt_date { get; set; }
         public int? custid { get; set; }
+        public string? patient_id { get; set; }
         public string? patient_name { get; set; }
         public string? mobileno { get; set; }
         public string? bill_no { get; set; }
@@ -683,5 +689,22 @@ namespace medico_backend.Model
         public double advance_balance_after { get; set; }
         public int bills_settled { get; set; }
         public List<HmsAdvanceUseItemResult> items { get; set; } = new();
+    }
+    public class HmsAdvanceCancelRequest
+    {
+        public string receiptguid { get; set; } = string.Empty;
+        public int? usercode { get; set; }
+        public string? reason { get; set; }
+    }
+
+    public class HmsAdvanceCancelResponse
+    {
+        public string receipt_guid { get; set; } = string.Empty;
+        public string? receipt_no { get; set; }
+        public decimal? custid { get; set; }
+        public double cancelled_amount { get; set; }
+        public double advance_balance_before { get; set; }
+        public double advance_balance_after { get; set; }
+        public DateTime cancelled_date { get; set; }
     }
 }

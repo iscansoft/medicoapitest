@@ -1,4 +1,4 @@
-﻿using Dapper;
+using Dapper;
 using Dapper.Contrib.Extensions;
 using medico_backend.Model;
 using Medico_Backend.Model;
@@ -104,6 +104,25 @@ namespace medico_backend.Class
             using var db = GetConnection();
             db.Open();   // ✅ explicit open, same as GetAllOpList
 
+            Guid? ipGuid = null;
+            if (!string.IsNullOrWhiteSpace(ip_id))
+            {
+                if (Guid.TryParse(ip_id.Trim(), out var parsedGuid))
+                {
+                    ipGuid = parsedGuid;
+                }
+                else
+                {
+                    ipGuid = await db.QueryFirstOrDefaultAsync<Guid?>(
+                        @"SELECT ip_id FROM ip_registration
+                          WHERE (ip_no = @ip_no OR ip_id::text = @ip_no)
+                            AND tenant_code = @tenant_code
+                            AND COALESCE(isdeleted, false) = false
+                          LIMIT 1",
+                        new { ip_no = ip_id.Trim(), tenant_code });
+                }
+            }
+
             var rows = await db.QueryAsync<UnbilledChargeRow>(
                 @"SELECT
               u.*,
@@ -121,11 +140,11 @@ namespace medico_backend.Class
                  AND COALESCE(lrm.isdeleted, false) = false
                  AND COALESCE(lrm.deleted,   false) = false
           WHERE ((@opvisitid IS NOT NULL AND u.opvisitid = @opvisitid)
-                 OR (@ip_id IS NOT NULL AND u.ip_id = CAST(@ip_id AS uuid)))
+                 OR (@ipGuid IS NOT NULL AND u.ip_id = @ipGuid))
           AND u.tenant_code = @tenant_code
           AND (u.billedstatus = false OR u.billedstatus IS NULL)
           ORDER BY u.chargedate",
-                new { opvisitid, ip_id, tenant_code },
+                new { opvisitid, ipGuid, tenant_code },
                 commandTimeout: 60   // ✅ same timeout bump as GetAllOpList
             );
             return rows.ToList();
@@ -632,7 +651,8 @@ namespace medico_backend.Class
 
         public async Task AddOtChargeRow(
     IDbConnection db, IDbTransaction? tx, string? op_id, Guid? ip_id, decimal custid, string tenant_code,
-    string entryType, string entryId, string itemName, decimal quantity, decimal? rate, decimal? amount)
+    string entryType, string entryId, string itemName, decimal quantity, decimal? rate, decimal? amount,
+    int? tcode = null)
         {
             var row = new UnbilledChargeRow
             {
@@ -643,6 +663,7 @@ namespace medico_backend.Class
                 custid = custid,
                 opvisitid = op_id,
                 ip_id = ip_id,
+                tcode = tcode,
                 quantity = (double?)quantity,
                 rate = (double?)rate,
                 amount = (double?)amount,
@@ -681,6 +702,11 @@ namespace medico_backend.Class
         public async Task<(int? tcode, decimal rate)> GetTestMasterRateByName(
             IDbConnection db, IDbTransaction? tx, string service_name, string tenant_code)
         {
+            if (string.IsNullOrWhiteSpace(service_name))
+                return (null, 0);
+
+            string sName = service_name.Trim();
+
             // 1️⃣ Exact match first (case-insensitive) — avoids picking up
             // unrelated rows that merely start with the same letters.
             var test = await db.QueryFirstOrDefaultAsync<dynamic>(
@@ -690,7 +716,7 @@ namespace medico_backend.Class
           AND   name ILIKE @exact_name
           ORDER BY tcode
           LIMIT 1",
-                new { tenant_code, exact_name = service_name }, tx);
+                new { tenant_code, exact_name = sName }, tx);
 
             // 2️⃣ Fallback: prefix match, only if no exact match was found
             if (test == null)
@@ -702,7 +728,20 @@ namespace medico_backend.Class
               AND   name ILIKE @name_pattern
               ORDER BY tcode
               LIMIT 1",
-                    new { tenant_code, name_pattern = $"{service_name}%" }, tx);
+                    new { tenant_code, name_pattern = $"{sName}%" }, tx);
+            }
+
+            // 3️⃣ Fallback: substring / contains match
+            if (test == null)
+            {
+                test = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT tcode, amount FROM test_master
+              WHERE TRIM(tenant_code) = TRIM(@tenant_code)
+              AND   deleted = false
+              AND   (name ILIKE @contains OR @exact ILIKE ('%' || name || '%'))
+              ORDER BY tcode
+              LIMIT 1",
+                    new { tenant_code, contains = $"%{sName}%", exact = sName }, tx);
             }
 
             if (test == null)
@@ -757,6 +796,25 @@ namespace medico_backend.Class
             using var db = GetConnection();
             db.Open();
 
+            Guid? ipGuid = null;
+            if (!string.IsNullOrWhiteSpace(ip_id))
+            {
+                if (Guid.TryParse(ip_id.Trim(), out var parsedGuid))
+                {
+                    ipGuid = parsedGuid;
+                }
+                else
+                {
+                    ipGuid = await db.QueryFirstOrDefaultAsync<Guid?>(
+                        @"SELECT ip_id FROM ip_registration
+                          WHERE (ip_no = @ip_no OR ip_id::text = @ip_no)
+                            AND tenant_code = @tenant_code
+                            AND COALESCE(isdeleted, false) = false
+                          LIMIT 1",
+                        new { ip_no = ip_id.Trim(), tenant_code });
+                }
+            }
+
             var rows = await db.QueryAsync<UnbilledChargeRow>(
                 @"SELECT
               u.*,
@@ -774,11 +832,11 @@ namespace medico_backend.Class
                  AND COALESCE(lrm.isdeleted, false) = false
                  AND COALESCE(lrm.deleted,   false) = false
           WHERE ((@opvisitid IS NOT NULL AND u.opvisitid = @opvisitid)
-                 OR (@ip_id IS NOT NULL AND u.ip_id = CAST(@ip_id AS uuid)))
+                 OR (@ipGuid IS NOT NULL AND u.ip_id = @ipGuid))
           AND u.tenant_code = @tenant_code
           AND u.billedstatus = true
           ORDER BY u.billeddate DESC NULLS LAST, u.chargedate",
-                new { opvisitid, ip_id, tenant_code },
+                new { opvisitid, ipGuid, tenant_code },
                 commandTimeout: 60
             );
             return rows.ToList();
