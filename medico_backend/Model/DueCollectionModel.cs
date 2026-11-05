@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -289,10 +289,12 @@ namespace medico_backend.Model
         public double refund_amount { get; set; }
         public int? enteredbhcode { get; set; }
         public int? cntcode { get; set; }
+        public int? cash_counter_code { get; set; }
         public string? cnttid { get; set; }
         public int? usercode { get; set; }
         public int? computercode { get; set; }
         public string? remarks { get; set; }
+        public string? reason { get; set; }
     }
 
     public class HmsDueCollectionFilterRequest
@@ -726,7 +728,9 @@ namespace medico_backend.Model
         public double amount { get; set; }
         public string? purpose { get; set; }
         public string? remarks { get; set; }
-        public string status { get; set; } = "PENDING"; // PENDING, COLLECTED, CANCELLED
+        public string status { get; set; } = "PENDING"; // PENDING, COLLECTED, CANCELLED, REFUNDED
+        public string request_type { get; set; } = "ADVANCE";   // ADVANCE | REFUND
+        public string? payment_mode { get; set; }               // how refund was paid out
         public int? requested_by { get; set; }
         public string? requested_by_name { get; set; }
         public int? target_cntcode { get; set; }
@@ -763,6 +767,7 @@ namespace medico_backend.Model
     public class HmsAdvanceRequestFilterDto
     {
         public string? status { get; set; } // "PENDING", "COLLECTED", "CANCELLED", or null for all
+        public string? request_type { get; set; }   // ADVANCE (default) | REFUND | ALL
         public decimal? custid { get; set; }
         public int? cntcode { get; set; }
         public int? bhcode { get; set; }
@@ -782,6 +787,8 @@ namespace medico_backend.Model
         public double collected_amount { get; set; }
         public int cancelled_count { get; set; }
         public double cancelled_amount { get; set; }
+        public int refunded_count { get; set; }
+        public double refunded_amount { get; set; }
     }
 
     public class HmsCollectAdvanceRequestDto
@@ -812,11 +819,43 @@ namespace medico_backend.Model
         public int? usercode { get; set; }
     }
 
+    public class HmsCreateRefundRequestDto
+    {
+        public decimal custid { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobile_no { get; set; }
+        public string? opvisitid { get; set; }
+        public Guid? ip_id { get; set; }
+        public double refund_amount { get; set; }
+        public string? reason { get; set; }          // e.g. "Discharge", "Treatment cancelled"
+        public string? remarks { get; set; }
+        public int? target_cntcode { get; set; }
+        public int? target_bhcode { get; set; }
+        public int? usercode { get; set; }
+        public string? user_name { get; set; }
+    }
+
+    public class HmsProcessRefundRequestDto
+    {
+        public Guid request_id { get; set; }
+        public double? amount { get; set; }          // optional, cannot exceed requested amount
+        public string payment_mode { get; set; } = "CASH";
+        public string? reference_no { get; set; }
+        public int? enteredbhcode { get; set; }
+        public int? cntcode { get; set; }
+        public int? usercode { get; set; }
+        public string? user_name { get; set; }
+        public int? computercode { get; set; }
+        public string? remarks { get; set; }
+    }
+
     public class HmsPatientAdvanceDepositFilterRequest
     {
         public string? search { get; set; } // patient name, mobile, custcode, custid
         public DateTime? fromdate { get; set; }
         public DateTime? todate { get; set; }
+        public DateTime? from_date { get; set; }
+        public DateTime? to_date { get; set; }
         public string? balance_status { get; set; } = "ALL"; // "ALL", "HAS_BALANCE", "ZERO_BALANCE"
         public int? bhcode { get; set; }
         public int? cntcode { get; set; }
@@ -831,11 +870,11 @@ namespace medico_backend.Model
         public string patient_name { get; set; } = string.Empty;
         public string mobile_no { get; set; } = string.Empty;
         public string gender { get; set; } = string.Empty;
-        public int age { get; set; }
-        public double total_deposited { get; set; }
-        public double total_used { get; set; }
-        public double total_refunded { get; set; }
-        public double available_balance { get; set; }
+        public string age { get; set; } = "0";
+        public decimal total_deposited { get; set; }
+        public decimal total_used { get; set; }
+        public decimal total_refunded { get; set; }
+        public decimal available_balance { get; set; }
         public DateTime? first_deposit_date { get; set; }
         public DateTime? last_deposit_date { get; set; }
         public string? last_receipt_no { get; set; }
@@ -846,10 +885,10 @@ namespace medico_backend.Model
     public class HmsPatientAdvanceDepositSummary
     {
         public int total_patients { get; set; }
-        public double total_deposited { get; set; }
-        public double total_used { get; set; }
-        public double total_refunded { get; set; }
-        public double total_available_balance { get; set; }
+        public decimal total_deposited { get; set; }
+        public decimal total_used { get; set; }
+        public decimal total_refunded { get; set; }
+        public decimal total_available_balance { get; set; }
     }
 
     public class HmsAdvanceRefundFilterRequest
@@ -858,6 +897,8 @@ namespace medico_backend.Model
         public string? search { get; set; }
         public DateTime? fromdate { get; set; }
         public DateTime? todate { get; set; }
+        public DateTime? from_date { get; set; }
+        public DateTime? to_date { get; set; }
         public int? bhcode { get; set; }
         public int? cntcode { get; set; }
         public int page { get; set; } = 1;
@@ -874,7 +915,7 @@ namespace medico_backend.Model
         public string custcode { get; set; } = string.Empty;
         public string patient_name { get; set; } = string.Empty;
         public string mobile_no { get; set; } = string.Empty;
-        public double refund_amount { get; set; }
+        public decimal refund_amount { get; set; }
         public int? usercode { get; set; }
         public string? entered_by { get; set; }
         public int? cntcode { get; set; }
@@ -887,6 +928,6 @@ namespace medico_backend.Model
     public class HmsAdvanceRefundSummary
     {
         public int total_refund_count { get; set; }
-        public double total_refund_amount { get; set; }
+        public decimal total_refund_amount { get; set; }
     }
 }

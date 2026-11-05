@@ -626,11 +626,92 @@ namespace medico_backend.Controllers
             }
         }
 
+
+        [HttpPost("advance/refund-request")]
+        public async Task<IActionResult> CreateRefundRequest([FromBody] HmsCreateRefundRequestDto req)
+        {
+            try
+            {
+                var (status, data) = await _service.CreateRefundRequest(req, ResolveTenantCode());
+                if (status != "SUCCESS") return BadRequest(new { success = false, message = status });
+                return Ok(new { success = true, message = "Refund request sent to cash counter.", data });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error creating refund request for custid={c}", req?.custid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        
+
+        [HttpPost("advance/refund-requests")]
+        public async Task<IActionResult> GetRefundRequests([FromBody] HmsAdvanceRequestFilterDto filter)
+        {
+            try
+            {
+                filter.request_type = "REFUND";
+                var (data, totalCount, summary) = await _service.GetAdvanceRequests(filter, ResolveTenantCode());
+                return Ok(new { success = true, totalCount, page = filter.page, pagesize = filter.pagesize, summary, data });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching refund requests.");
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+       
+
+        [HttpPost("advance/refund-request/process")]
+        public async Task<IActionResult> ProcessRefundRequest([FromBody] HmsProcessRefundRequestDto req)
+        {
+            try
+            {
+                var (status, data) = await _service.ProcessRefundRequest(req, ResolveTenantCode());
+                if (status != "SUCCESS") return BadRequest(new { success = false, message = status });
+                return Ok(new { success = true, message = "Advance refunded successfully.", data });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing refund request={id}", req?.request_id);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
         // ═══════════════════════════════════════════════════════════════════════
         //  16. PATIENTS WHO HAVE DEPOSITED ADVANCE (WITH AVAILABLE BALANCE / REFUND QUEUE)
         //
         //  POST /api/HmsDueCollection/advance/patient-deposits
         // ═══════════════════════════════════════════════════════════════════════
+
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+        //  15d. CANCEL ADVANCE REFUND REQUEST
+        //
+        //  POST /api/HmsDueCollection/advance/refund-request/cancel
+        //  POST /api/HmsDueCollection/advance/refund-requests/cancel
+        // â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+
+        [HttpPost("advance/refund-request/cancel")]
+        [HttpPost("advance/refund-requests/cancel")]
+        public async Task<IActionResult> CancelRefundRequest([FromBody] HmsCancelAdvanceRequestDto req)
+        {
+            try
+            {
+                string tenant = ResolveTenantCode();
+                var (status, message) = await _service.CancelAdvanceRequest(req, tenant);
+
+                if (status != "SUCCESS")
+                    return BadRequest(new { success = false, message });
+
+                return Ok(new { success = true, message = "Refund request cancelled successfully." });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error cancelling refund request={id}", req?.request_id);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
 
         [HttpPost("advance/patient-deposits")]
         public async Task<IActionResult> GetPatientAdvanceDeposits([FromBody] HmsPatientAdvanceDepositFilterRequest filter)

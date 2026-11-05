@@ -1052,9 +1052,18 @@ public long? customercode { get; set; }
 
      public string? remarks { get; set; }
 
-     public string? tenantcode { get; set; }
- }
- public class stock_transfer_request
+        public string? tenantcode { get; set; }
+        public long? dispatchedby { get; set; }
+        public DateTime? dispatcheddate { get; set; }
+        public long? receivedby { get; set; }
+        public DateTime? receiveddate { get; set; }
+        public long? rejectedby { get; set; }
+        public DateTime? rejecteddate { get; set; }
+        public long? reversedby { get; set; }
+        public DateTime? reverseddate { get; set; }
+        public string? reversereason { get; set; }
+    }
+    public class stock_transfer_request
  {
      public stock_transfer_master master { get; set; }
          = new stock_transfer_master();
@@ -1654,4 +1663,5 @@ public long? customercode { get; set; }
         public ItemSalesReportSummaryInfo Summary { get; set; } = new();
         public List<ItemSalesReportRowInfo> Transactions { get; set; } = new();
     }
+
 }

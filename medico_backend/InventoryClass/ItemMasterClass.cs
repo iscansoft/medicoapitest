@@ -5008,6 +5008,7 @@ string tenantcode)
             receiveddate,
             rejectedby,
             rejecteddate,
+reversedby, reverseddate, reversereason,
             tenantcode
         FROM stock_transfer_master
         WHERE tenantcode = @tenantcode
@@ -6349,16 +6350,22 @@ stock_transfer_partial_reject_request request)
                             new { tenant_code, pattern = $"%{item.drug_name}%" }, tx);
                     }
 
+                    long? matchedItemCode = null;
+                    if (match != null && match.itemcode != null)
+                    {
+                        try { matchedItemCode = Convert.ToInt64(match.itemcode); } catch { }
+                    }
+
                     var row = new PharmacyPrescriptionQueueRow
                     {
-                        pr_det_id = string.IsNullOrWhiteSpace(item.pr_det_id) ? null : Guid.Parse(item.pr_det_id),
+                        pr_det_id = string.IsNullOrWhiteSpace(item.pr_det_id) ? null : (Guid.TryParse(item.pr_det_id, out var g) ? g : (Guid?)null),
                         pr_code = req.pr_code,
-                        sheet_id = string.IsNullOrWhiteSpace(req.sheet_id) ? null : Guid.Parse(req.sheet_id),
-                        op_id = string.IsNullOrWhiteSpace(req.op_id) ? null : Guid.Parse(req.op_id),
-                        ip_id = string.IsNullOrWhiteSpace(req.ip_id) ? null : Guid.Parse(req.ip_id),
+                        sheet_id = string.IsNullOrWhiteSpace(req.sheet_id) ? null : (Guid.TryParse(req.sheet_id, out var s) ? s : (Guid?)null),
+                        op_id = string.IsNullOrWhiteSpace(req.op_id) ? null : (Guid.TryParse(req.op_id, out var op) ? op : (Guid?)null),
+                        ip_id = string.IsNullOrWhiteSpace(req.ip_id) ? null : (Guid.TryParse(req.ip_id, out var ip) ? ip : (Guid?)null),
                         custid = req.custid,
-                        drug_name = item.drug_name,
-                        matched_itemcode = match != null ? (long?)match.itemcode : null,
+                        drug_name = item.drug_name ?? string.Empty,
+                        matched_itemcode = matchedItemCode,
                         matched_itemname = match != null ? (string)match.itemname : null,
                         qty = item.qty,
                         morning = item.morning,
@@ -9375,11 +9382,11 @@ AND deleted = false;";
 
         // â”€â”€â”€ 2. GET ITEM PATIENT SALES & MOVEMENT REPORT â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         public async Task<ItemSalesReportResponse?> GetItemPatientSalesReport(
-            long itemcode, 
-            DateTime? fromdate, 
-            DateTime? todate, 
-            string? batchno, 
-            string? salestype, 
+            long itemcode,
+            DateTime? fromdate,
+            DateTime? todate,
+            string? batchno,
+            string? salestype,
             long? warehousecode,
             string tenantcode)
         {
@@ -9556,6 +9563,163 @@ AND deleted = false;";
                 },
                 Transactions = transactions
             };
+        }
+        // ============================================================
+        // REVERSE
+        //
+        // IN_TRANSIT          -> add transferqty back to SOURCE
+        // RECEIVED /
+        // PARTIALLY_RECEIVED  -> remove approvedqty from DESTINATION,
+        //                        add it back to SOURCE
+        // PENDING             -> nothing moved, just mark REVERSED
+        //
+        // Final status = REVERSED
+        // ============================================================
+        public async Task<bool> ReverseStockTransfer(
+            long transfercode,
+            long usercode,
+            string? reason,
+            string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var transaction = await conn.BeginTransactionAsync();
+
+            try
+            {
+                var master = await conn.QueryFirstOrDefaultAsync<stock_transfer_master>(@"
+            SELECT * FROM stock_transfer_master
+            WHERE transfercode = @transfercode
+              AND tenantcode = @tenantcode
+            FOR UPDATE;",
+                    new { transfercode, tenantcode }, transaction);
+
+                if (master == null) return false;
+
+                string status = master.status ?? "";
+                string[] reversible = { "PENDING", "IN_TRANSIT", "RECEIVED", "PARTIALLY_RECEIVED" };
+
+                if (!reversible.Contains(status))
+                    throw new Exception($"Transfer cannot be reversed because current status is {status}");
+
+                if (master.fromwarehousecode == null || master.towarehousecode == null)
+                    throw new Exception("Source or destination warehouse is missing.");
+
+                if (status != "PENDING")
+                {
+                    var details = (await conn.QueryAsync<stock_transfer_detail>(@"
+                SELECT * FROM stock_transfer_detail
+                WHERE transfercode = @transfercode
+                  AND tenantcode = @tenantcode;",
+                        new { transfercode, tenantcode }, transaction)).ToList();
+
+                    if (details.Count == 0)
+                        throw new Exception("No transfer details found.");
+
+                    foreach (var d in details)
+                    {
+                        // qty that actually sits at the destination (0 when still in transit)
+                        decimal qtyAtDestination =
+                            (status == "RECEIVED" || status == "PARTIALLY_RECEIVED")
+                                ? d.approvedqty
+                                : 0m;
+
+                        // qty that must go back to the source
+                        decimal qtyBackToSource =
+                            status == "IN_TRANSIT" ? d.transferqty : d.approvedqty;
+
+                        // 1) take it out of destination (only if it was received)
+                        if (qtyAtDestination > 0)
+                        {
+                            var dest = await conn.QueryFirstOrDefaultAsync<stock_master>(@"
+                        SELECT * FROM stock_master
+                        WHERE warehousecode = @wh
+                          AND itemcode = @itemcode
+                          AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+                          AND tenantcode = @tenantcode
+                          AND deleted = false
+                        ORDER BY stockcode
+                        LIMIT 1
+                        FOR UPDATE;",
+                                new { wh = master.towarehousecode, d.itemcode, d.batchno, tenantcode }, transaction);
+
+                            if (dest == null)
+                                throw new Exception($"Destination stock not found. Item: {d.itemcode}, Batch: {d.batchno}");
+
+                            if (dest.closingstock < qtyAtDestination)
+                                throw new Exception(
+                                    $"Cannot reverse: item {d.itemcode}, batch {d.batchno} has only {dest.closingstock} " +
+                                    $"at destination, but {qtyAtDestination} must be taken back (already used/sold).");
+
+                            decimal newDestClosing = dest.closingstock - qtyAtDestination;
+
+                            await conn.ExecuteAsync(@"
+                        UPDATE stock_master
+                        SET closingstock = @closing,
+                            stockvalue   = @closing * unitcost,
+                            modifieddate = CURRENT_TIMESTAMP,
+                            usercode     = @usercode
+                        WHERE stockcode = @stockcode AND tenantcode = @tenantcode;",
+                                new { closing = newDestClosing, usercode, stockcode = dest.stockcode, tenantcode }, transaction);
+                        }
+
+                        // 2) put it back into source
+                        if (qtyBackToSource > 0)
+                        {
+                            var src = await conn.QueryFirstOrDefaultAsync<stock_master>(@"
+                        SELECT * FROM stock_master
+                        WHERE warehousecode = @wh
+                          AND itemcode = @itemcode
+                          AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+                          AND tenantcode = @tenantcode
+                          AND deleted = false
+                        ORDER BY stockcode
+                        LIMIT 1
+                        FOR UPDATE;",
+                                new { wh = master.fromwarehousecode, d.itemcode, d.batchno, tenantcode }, transaction);
+
+                            if (src == null)
+                                throw new Exception($"Source stock not found. Item: {d.itemcode}, Batch: {d.batchno}");
+
+                            decimal newSrcClosing = src.closingstock + qtyBackToSource;
+
+                            await conn.ExecuteAsync(@"
+                        UPDATE stock_master
+                        SET closingstock = @closing,
+                            stockvalue   = @closing * unitcost,
+                            modifieddate = CURRENT_TIMESTAMP,
+                            usercode     = @usercode
+                        WHERE stockcode = @stockcode AND tenantcode = @tenantcode;",
+                                new { closing = newSrcClosing, usercode, stockcode = src.stockcode, tenantcode }, transaction);
+                        }
+
+                        // 3) clear accepted qty on the line
+                        await conn.ExecuteAsync(@"
+                    UPDATE stock_transfer_detail
+                    SET approvedqty = 0
+                    WHERE transferdetailcode = @code AND tenantcode = @tenantcode;",
+                            new { code = d.transferdetailcode, tenantcode }, transaction);
+                    }
+                }
+
+                await conn.ExecuteAsync(@"
+            UPDATE stock_transfer_master
+            SET status        = 'REVERSED',
+                reversedby    = @usercode,
+                reverseddate  = CURRENT_TIMESTAMP,
+                reversereason = @reason
+            WHERE transfercode = @transfercode
+              AND tenantcode = @tenantcode;",
+                    new { usercode, reason, transfercode, tenantcode }, transaction);
+
+                await transaction.CommitAsync();
+                return true;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
     }
 }

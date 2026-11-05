@@ -190,13 +190,39 @@ namespace medico_backend.Model
             public DateTime? sent_to_pharmacy_at { get; set; }
             public DateTime created_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
             public DateTime updated_at { get; set; } = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
+
+            // CaseSheet-style prescription fields
+            public int? sno { get; set; }
+            public string? pr_code { get; set; }
+            public decimal? drug_code { get; set; }
+            public string? generic_name { get; set; }
+            public string? drug_category { get; set; }
+            public string morning { get; set; } = "0";
+            public string afternoon { get; set; } = "0";
+            public string evening { get; set; } = "0";
+            public string night { get; set; } = "0";
+            public string? morning_dose { get; set; }
+            public string? afternoon_dose { get; set; }
+            public string? evening_dose { get; set; }
+            public string? night_dose { get; set; }
+            public string? dose_unit { get; set; }
+            public bool before_food { get; set; } = false;
+            public bool after_food { get; set; } = false;
+            public int? days { get; set; }
+            public decimal? rate { get; set; }
+            public decimal? mrp { get; set; }
+            public string? batch_no { get; set; }
+            public DateTime? batch_expiry_date { get; set; }
+            public long? stockcode { get; set; }
+            public long? warehousecode { get; set; }
+            public string? notes { get; set; }
         }
 
         public class AddMedicineRequest
         {
             public Guid ip_id { get; set; }
             public decimal custid { get; set; }
-            public int usercode { get; set; }                       // CHANGED — now read from body
+            public int usercode { get; set; }                       // CHANGED â€” now read from body
             public DateOnly? entry_date { get; set; }               // NEW
             public TimeOnly? entry_time { get; set; }               // NEW
             public string shift { get; set; } = "MORNING";
@@ -205,8 +231,35 @@ namespace medico_backend.Model
             public string? unit { get; set; }
             public string? route { get; set; }
             public decimal quantity { get; set; } = 1;
+            public decimal? qty { get; set; }
             public string status { get; set; } = "GIVEN";
             public string? remarks { get; set; }
+
+            // CaseSheet-style prescription fields
+            public int? sno { get; set; }
+            public string? pr_code { get; set; }
+            public decimal? drug_code { get; set; }
+            public string? generic_name { get; set; }
+            public string? drug_category { get; set; }
+            public string morning { get; set; } = "0";
+            public string afternoon { get; set; } = "0";
+            public string evening { get; set; } = "0";
+            public string night { get; set; } = "0";
+            public string? morning_dose { get; set; }
+            public string? afternoon_dose { get; set; }
+            public string? evening_dose { get; set; }
+            public string? night_dose { get; set; }
+            public string? dose_unit { get; set; }
+            public bool before_food { get; set; } = false;
+            public bool after_food { get; set; } = false;
+            public int? days { get; set; }
+            public decimal? rate { get; set; }
+            public decimal? mrp { get; set; }
+            public string? batch_no { get; set; }
+            public DateTime? batch_expiry_date { get; set; }
+            public long? stockcode { get; set; }
+            public long? warehousecode { get; set; }
+            public string? notes { get; set; }
         }
 
         public class UpdateMedicineRequest
@@ -220,11 +273,50 @@ namespace medico_backend.Model
             public string? unit { get; set; }
             public string? route { get; set; }
             public decimal quantity { get; set; } = 1;
+            public decimal? qty { get; set; }
             public string status { get; set; } = "GIVEN";
             public string? remarks { get; set; }
+
+            // CaseSheet-style prescription fields
+            public int? sno { get; set; }
+            public string? pr_code { get; set; }
+            public decimal? drug_code { get; set; }
+            public string? generic_name { get; set; }
+            public string? drug_category { get; set; }
+            public string morning { get; set; } = "0";
+            public string afternoon { get; set; } = "0";
+            public string evening { get; set; } = "0";
+            public string night { get; set; } = "0";
+            public string? morning_dose { get; set; }
+            public string? afternoon_dose { get; set; }
+            public string? evening_dose { get; set; }
+            public string? night_dose { get; set; }
+            public string? dose_unit { get; set; }
+            public bool before_food { get; set; } = false;
+            public bool after_food { get; set; } = false;
+            public int? days { get; set; }
+            public decimal? rate { get; set; }
+            public decimal? mrp { get; set; }
+            public string? batch_no { get; set; }
+            public DateTime? batch_expiry_date { get; set; }
+            public long? stockcode { get; set; }
+            public long? warehousecode { get; set; }
+            public string? notes { get; set; }
         }
 
-        // ─────────────────────────────────────────
+        public class SaveNursePrescriptionRequest
+        {
+            public Guid ip_id { get; set; }
+            public decimal custid { get; set; }
+            public int usercode { get; set; }
+            public DateOnly? entry_date { get; set; }
+            public TimeOnly? entry_time { get; set; }
+            public string shift { get; set; } = "MORNING";
+            public string? pr_code { get; set; }
+            public string? topremarks { get; set; }
+            public string? bottonremarks { get; set; }
+            public List<CaseSheetPrescriptionItem> items { get; set; } = new();
+        }
         // 6. OTHER
         // ─────────────────────────────────────────
         [Table("ip_nurse_note_other")]

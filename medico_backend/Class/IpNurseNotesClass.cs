@@ -49,7 +49,31 @@ namespace medico_backend.Class
                     db.Execute(@"
                         ALTER TABLE ip_nurse_note_medicine
                             ADD COLUMN IF NOT EXISTS sent_to_pharmacy    boolean DEFAULT false,
-                            ADD COLUMN IF NOT EXISTS sent_to_pharmacy_at timestamp with time zone;");
+                            ADD COLUMN IF NOT EXISTS sent_to_pharmacy_at timestamp with time zone,
+                            ADD COLUMN IF NOT EXISTS morning            varchar(50) DEFAULT '0',
+                            ADD COLUMN IF NOT EXISTS afternoon          varchar(50) DEFAULT '0',
+                            ADD COLUMN IF NOT EXISTS evening            varchar(50) DEFAULT '0',
+                            ADD COLUMN IF NOT EXISTS night              varchar(50) DEFAULT '0',
+                            ADD COLUMN IF NOT EXISTS morning_dose       varchar(50),
+                            ADD COLUMN IF NOT EXISTS afternoon_dose     varchar(50),
+                            ADD COLUMN IF NOT EXISTS evening_dose       varchar(50),
+                            ADD COLUMN IF NOT EXISTS night_dose         varchar(50),
+                            ADD COLUMN IF NOT EXISTS dose_unit          varchar(50),
+                            ADD COLUMN IF NOT EXISTS before_food        boolean DEFAULT false,
+                            ADD COLUMN IF NOT EXISTS after_food         boolean DEFAULT false,
+                            ADD COLUMN IF NOT EXISTS days               integer,
+                            ADD COLUMN IF NOT EXISTS drug_code          numeric,
+                            ADD COLUMN IF NOT EXISTS generic_name       varchar(255),
+                            ADD COLUMN IF NOT EXISTS drug_category      varchar(100),
+                            ADD COLUMN IF NOT EXISTS rate               numeric(12,2),
+                            ADD COLUMN IF NOT EXISTS mrp                numeric(12,2),
+                            ADD COLUMN IF NOT EXISTS batch_no           varchar(100),
+                            ADD COLUMN IF NOT EXISTS batch_expiry_date  date,
+                            ADD COLUMN IF NOT EXISTS stockcode          bigint,
+                            ADD COLUMN IF NOT EXISTS warehousecode      bigint,
+                            ADD COLUMN IF NOT EXISTS notes              text,
+                            ADD COLUMN IF NOT EXISTS pr_code            varchar(100),
+                            ADD COLUMN IF NOT EXISTS sno                integer;");
                     _nurseMedicineColumnsRan = true;
                 }
                 catch { }
@@ -514,32 +538,66 @@ namespace medico_backend.Class
                     req.custid = cid.Value;
             }
 
+            decimal effectiveQty = req.quantity > 0 ? req.quantity : (req.qty.HasValue && req.qty.Value > 0 ? req.qty.Value : 1);
+
             var data = new NurseMedicineModel
             {
                 ip_id = req.ip_id,
                 custid = req.custid,
-                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),   // NEW
-                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),   // NEW
-                shift = req.shift,
+                entry_date = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow),
+                entry_time = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow),
+                shift = string.IsNullOrWhiteSpace(req.shift) ? "MORNING" : req.shift.ToUpper(),
                 medicine_name = req.medicine_name,
                 dose = req.dose,
-                unit = req.unit,
+                unit = req.unit ?? req.dose_unit,
                 route = req.route,
-                quantity = req.quantity > 0 ? req.quantity : 1,
+                quantity = effectiveQty,
                 status = string.IsNullOrWhiteSpace(req.status) ? "GIVEN" : req.status.ToUpper(),
-                remarks = req.remarks,
+                remarks = req.remarks ?? req.notes,
                 usercode = usercode,
                 tenant_code = tenant_code,
-                sent_to_pharmacy = false
+                sent_to_pharmacy = false,
+
+                // CaseSheet-style prescription fields
+                sno = req.sno,
+                pr_code = req.pr_code,
+                drug_code = req.drug_code,
+                generic_name = req.generic_name,
+                drug_category = req.drug_category,
+                morning = string.IsNullOrWhiteSpace(req.morning) ? "0" : req.morning.Trim(),
+                afternoon = string.IsNullOrWhiteSpace(req.afternoon) ? "0" : req.afternoon.Trim(),
+                evening = string.IsNullOrWhiteSpace(req.evening) ? "0" : req.evening.Trim(),
+                night = string.IsNullOrWhiteSpace(req.night) ? "0" : req.night.Trim(),
+                morning_dose = req.morning_dose,
+                afternoon_dose = req.afternoon_dose,
+                evening_dose = req.evening_dose,
+                night_dose = req.night_dose,
+                dose_unit = req.dose_unit ?? req.unit,
+                before_food = req.before_food,
+                after_food = req.after_food,
+                days = req.days,
+                rate = req.rate,
+                mrp = req.mrp,
+                batch_no = string.IsNullOrWhiteSpace(req.batch_no) ? null : req.batch_no.Trim(),
+                batch_expiry_date = req.batch_expiry_date,
+                stockcode = req.stockcode,
+                warehousecode = req.warehousecode,
+                notes = req.notes ?? req.remarks
             };
 
             await db.ExecuteAsync(@"
                 INSERT INTO ip_nurse_note_medicine
                 (med_id, ip_id, custid, entry_date, entry_time, shift, medicine_name, dose, unit,
-                 route, quantity, status, remarks, usercode, tenant_code, isdeleted, sent_to_pharmacy, created_at, updated_at)
+                 route, quantity, status, remarks, usercode, tenant_code, isdeleted, sent_to_pharmacy, created_at, updated_at,
+                 morning, afternoon, evening, night, morning_dose, afternoon_dose, evening_dose, night_dose,
+                 dose_unit, before_food, after_food, days, drug_code, generic_name, drug_category,
+                 rate, mrp, batch_no, batch_expiry_date, stockcode, warehousecode, notes, pr_code, sno)
                 VALUES
                 (@med_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @medicine_name, @dose, @unit,
-                 @route, @quantity, @status, @remarks, @usercode, @tenant_code, @isdeleted, @sent_to_pharmacy, @created_at, @updated_at)",
+                 @route, @quantity, @status, @remarks, @usercode, @tenant_code, @isdeleted, @sent_to_pharmacy, @created_at, @updated_at,
+                 @morning, @afternoon, @evening, @night, @morning_dose, @afternoon_dose, @evening_dose, @night_dose,
+                 @dose_unit, @before_food, @after_food, @days, @drug_code, @generic_name, @drug_category,
+                 @rate, @mrp, @batch_no, @batch_expiry_date, @stockcode, @warehousecode, @notes, @pr_code, @sno)",
                 new
                 {
                     data.med_id,
@@ -560,25 +618,217 @@ namespace medico_backend.Class
                     data.isdeleted,
                     data.sent_to_pharmacy,
                     data.created_at,
-                    data.updated_at
+                    data.updated_at,
+                    data.morning,
+                    data.afternoon,
+                    data.evening,
+                    data.night,
+                    data.morning_dose,
+                    data.afternoon_dose,
+                    data.evening_dose,
+                    data.night_dose,
+                    data.dose_unit,
+                    data.before_food,
+                    data.after_food,
+                    data.days,
+                    data.drug_code,
+                    data.generic_name,
+                    data.drug_category,
+                    data.rate,
+                    data.mrp,
+                    data.batch_no,
+                    data.batch_expiry_date,
+                    data.stockcode,
+                    data.warehousecode,
+                    data.notes,
+                    data.pr_code,
+                    data.sno
                 });
 
-            // Immediately send unsent medicines to the pharmacy queue
-            string pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
+            // If notes for this admission are already authorized, immediately push to pharmacy queue
+            bool isAuthorized = await db.ExecuteScalarAsync<bool>(@"
+                SELECT COALESCE(is_authorized, false)
+                FROM ip_nurse_note_authorization
+                WHERE ip_id = @ip_id AND tenant_code = @tenant_code
+                LIMIT 1",
+                new { req.ip_id, tenant_code });
+
+            string pharmacyTag = "";
+            if (isAuthorized)
+            {
+                pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
+            }
 
             return $"Success|Id:{data.med_id}" + pharmacyTag;
         }
 
+        // Save multiple prescription items at once in CaseSheet format
+        public async Task<string> SaveNursePrescription(SaveNursePrescriptionRequest req, int usercode, string tenant_code)
+        {
+            using IDbConnection db = new NpgsqlConnection(_db_conn);
+            if (!await IpExists(db, req.ip_id, tenant_code)) return "IP Registration not found";
+            if (req.items == null || !req.items.Any()) return "At least one prescription medicine item is required";
+
+            EnsureNurseMedicineColumns();
+
+            if (req.custid <= 0)
+            {
+                var cid = await db.QueryFirstOrDefaultAsync<decimal?>(
+                    "SELECT custid FROM ip_registration WHERE ip_id = @ip_id AND tenant_code = @tenant_code LIMIT 1",
+                    new { req.ip_id, tenant_code });
+                if (cid.HasValue && cid.Value > 0)
+                    req.custid = cid.Value;
+            }
+
+            string prCode = string.IsNullOrWhiteSpace(req.pr_code)
+                ? $"IPMED/{DateTime.UtcNow:yyyyMMddHHmmss}/{req.ip_id.ToString()[..8]}"
+                : req.pr_code.Trim();
+
+            var entryDate = req.entry_date ?? DateOnly.FromDateTime(DateTime.UtcNow);
+            var entryTime = req.entry_time ?? TimeOnly.FromDateTime(DateTime.UtcNow);
+
+            db.Open();
+            using var tx = db.BeginTransaction();
+            try
+            {
+                int itemIndex = 1;
+                var insertedIds = new List<Guid>();
+
+                foreach (var item in req.items)
+                {
+                    if (string.IsNullOrWhiteSpace(item.drug_name)) continue;
+
+                    Guid medId = Guid.NewGuid();
+                    insertedIds.Add(medId);
+
+                    decimal qty = item.qty.HasValue && item.qty.Value > 0 ? item.qty.Value : 1;
+
+                    await db.ExecuteAsync(@"
+                        INSERT INTO ip_nurse_note_medicine
+                        (med_id, ip_id, custid, entry_date, entry_time, shift, medicine_name, dose, unit,
+                         route, quantity, status, remarks, usercode, tenant_code, isdeleted, sent_to_pharmacy, created_at, updated_at,
+                         morning, afternoon, evening, night, morning_dose, afternoon_dose, evening_dose, night_dose,
+                         dose_unit, before_food, after_food, days, drug_code, generic_name, drug_category,
+                         rate, mrp, batch_no, batch_expiry_date, stockcode, warehousecode, notes, pr_code, sno)
+                        VALUES
+                        (@med_id, @ip_id, @custid, @entry_date, @entry_time, @shift, @medicine_name, @dose, @unit,
+                         @route, @quantity, @status, @remarks, @usercode, @tenant_code, false, false, now(), now(),
+                         @morning, @afternoon, @evening, @night, @morning_dose, @afternoon_dose, @evening_dose, @night_dose,
+                         @dose_unit, @before_food, @after_food, @days, @drug_code, @generic_name, @drug_category,
+                         @rate, @mrp, @batch_no, @batch_expiry_date, @stockcode, @warehousecode, @notes, @pr_code, @sno)",
+                        new
+                        {
+                            med_id = medId,
+                            req.ip_id,
+                            req.custid,
+                            entry_date = entryDate.ToDateTime(TimeOnly.MinValue),
+                            entry_time = entryTime.ToTimeSpan(),
+                            shift = string.IsNullOrWhiteSpace(req.shift) ? "MORNING" : req.shift.ToUpper(),
+                            medicine_name = item.drug_name.Trim(),
+                            dose = (decimal?)null,
+                            unit = item.dose_unit,
+                            route = item.route,
+                            quantity = qty,
+                            status = "GIVEN",
+                            remarks = item.notes ?? req.topremarks,
+                            usercode,
+                            tenant_code,
+                            morning = string.IsNullOrWhiteSpace(item.morning) ? "0" : item.morning.Trim(),
+                            afternoon = string.IsNullOrWhiteSpace(item.afternoon) ? "0" : item.afternoon.Trim(),
+                            evening = string.IsNullOrWhiteSpace(item.evening) ? "0" : item.evening.Trim(),
+                            night = string.IsNullOrWhiteSpace(item.night) ? "0" : item.night.Trim(),
+                            item.morning_dose,
+                            item.afternoon_dose,
+                            item.evening_dose,
+                            item.night_dose,
+                            item.dose_unit,
+                            item.before_food,
+                            item.after_food,
+                            item.days,
+                            item.drug_code,
+                            item.generic_name,
+                            item.drug_category,
+                            item.rate,
+                            item.mrp,
+                            batch_no = string.IsNullOrWhiteSpace(item.batch_no) ? null : item.batch_no.Trim(),
+                            item.batch_expiry_date,
+                            item.stockcode,
+                            item.warehousecode,
+                            notes = item.notes ?? req.bottonremarks,
+                            pr_code = prCode,
+                            sno = item.sno > 0 ? item.sno : itemIndex++
+                        }, tx);
+                }
+
+                tx.Commit();
+
+                // If nurse notes for this admission are already authorized, immediately send to pharmacy
+                bool isAuthorized = await db.ExecuteScalarAsync<bool>(@"
+                    SELECT COALESCE(is_authorized, false)
+                    FROM ip_nurse_note_authorization
+                    WHERE ip_id = @ip_id AND tenant_code = @tenant_code
+                    LIMIT 1",
+                    new { req.ip_id, tenant_code });
+
+                string pharmacyTag = "";
+                if (isAuthorized)
+                {
+                    pharmacyTag = await SendMedicinesToPharmacy(db, req.ip_id, tenant_code);
+                }
+
+                return $"Success|Inserted:{insertedIds.Count}|PrCode:{prCode}" + pharmacyTag;
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return $"Error: {ex.Message}";
+            }
+        }
 
         public async Task<string> UpdateMedicine(UpdateMedicineRequest req, string tenant_code)
         {
             using IDbConnection db = new NpgsqlConnection(_db_conn);
+            EnsureNurseMedicineColumns();
+
+            decimal qty = req.quantity > 0 ? req.quantity : (req.qty.HasValue && req.qty.Value > 0 ? req.qty.Value : 1);
+
             int rows = await db.ExecuteAsync(@"
                 UPDATE ip_nurse_note_medicine
                 SET entry_date = COALESCE(@entry_date::date, entry_date),
                     entry_time = COALESCE(@entry_time::time, entry_time),
-                    shift = @shift, medicine_name = @medicine_name, dose = @dose, unit = @unit,
-                    route = @route,quantity = @quantity, status = @status, remarks = @remarks, updated_at = now()
+                    shift = COALESCE(@shift, shift),
+                    medicine_name = COALESCE(@medicine_name, medicine_name),
+                    dose = @dose,
+                    unit = COALESCE(@unit, unit),
+                    route = COALESCE(@route, route),
+                    quantity = @quantity,
+                    status = @status,
+                    remarks = COALESCE(@remarks, remarks),
+                    morning = COALESCE(@morning, morning),
+                    afternoon = COALESCE(@afternoon, afternoon),
+                    evening = COALESCE(@evening, evening),
+                    night = COALESCE(@night, night),
+                    morning_dose = COALESCE(@morning_dose, morning_dose),
+                    afternoon_dose = COALESCE(@afternoon_dose, afternoon_dose),
+                    evening_dose = COALESCE(@evening_dose, evening_dose),
+                    night_dose = COALESCE(@night_dose, night_dose),
+                    dose_unit = COALESCE(@dose_unit, dose_unit),
+                    before_food = COALESCE(@before_food, before_food),
+                    after_food = COALESCE(@after_food, after_food),
+                    days = COALESCE(@days, days),
+                    drug_code = COALESCE(@drug_code, drug_code),
+                    generic_name = COALESCE(@generic_name, generic_name),
+                    drug_category = COALESCE(@drug_category, drug_category),
+                    rate = COALESCE(@rate, rate),
+                    mrp = COALESCE(@mrp, mrp),
+                    batch_no = COALESCE(@batch_no, batch_no),
+                    batch_expiry_date = COALESCE(@batch_expiry_date, batch_expiry_date),
+                    stockcode = COALESCE(@stockcode, stockcode),
+                    warehousecode = COALESCE(@warehousecode, warehousecode),
+                    notes = COALESCE(@notes, notes),
+                    pr_code = COALESCE(@pr_code, pr_code),
+                    sno = COALESCE(@sno, sno),
+                    updated_at = now()
                 WHERE med_id = @med_id AND tenant_code = @tenant_code AND isdeleted = false",
                 new
                 {
@@ -588,11 +838,35 @@ namespace medico_backend.Class
                     req.shift,
                     req.medicine_name,
                     req.dose,
-                    req.unit,
+                    unit = req.unit ?? req.dose_unit,
                     req.route,
-                    req.quantity,
+                    quantity = qty,
                     status = string.IsNullOrWhiteSpace(req.status) ? "GIVEN" : req.status.ToUpper(),
-                    req.remarks,
+                    remarks = req.remarks ?? req.notes,
+                    req.morning,
+                    req.afternoon,
+                    req.evening,
+                    req.night,
+                    req.morning_dose,
+                    req.afternoon_dose,
+                    req.evening_dose,
+                    req.night_dose,
+                    dose_unit = req.dose_unit ?? req.unit,
+                    req.before_food,
+                    req.after_food,
+                    req.days,
+                    req.drug_code,
+                    req.generic_name,
+                    req.drug_category,
+                    req.rate,
+                    req.mrp,
+                    batch_no = string.IsNullOrWhiteSpace(req.batch_no) ? null : req.batch_no.Trim(),
+                    req.batch_expiry_date,
+                    req.stockcode,
+                    req.warehousecode,
+                    notes = req.notes ?? req.remarks,
+                    req.pr_code,
+                    req.sno,
                     tenant_code
                 });
 
@@ -1065,8 +1339,7 @@ namespace medico_backend.Class
             using var tx = db.BeginTransaction();
             try
             {
-                // Atomically claim only the not-yet-sent rows. A concurrent call blocks on the
-                // row lock, then re-checks the condition and finds nothing left to claim.
+                // Atomically claim all not-yet-sent rows for this admission
                 var meds = (await db.QueryAsync<NurseMedicineModel>(@"
                     UPDATE ip_nurse_note_medicine
                     SET sent_to_pharmacy = true,
@@ -1095,22 +1368,37 @@ namespace medico_backend.Class
                         resolvedCustId = cid.Value;
                 }
 
+                // If rows share a pr_code, use it; otherwise generate a clean unique pr_code
+                string batchPrCode = meds.FirstOrDefault(m => !string.IsNullOrWhiteSpace(m.pr_code))?.pr_code
+                    ?? $"IPMED/{DateTime.UtcNow:yyyyMMddHHmmss}/{ip_id.ToString()[..8]}";
+
                 var pharmacyReq = new ReceivePrescriptionRequest
                 {
                     custid = resolvedCustId,
                     op_id = null,
                     ip_id = ip_id.ToString(),
                     sheet_id = null,
-                    // timestamp suffix so a second batch the same day doesn't collide on pr_code
-                    pr_code = $"IPMED/{DateTime.UtcNow:yyyyMMddHHmmss}/{ip_id.ToString()[..8]}",
+                    pr_code = batchPrCode,
                     items = meds.Select(m => new PrescriptionQueueItem
                     {
                         pr_det_id = m.med_id.ToString(),
                         drug_name = m.medicine_name,
                         qty = m.quantity > 0 ? m.quantity : 1,
+                        morning = m.morning,
+                        afternoon = m.afternoon,
+                        evening = m.evening,
+                        night = m.night,
+                        morning_dose = m.morning_dose,
+                        afternoon_dose = m.afternoon_dose,
+                        evening_dose = m.evening_dose,
+                        night_dose = m.night_dose,
+                        dose_unit = m.dose_unit ?? m.unit,
+                        before_food = m.before_food,
+                        after_food = m.after_food,
+                        days = m.days,
                         route = m.route,
                         notes = string.IsNullOrWhiteSpace(m.remarks)
-                                    ? (m.dose.HasValue ? $"Dose: {m.dose} {m.unit}" : null)
+                                    ? (m.dose.HasValue ? $"Dose: {m.dose} {m.unit}" : m.notes)
                                     : m.remarks
                     }).ToList()
                 };
