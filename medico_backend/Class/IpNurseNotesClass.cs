@@ -1,4 +1,4 @@
-using Dapper;
+﻿using Dapper;
 using medico_backend.Model;
 using Npgsql;
 using System.Data;
@@ -637,7 +637,7 @@ namespace medico_backend.Class
                     data.rate,
                     data.mrp,
                     data.batch_no,
-                    data.batch_expiry_date,
+                    batch_expiry_date = data.batch_expiry_date?.ToDateTime(TimeOnly.MinValue),
                     data.stockcode,
                     data.warehousecode,
                     data.notes,
@@ -861,7 +861,7 @@ namespace medico_backend.Class
                     req.rate,
                     req.mrp,
                     batch_no = string.IsNullOrWhiteSpace(req.batch_no) ? null : req.batch_no.Trim(),
-                    req.batch_expiry_date,
+                    batch_expiry_date = req.batch_expiry_date?.ToDateTime(TimeOnly.MinValue),
                     req.stockcode,
                     req.warehousecode,
                     notes = req.notes ?? req.remarks,

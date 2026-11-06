@@ -1,4 +1,4 @@
-using Dapper.Contrib.Extensions;
+﻿using Dapper.Contrib.Extensions;
 
 namespace medico_backend.Model
 {
@@ -212,7 +212,7 @@ namespace medico_backend.Model
             public decimal? rate { get; set; }
             public decimal? mrp { get; set; }
             public string? batch_no { get; set; }
-            public DateTime? batch_expiry_date { get; set; }
+            public DateOnly? batch_expiry_date { get; set; }
             public long? stockcode { get; set; }
             public long? warehousecode { get; set; }
             public string? notes { get; set; }
@@ -256,7 +256,7 @@ namespace medico_backend.Model
             public decimal? rate { get; set; }
             public decimal? mrp { get; set; }
             public string? batch_no { get; set; }
-            public DateTime? batch_expiry_date { get; set; }
+            public DateOnly? batch_expiry_date { get; set; }
             public long? stockcode { get; set; }
             public long? warehousecode { get; set; }
             public string? notes { get; set; }
@@ -298,7 +298,7 @@ namespace medico_backend.Model
             public decimal? rate { get; set; }
             public decimal? mrp { get; set; }
             public string? batch_no { get; set; }
-            public DateTime? batch_expiry_date { get; set; }
+            public DateOnly? batch_expiry_date { get; set; }
             public long? stockcode { get; set; }
             public long? warehousecode { get; set; }
             public string? notes { get; set; }
