@@ -4097,5 +4097,104 @@ LEFT JOIN doctor_master dm
 
             return (rows, totalCount, summary);
         }
+
+        // ═══════════════════════════════════════════════════════════════════════
+        //  REVERT USED ADVANCE → PAYMODE  (standalone)
+        //  Releases advance used on a bill back to the patient's wallet and
+        //  re-collects the same amount through the chosen paymode.
+        // ═══════════════════════════════════════════════════════════════════════
+        public async Task<(string status, HmsAdvanceRevertResult? data)> RevertUsedAdvance(
+            HmsAdvanceRevertRequest req, string tenantCode)
+        {
+            if (req == null || string.IsNullOrWhiteSpace(req.requestguid))
+                return ("requestguid is required.", null);
+
+            using var db = GetConnection();
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var (err, res) = await HmsAdvanceRevertHelper.RevertUsedAdvanceToPaymode(
+                    db, tx, req.requestguid, tenantCode,
+                    new HmsAdvanceRevertInput
+                    {
+                        amount = req.revert_amount,
+                        pmcode = req.pmcode,
+                        reference_no = req.reference_no,
+                        bank_name = req.bank_name,
+                        card_no = req.card_no,
+                        cheque_date = req.cheque_date,
+                        enteredbhcode = req.enteredbhcode,
+                        cntcode = req.cntcode,
+                        usercode = req.usercode,
+                        computercode = req.computercode,
+                        reason = req.reason,
+                        remarks = req.remarks
+                    },
+                    updatePmcOnBill: true);   // standalone: keep bill pmc1/2/3 in sync like AddPayment
+
+                if (err != null)
+                {
+                    tx.Rollback();
+                    return (err, null);
+                }
+
+                tx.Commit();
+
+                _logger.LogInformation(
+                    "Advance revert: bill={rg} amount={a} paymode={pm} user={u} reason={r}",
+                    req.requestguid, res!.reverted_amount, res.paymode, req.usercode, req.reason);
+
+                return ("SUCCESS", res);
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                _logger.LogError(ex, "RevertUsedAdvance failed for requestguid={rg}", req.requestguid);
+                return ($"Transaction error: {ex.Message}", null);
+            }
+        }
+
+        // Read-only: how much advance is currently used on a bill (for the UI prompt)
+        public async Task<(string status, object? data)> GetBillAdvanceUsage(string requestguid, string tenantCode)
+        {
+            using var db = GetConnection();
+
+            var bill = await db.QueryFirstOrDefaultAsync<dynamic>(
+                @"SELECT requestsnoprint, custid, name, totalamount, paidamount
+                    FROM lab_request_master
+                   WHERE requestguid = @rg AND tenant_code = @t
+                     AND COALESCE(isdeleted, false) = false
+                   LIMIT 1",
+                new { rg = requestguid, t = tenantCode });
+
+            if (bill == null) return ("Bill not found.", null);
+
+            double used = await db.ExecuteScalarAsync<double>(
+                @"SELECT COALESCE(SUM(receiptamount), 0)::float8
+                    FROM receipt_advances
+                   WHERE requestguid = @rg AND tenant_code = @t
+                     AND COALESCE(deleted, false) = false",
+                new { rg = requestguid, t = tenantCode });
+
+            double balance = await GetPatientAdvanceBalance(db, (decimal?)bill.custid, tenantCode);
+
+            double total = bill.totalamount ?? 0;
+            double paid = bill.paidamount ?? 0;
+
+            return ("SUCCESS", new
+            {
+                requestguid,
+                bill_no = (string?)bill.requestsnoprint,
+                patient_name = (string?)bill.name,
+                custid = (decimal?)bill.custid,
+                total_bill_amount = total,
+                paid_amount = paid,
+                total_advance_used = Math.Round(used, 2),
+                current_advance_balance = balance,
+                can_revert = used > 0.01
+            });
+        }
     }
 }

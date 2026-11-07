@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -1637,6 +1637,9 @@ namespace medico_backend.Class
                     return ("Item amount cannot be negative.", null);
             }
 
+            bool wantsAdvanceRevert = req.revert_all_advance == true || (req.revert_advance_amount ?? 0) > 0.01;
+            HmsAdvanceRevertResult? revertResult = null;
+
             using var db = GetConnection();
             db.Open();
             using var tx = db.BeginTransaction();
@@ -1740,6 +1743,36 @@ namespace medico_backend.Class
                     }, tx);
                 }
 
+                // ── OPTIONAL: revert wrongly-used advance into a paymode ──────
+                // Same transaction: bill edit + advance revert commit or fail together.
+                // pmc1/2/3 on the bill are NOT touched here (the request controls them,
+                // exactly as in a normal bill edit) — only paidviareceipt is bumped.
+                if (wantsAdvanceRevert)
+                {
+                    var (revErr, revRes) = await HmsAdvanceRevertHelper.RevertUsedAdvanceToPaymode(
+                        db, tx, req.requestguid, tenantCode,
+                        new HmsAdvanceRevertInput
+                        {
+                            amount = req.revert_all_advance == true ? null : req.revert_advance_amount,
+                            pmcode = req.revert_pmcode ?? 0,
+                            reference_no = req.revert_reference_no,
+                            bank_name = req.revert_bank_name,
+                            card_no = req.revert_card_no,
+                            cheque_date = req.revert_cheque_date,
+                            enteredbhcode = req.enteredbhcode,
+                            cntcode = req.cntcode,
+                            usercode = req.usercode,
+                            computercode = req.computercode,
+                            reason = req.revert_reason
+                        },
+                        updatePmcOnBill: false);
+
+                    if (revErr != null)
+                        return (revErr, null);   // tx disposed un-committed => full rollback
+
+                    revertResult = revRes;
+                }
+
                 tx.Commit();
             }
             catch (Exception ex)
@@ -1779,7 +1812,13 @@ namespace medico_backend.Class
                     paid_amount = updated?.paid_amount,
                     balance_amount = updated?.balance_amount,
                     is_settled = updated?.is_settled ?? false,
-                    message = "Bill updated successfully.",
+                    message = revertResult != null
+                        ? $"Bill updated. Advance {revertResult.reverted_amount:F2} reverted to wallet and collected via {revertResult.paymode}."
+                        : "Bill updated successfully.",
+                    advance_reverted_amount = revertResult?.reverted_amount,
+                    revert_receipt_guid = revertResult?.receipt_guid,
+                    revert_receipt_no = revertResult?.receipt_no,
+                    advance_balance_after = revertResult?.advance_balance_after,
                     items = updated?.items ?? new()
                 });
             }
@@ -1789,6 +1828,8 @@ namespace medico_backend.Class
                 return ("SUCCESS_FETCH_FAILED", new UpdateHmsBillResponse
                 {
                     requestguid = req.requestguid,
+                    advance_reverted_amount = revertResult?.reverted_amount,
+                    revert_receipt_no = revertResult?.receipt_no,
                     message = "Bill updated successfully, but the response could not be reloaded. Please refresh."
                 });
             }
