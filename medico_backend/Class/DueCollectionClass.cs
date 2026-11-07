@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -829,7 +829,7 @@ namespace medico_backend.Class
                             {
                                 if (remaining <= 0.01) break;
 
-                                double avail = Math.Round((double)dep.receiptamount - (double)dep.used_amount, 2);
+                                double avail = Math.Round(Convert.ToDouble(dep.receiptamount) - Convert.ToDouble(dep.used_amount), 2);
                                 if (avail <= 0.01) continue;
 
                                 double debit = Math.Round(Math.Min(avail, remaining), 2);
@@ -1004,9 +1004,20 @@ namespace medico_backend.Class
             {
                 var shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
                     @"SELECT * FROM counter_timing
-                       WHERE bhcode = @bh AND cntcode = @cnt
-                         AND todate IS NULL AND tenant_code = @t LIMIT 1",
+                       WHERE (@bh::int IS NULL OR @bh = 0 OR bhcode = @bh)
+                         AND (@cnt::int IS NULL OR @cnt = 0 OR cntcode = @cnt)
+                         AND todate IS NULL AND tenant_code = @t
+                       ORDER BY cnttid DESC LIMIT 1",
                     new { bh = req.enteredbhcode, cnt = req.cntcode, t = tenantCode }, tx);
+
+                if (shift == null)
+                {
+                    shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                        @"SELECT * FROM counter_timing
+                           WHERE todate IS NULL AND tenant_code = @t
+                           ORDER BY cnttid DESC LIMIT 1",
+                        new { t = tenantCode }, tx);
+                }
 
                 if (shift == null)
                     return ("No open counter shift found. Please open a shift first.", null);
@@ -1158,11 +1169,23 @@ namespace medico_backend.Class
                     return ($"Refund amount ({req.refund_amount:F2}) exceeds " +
                             $"available advance balance ({available:F2}).", null);
 
+                int? cntCode = req.cntcode ?? req.cash_counter_code;
                 var shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
                     @"SELECT * FROM counter_timing
-                       WHERE bhcode = @bh AND cntcode = @cnt
-                         AND todate IS NULL AND tenant_code = @t LIMIT 1",
-                    new { bh = req.enteredbhcode, cnt = req.cntcode, t = tenantCode }, tx);
+                       WHERE (@bh::int IS NULL OR @bh = 0 OR bhcode = @bh)
+                         AND (@cnt::int IS NULL OR @cnt = 0 OR cntcode = @cnt)
+                         AND todate IS NULL AND tenant_code = @t
+                       ORDER BY cnttid DESC LIMIT 1",
+                    new { bh = req.enteredbhcode, cnt = cntCode, t = tenantCode }, tx);
+
+                if (shift == null)
+                {
+                    shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                        @"SELECT * FROM counter_timing
+                           WHERE todate IS NULL AND tenant_code = @t
+                           ORDER BY cnttid DESC LIMIT 1",
+                        new { t = tenantCode }, tx);
+                }
 
                 if (shift == null)
                     return ("No open counter shift found.", null);
@@ -1188,7 +1211,7 @@ namespace medico_backend.Class
                     receiptsnoprint = seqInfo.snoprint,
                     receiptbarcode = seqInfo.barcode,
                     receiptcovertedbarcode = seqInfo.barcode,
-                    cntcode = req.cntcode,
+                    cntcode = cntCode,
                     cnttid = shift.cnttid,
                     amountpaid = req.refund_amount,
                     amountadjusted = req.refund_amount,
@@ -1199,6 +1222,7 @@ namespace medico_backend.Class
                     ispatient = true,
                     isrefund = true,
                     receipttype = "ADVANCE_REFUND",
+                    paymentreference = req.remarks ?? req.reason ?? "Advance refund",
                     custid = (int)req.custid,
                     opvisitid = req.opvisitid,
                     enteredbhcode = req.enteredbhcode,
@@ -1240,7 +1264,7 @@ namespace medico_backend.Class
                 {
                     if (remaining <= 0.01) break;
 
-                    double avail = Math.Round((double)dep.receiptamount - (double)dep.used_amount, 2);
+                    double avail = Math.Round(Convert.ToDouble(dep.receiptamount) - Convert.ToDouble(dep.used_amount), 2);
                     if (avail <= 0.01) continue;
 
                     double deduct = Math.Round(Math.Min(avail, remaining), 2);
@@ -2023,7 +2047,7 @@ LEFT JOIN LATERAL (
                 new { c = (int?)custid, t = tenantCode }, tx);
 
             if (result == null) return 0;
-            double balance = (double)result.deposited - (double)result.used;
+            double balance = Convert.ToDouble(result.deposited) - Convert.ToDouble(result.used);
             return Math.Round(Math.Max(balance, 0), 2);
         }
 
@@ -3000,6 +3024,7 @@ LEFT JOIN doctor_master dm
                         CREATE TABLE IF NOT EXISTS hms_advance_request (
                             request_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                             request_no VARCHAR(50),
+                            request_type VARCHAR(50) DEFAULT 'ADVANCE',
                             request_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                             custid NUMERIC(18,2) NOT NULL,
                             patient_name VARCHAR(200),
@@ -3010,6 +3035,7 @@ LEFT JOIN doctor_master dm
                             purpose VARCHAR(250),
                             remarks TEXT,
                             status VARCHAR(50) DEFAULT 'PENDING',
+                            payment_mode VARCHAR(50),
                             requested_by INT,
                             requested_by_name VARCHAR(150),
                             target_cntcode INT,
@@ -3026,8 +3052,11 @@ LEFT JOIN doctor_master dm
                             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
                             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
                         );
+                        ALTER TABLE hms_advance_request ADD COLUMN IF NOT EXISTS request_type VARCHAR(50) DEFAULT 'ADVANCE';
+                        ALTER TABLE hms_advance_request ADD COLUMN IF NOT EXISTS payment_mode VARCHAR(50);
                         CREATE INDEX IF NOT EXISTS idx_adv_req_tenant_status ON hms_advance_request (tenant_code, status);
                         CREATE INDEX IF NOT EXISTS idx_adv_req_custid ON hms_advance_request (custid, tenant_code);
+                        CREATE INDEX IF NOT EXISTS idx_adv_req_tenant_type_status ON hms_advance_request (tenant_code, request_type, status);
                     ");
                     _advanceRequestTableRan = true;
                 }
@@ -3058,7 +3087,7 @@ LEFT JOIN doctor_master dm
                 {
                     var pat = await db.QueryFirstOrDefaultAsync<dynamic>(
                         @"SELECT COALESCE(NULLIF(TRIM(CONCAT(initial, ' ', name)), ''), name) AS pname,
-                                 COALESCE(mobileno, phoneno, '') AS mob
+                                 COALESCE(mobile, phone, '') AS mob
                           FROM customerdb.customer_master
                           WHERE custid = @c LIMIT 1",
                         new { c = req.custid }, tx);
@@ -3097,7 +3126,8 @@ LEFT JOIN doctor_master dm
                 string todayStr = DateTime.UtcNow.ToString("yyyyMMdd");
                 int countToday = await db.ExecuteScalarAsync<int>(
                     @"SELECT COUNT(1) FROM hms_advance_request
-                      WHERE tenant_code = @t AND request_date >= @dStart AND request_date < @dEnd",
+                      WHERE tenant_code = @t AND request_type = 'ADVANCE'
+                        AND request_date >= @dStart AND request_date < @dEnd",
                     new { t = tenantCode, dStart = DateTime.UtcNow.Date, dEnd = DateTime.UtcNow.Date.AddDays(1) }, tx);
 
                 string requestNo = $"ADVR-{todayStr}-{(countToday + 1):D4}";
@@ -3106,6 +3136,7 @@ LEFT JOIN doctor_master dm
                 {
                     request_id = Guid.NewGuid(),
                     request_no = requestNo,
+                    request_type = "ADVANCE",
                     request_date = DateTime.UtcNow,
                     custid = req.custid,
                     patient_name = patientName,
@@ -3127,12 +3158,12 @@ LEFT JOIN doctor_master dm
 
                 await db.ExecuteAsync(
                     @"INSERT INTO hms_advance_request
-                        (request_id, request_no, request_date, custid, patient_name, mobile_no,
+                        (request_id, request_no, request_type, request_date, custid, patient_name, mobile_no,
                          opvisitid, ip_id, amount, purpose, remarks, status,
                          requested_by, requested_by_name, target_cntcode, target_bhcode,
                          tenant_code, created_at, updated_at)
                       VALUES
-                        (@request_id, @request_no, @request_date, @custid, @patient_name, @mobile_no,
+                        (@request_id, @request_no, @request_type, @request_date, @custid, @patient_name, @mobile_no,
                          @opvisitid, @ip_id, @amount, @purpose, @remarks, @status,
                          @requested_by, @requested_by_name, @target_cntcode, @target_bhcode,
                          @tenant_code, @created_at, @updated_at)",
@@ -3160,6 +3191,13 @@ LEFT JOIN doctor_master dm
             p.Add("t", tenantCode);
 
             string where = " WHERE tenant_code = @t ";
+
+            string rtype = string.IsNullOrWhiteSpace(filter.request_type) ? "ADVANCE" : filter.request_type.Trim().ToUpper();
+            if (rtype != "ALL")
+            {
+                where += " AND request_type = @rtype ";
+                p.Add("rtype", rtype);
+            }
 
             if (!string.IsNullOrWhiteSpace(filter.status))
             {
@@ -3209,7 +3247,9 @@ LEFT JOIN doctor_master dm
                      COALESCE(COUNT(CASE WHEN status = 'COLLECTED' THEN 1 END), 0) AS collected_count,
                      COALESCE(SUM(CASE WHEN status = 'COLLECTED' THEN amount ELSE 0 END), 0) AS collected_amount,
                      COALESCE(COUNT(CASE WHEN status = 'CANCELLED' THEN 1 END), 0) AS cancelled_count,
-                     COALESCE(SUM(CASE WHEN status = 'CANCELLED' THEN amount ELSE 0 END), 0) AS cancelled_amount
+                     COALESCE(SUM(CASE WHEN status = 'CANCELLED' THEN amount ELSE 0 END), 0) AS cancelled_amount,
+                     COALESCE(COUNT(CASE WHEN status = 'REFUNDED' THEN 1 END), 0) AS refunded_count,
+                     COALESCE(SUM(CASE WHEN status = 'REFUNDED' THEN amount ELSE 0 END), 0) AS refunded_amount
                    FROM hms_advance_request
                    {where}", p) ?? new HmsAdvanceRequestListSummary();
 
@@ -3249,6 +3289,9 @@ LEFT JOIN doctor_master dm
 
                 if (!string.Equals(advReq.status, "PENDING", StringComparison.OrdinalIgnoreCase))
                     return ($"Cannot collect this request; it is already {advReq.status}.", null);
+
+                if (!string.Equals(advReq.request_type, "ADVANCE", StringComparison.OrdinalIgnoreCase))
+                    return ("This is a refund request. Use the refund-request process endpoint.", null);
 
                 double effectiveAmount = req.amount.HasValue && req.amount.Value > 0
                     ? Math.Round(req.amount.Value, 2)
@@ -3466,7 +3509,336 @@ LEFT JOIN doctor_master dm
             return ("SUCCESS", "Advance request cancelled successfully.");
         }
 
-        // ── 5. List of patients who have deposited advance ────────────────────
+        // â”€â”€ 4a. Create refund request (sent to cash counter) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        public async Task<(string status, HmsAdvanceRequestRow? data)> CreateRefundRequest(
+            HmsCreateRefundRequestDto req, string tenantCode)
+        {
+            if (req.custid <= 0) return ("Patient custid is required.", null);
+            if (req.refund_amount <= 0) return ("Refund amount must be greater than zero.", null);
+
+            using var db = GetConnection();
+            db.Open();
+            EnsureAdvanceRequestTable(db);
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                // Available balance minus refunds already waiting at the counter
+                double balance = await GetPatientAdvanceBalance(db, req.custid, tenantCode, tx);
+                double pendingRefunds = await db.ExecuteScalarAsync<double>(
+                    @"SELECT COALESCE(SUM(amount), 0) FROM hms_advance_request
+                       WHERE tenant_code = @t AND custid = @c
+                         AND request_type = 'REFUND' AND status = 'PENDING'",
+                    new { t = tenantCode, c = req.custid }, tx);
+
+                double refundable = Math.Round(balance - pendingRefunds, 2);
+
+                if (req.refund_amount > refundable + 0.01)
+                    return ($"Refund amount ({req.refund_amount:F2}) exceeds refundable advance " +
+                            $"({refundable:F2} = balance {balance:F2} - pending refund requests {pendingRefunds:F2}).", null);
+
+                // Resolve patient name / mobile
+                string patientName = req.patient_name ?? "";
+                string mobileNo = req.mobile_no ?? "";
+                if (string.IsNullOrWhiteSpace(patientName) || string.IsNullOrWhiteSpace(mobileNo))
+                {
+                    var pat = await db.QueryFirstOrDefaultAsync<dynamic>(
+                        @"SELECT name, mobileno FROM lab_request_master
+                           WHERE custid = @c AND tenant_code = @t
+                           ORDER BY requestdatetime DESC LIMIT 1",
+                        new { c = (int)req.custid, t = tenantCode }, tx);
+                    if (pat != null)
+                    {
+                        if (string.IsNullOrWhiteSpace(patientName)) patientName = pat.name ?? "";
+                        if (string.IsNullOrWhiteSpace(mobileNo)) mobileNo = pat.mobileno ?? "";
+                    }
+                    if (string.IsNullOrWhiteSpace(patientName))
+                    {
+                        var cmPat = await db.QueryFirstOrDefaultAsync<dynamic>(
+                            @"SELECT COALESCE(NULLIF(TRIM(CONCAT(initial, ' ', name)), ''), name) AS pname,
+                                     COALESCE(mobile, phone, '') AS mob
+                              FROM customerdb.customer_master WHERE custid = @c LIMIT 1",
+                            new { c = req.custid }, tx);
+                        if (cmPat != null)
+                        {
+                            if (string.IsNullOrWhiteSpace(patientName)) patientName = cmPat.pname ?? "";
+                            if (string.IsNullOrWhiteSpace(mobileNo)) mobileNo = cmPat.mob ?? "";
+                        }
+                    }
+                }
+
+                string requestedByName = req.user_name ?? "";
+                if (string.IsNullOrWhiteSpace(requestedByName) && req.usercode.HasValue)
+                {
+                    requestedByName = await db.QueryFirstOrDefaultAsync<string>(
+                        "SELECT name FROM mastertenant.user_master WHERE user_code = @uc LIMIT 1",
+                        new { uc = req.usercode.Value }, tx) ?? $"User #{req.usercode}";
+                }
+
+                // REFR-yyyyMMdd-0001
+                int countToday = await db.ExecuteScalarAsync<int>(
+                    @"SELECT COUNT(1) FROM hms_advance_request
+                       WHERE tenant_code = @t AND request_type = 'REFUND'
+                         AND request_date >= @dStart AND request_date < @dEnd",
+                    new { t = tenantCode, dStart = DateTime.UtcNow.Date, dEnd = DateTime.UtcNow.Date.AddDays(1) }, tx);
+
+                var row = new HmsAdvanceRequestRow
+                {
+                    request_id = Guid.NewGuid(),
+                    request_no = $"REFR-{DateTime.UtcNow:yyyyMMdd}-{(countToday + 1):D4}",
+                    request_type = "REFUND",
+                    request_date = DateTime.UtcNow,
+                    custid = req.custid,
+                    patient_name = patientName,
+                    mobile_no = mobileNo,
+                    opvisitid = req.opvisitid,
+                    ip_id = req.ip_id,
+                    amount = Math.Round(req.refund_amount, 2),
+                    purpose = string.IsNullOrWhiteSpace(req.reason) ? "Advance Refund" : req.reason.Trim(),
+                    remarks = req.remarks,
+                    status = "PENDING",
+                    requested_by = req.usercode,
+                    requested_by_name = requestedByName,
+                    target_cntcode = req.target_cntcode,
+                    target_bhcode = req.target_bhcode,
+                    tenant_code = tenantCode,
+                    created_at = DateTime.UtcNow,
+                    updated_at = DateTime.UtcNow
+                };
+
+                await db.ExecuteAsync(
+                    @"INSERT INTO hms_advance_request
+                        (request_id, request_no, request_type, request_date, custid, patient_name, mobile_no,
+                         opvisitid, ip_id, amount, purpose, remarks, status,
+                         requested_by, requested_by_name, target_cntcode, target_bhcode,
+                         tenant_code, created_at, updated_at)
+                      VALUES
+                        (@request_id, @request_no, @request_type, @request_date, @custid, @patient_name, @mobile_no,
+                         @opvisitid, @ip_id, @amount, @purpose, @remarks, @status,
+                         @requested_by, @requested_by_name, @target_cntcode, @target_bhcode,
+                         @tenant_code, @created_at, @updated_at)",
+                    row, tx);
+
+                tx.Commit();
+                return ("SUCCESS", row);
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                _logger.LogError(ex, "CreateRefundRequest failed for custid={c}", req.custid);
+                return ($"Transaction error: {ex.Message}", null);
+            }
+        }
+
+        // â”€â”€ 4b. Process refund request at the counter â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        public async Task<(string status, HmsAdvanceReceiptResponse? data)> ProcessRefundRequest(
+            HmsProcessRefundRequestDto req, string tenantCode)
+        {
+            using var db = GetConnection();
+            db.Open();
+            EnsureAdvanceRequestTable(db);
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var r = await db.QueryFirstOrDefaultAsync<HmsAdvanceRequestRow>(
+                    @"SELECT * FROM hms_advance_request
+                       WHERE request_id = @id AND tenant_code = @t
+                       FOR UPDATE",
+                    new { id = req.request_id, t = tenantCode }, tx);
+
+                if (r == null) return ("Refund request not found.", null);
+                if (!string.Equals(r.request_type, "REFUND", StringComparison.OrdinalIgnoreCase))
+                    return ("This is not a refund request.", null);
+                if (!string.Equals(r.status, "PENDING", StringComparison.OrdinalIgnoreCase))
+                    return ($"Cannot process this request; it is already {r.status}.", null);
+
+                double amount = req.amount.HasValue && req.amount.Value > 0
+                    ? Math.Round(req.amount.Value, 2) : r.amount;
+
+                if (amount > r.amount + 0.01)
+                    return ($"Refund amount ({amount:F2}) cannot exceed the requested amount ({r.amount:F2}).", null);
+
+                // Re-check live balance (advance may have been used since the request)
+                double balance = await GetPatientAdvanceBalance(db, r.custid, tenantCode, tx);
+                if (amount > balance + 0.01)
+                    return ($"Refund amount ({amount:F2}) exceeds current advance balance ({balance:F2}). " +
+                            "Advance was used after this request was raised.", null);
+
+                int bh = req.enteredbhcode ?? r.target_bhcode ?? 0;
+                int cnt = req.cntcode ?? r.target_cntcode ?? 0;
+
+                var shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                    @"SELECT * FROM counter_timing
+                       WHERE (@bh::int IS NULL OR @bh = 0 OR bhcode = @bh)
+                         AND (@cnt::int IS NULL OR @cnt = 0 OR cntcode = @cnt)
+                         AND todate IS NULL AND tenant_code = @t
+                       ORDER BY cnttid DESC LIMIT 1",
+                    new { bh, cnt, t = tenantCode }, tx);
+
+                if (shift == null)
+                {
+                    shift = await db.QueryFirstOrDefaultAsync<HmsCounterTiming>(
+                        @"SELECT * FROM counter_timing
+                           WHERE todate IS NULL AND tenant_code = @t
+                           ORDER BY cnttid DESC LIMIT 1",
+                        new { t = tenantCode }, tx);
+                }
+
+                if (shift == null)
+                    return ("No open counter shift found. Please open a counter shift first.", null);
+
+                var receiptCfg = await db.QueryFirstOrDefaultAsync<HmsBillNoMaster>(
+                    @"SELECT * FROM billno_master
+                       WHERE isreceiptno = true AND deleted = false AND tenant_code = @t LIMIT 1",
+                    new { t = tenantCode }, tx);
+                if (receiptCfg == null)
+                    return ("Receipt number sequence configuration not found.", null);
+
+                var seqInfo = await GetNextReceiptSequence(db, tx, receiptCfg, bh, cnt, tenantCode);
+                string receiptGuid = Guid.NewGuid().ToString();
+
+                // 1. ADVANCE_REFUND receipt
+                await db.InsertAsync(new HmsDueReceiptMaster
+                {
+                    receiptguid = receiptGuid,
+                    receiptdate = DateTime.UtcNow,
+                    receiptsno = seqInfo.sno,
+                    receiptsnoprint = seqInfo.snoprint,
+                    receiptbarcode = seqInfo.barcode,
+                    receiptcovertedbarcode = seqInfo.barcode,
+                    cntcode = cnt,
+                    cnttid = shift.cnttid,
+                    amountpaid = amount,
+                    amountadjusted = amount,
+                    amounttotal = amount,
+                    deleted = false,
+                    isdeleted = false,
+                    isbill = false,
+                    ispatient = true,
+                    isrefund = true,
+                    receipttype = "ADVANCE_REFUND",
+                    paymentreference = string.IsNullOrWhiteSpace(req.reference_no)
+                        ? $"Req:{r.request_no}" : req.reference_no,
+                    custid = (int)r.custid,
+                    opvisitid = r.opvisitid,
+                    enteredbhcode = bh,
+                    usercode = req.usercode,
+                    computercode = req.computercode,
+                    entereddate = DateTime.UtcNow,
+                    ibsdate = DateTime.UtcNow,
+                    tenant_code = tenantCode
+                }, tx);
+
+                // 2. Debit the advance ledger (FIFO) â€” same convention as RefundAdvance:
+                //    refund row => requestguid = refund receipt guid
+                var deposits = (await db.QueryAsync<dynamic>(
+                    @"SELECT ra.receiptadvanceid, ra.receiptguid, ra.receiptamount,
+                             COALESCE((SELECT SUM(u.receiptamount) FROM receipt_advances u
+                                        WHERE u.receiptguid = ra.receiptguid
+                                          AND u.requestguid IS NOT NULL
+                                          AND COALESCE(u.deleted, false) = false), 0) AS used_amount
+                        FROM receipt_advances ra
+                       WHERE ra.requestguid IS NULL
+                         AND COALESCE(ra.deleted, false) = false
+                         AND ra.receiptguid IN (
+                             SELECT rm.receiptguid FROM receipt_master rm
+                              WHERE rm.custid = @custid AND rm.tenant_code = @t
+                                AND rm.receipttype = 'ADVANCE'
+                                AND COALESCE(rm.isdeleted, false) = false)
+                       ORDER BY ra.receiptadvanceid ASC",
+                    new { custid = (int)r.custid, t = tenantCode }, tx)).ToList();
+
+                double remaining = amount;
+                foreach (var dep in deposits)
+                {
+                    if (remaining <= 0.01) break;
+                    double avail = Math.Round(Convert.ToDouble(dep.receiptamount) - Convert.ToDouble(dep.used_amount), 2);
+                    if (avail <= 0.01) continue;
+                    double deduct = Math.Round(Math.Min(avail, remaining), 2);
+
+                    await db.ExecuteAsync(
+                        @"INSERT INTO receipt_advances
+                            (receiptadvanceid, receiptguid, requestguid, receiptamount,
+                             deleted, tenant_code, usercode, computercode, entereddate, ibsdate)
+                          VALUES (@id, @rg, @refundGuid, @amt, false, @t, @uc, @cc, @dt, @dt)",
+                        new
+                        {
+                            id = Guid.NewGuid().ToString(),
+                            rg = (string)dep.receiptguid,
+                            refundGuid = receiptGuid,
+                            amt = deduct,
+                            t = tenantCode,
+                            uc = req.usercode,
+                            cc = req.computercode,
+                            dt = DateTime.UtcNow
+                        }, tx);
+
+                    remaining = Math.Round(remaining - deduct, 2);
+                }
+
+                if (remaining > 0.01)
+                    return ("Advance balance insufficient to complete the refund. Please refresh and try again.", null);
+
+                // 3. Close the request
+                string processorName = req.user_name ?? "";
+                if (string.IsNullOrWhiteSpace(processorName) && req.usercode.HasValue)
+                {
+                    processorName = await db.QueryFirstOrDefaultAsync<string>(
+                        "SELECT name FROM mastertenant.user_master WHERE user_code = @uc LIMIT 1",
+                        new { uc = req.usercode.Value }, tx) ?? $"User #{req.usercode}";
+                }
+
+                await db.ExecuteAsync(
+                    @"UPDATE hms_advance_request
+                         SET status = 'REFUNDED',
+                             amount = @amt,
+                             payment_mode = @pm,
+                             collected_by = @uc,
+                             collected_by_name = @cname,
+                             collected_date = now(),
+                             receiptguid = @rg,
+                             receiptsnoprint = @sno,
+                             remarks = COALESCE(NULLIF(@rem, ''), remarks),
+                             updated_at = now()
+                       WHERE request_id = @id AND tenant_code = @t",
+                    new
+                    {
+                        amt = amount,
+                        pm = (req.payment_mode ?? "CASH").ToUpper(),
+                        uc = req.usercode,
+                        cname = processorName,
+                        rg = receiptGuid,
+                        sno = seqInfo.snoprint,
+                        rem = req.remarks,
+                        id = r.request_id,
+                        t = tenantCode
+                    }, tx);
+
+                tx.Commit();
+
+                return ("SUCCESS", new HmsAdvanceReceiptResponse
+                {
+                    receipt_guid = receiptGuid,
+                    receipt_no = seqInfo.snoprint,
+                    receipt_barcode = seqInfo.barcode,
+                    receipt_type = "ADVANCE_REFUND",
+                    custid = r.custid,
+                    patient_name = r.patient_name,
+                    amount = amount,
+                    collection_type = (req.payment_mode ?? "CASH").ToUpper(),
+                    receipt_date = DateTime.UtcNow
+                });
+            }
+            catch (Exception ex)
+            {
+                tx.Rollback();
+                _logger.LogError(ex, "ProcessRefundRequest failed for request_id={id}", req.request_id);
+                return ($"Transaction error: {ex.Message}", null);
+            }
+        }
+
+                // 5. List of patients who have deposited advance
         public async Task<(List<HmsPatientAdvanceDepositRow> data, int totalCount, HmsPatientAdvanceDepositSummary summary)>
             GetPatientAdvanceDeposits(HmsPatientAdvanceDepositFilterRequest filter, string tenantCode)
         {
@@ -3474,16 +3846,19 @@ LEFT JOIN doctor_master dm
             var p = new DynamicParameters();
             p.Add("t", tenantCode);
 
+            DateTime? fromDt = filter.from_date ?? filter.fromdate;
+            DateTime? toDt = filter.to_date ?? filter.todate;
+
             string dateFilter = "";
-            if (filter.fromdate.HasValue)
+            if (fromDt.HasValue)
             {
                 dateFilter += " AND rm.receiptdate >= @from ";
-                p.Add("from", filter.fromdate.Value.Date);
+                p.Add("from", fromDt.Value.Date);
             }
-            if (filter.todate.HasValue)
+            if (toDt.HasValue)
             {
                 dateFilter += " AND rm.receiptdate <= @to ";
-                p.Add("to", filter.todate.Value.Date.AddDays(1).AddSeconds(-1));
+                p.Add("to", toDt.Value.Date.AddDays(1).AddSeconds(-1));
             }
             if (filter.bhcode.HasValue)
             {
@@ -3524,14 +3899,14 @@ LEFT JOIN doctor_master dm
                         MIN(rm.receiptdate) AS first_deposit_date,
                         MAX(rm.receiptdate) AS last_deposit_date,
                         COUNT(DISTINCT rm.receiptguid) AS deposit_count,
-                        SUM(CASE WHEN ra.requestguid IS NULL THEN ra.receiptamount ELSE 0 END) AS total_deposited,
-                        SUM(CASE WHEN ra.requestguid IS NOT NULL AND (rref.receipttype IS NULL OR rref.receipttype != 'ADVANCE_REFUND') THEN ra.receiptamount ELSE 0 END) AS total_used,
-                        SUM(CASE WHEN rref.receipttype = 'ADVANCE_REFUND' THEN ra.receiptamount ELSE 0 END) AS total_refunded
+                        COALESCE(SUM(CASE WHEN ra.receiptadvanceid IS NULL OR ra.requestguid IS NULL THEN COALESCE(ra.receiptamount, rm.amountpaid) ELSE 0 END), 0)::numeric AS total_deposited,
+                        COALESCE(SUM(CASE WHEN ra.requestguid IS NOT NULL AND (rref.receipttype IS NULL OR rref.receipttype != 'ADVANCE_REFUND') THEN ra.receiptamount ELSE 0 END), 0)::numeric AS total_used,
+                        COALESCE(SUM(CASE WHEN rref.receipttype = 'ADVANCE_REFUND' THEN ra.receiptamount ELSE 0 END), 0)::numeric AS total_refunded
                     FROM receipt_master rm
-                    INNER JOIN receipt_advances ra 
-                            ON ra.receiptguid = rm.receiptguid 
-                           AND ra.tenant_code = rm.tenant_code 
-                           AND COALESCE(ra.deleted, false) = false
+                    LEFT JOIN receipt_advances ra 
+                           ON ra.receiptguid = rm.receiptguid 
+                          AND ra.tenant_code = rm.tenant_code 
+                          AND COALESCE(ra.deleted, false) = false
                     LEFT JOIN receipt_master rref 
                            ON rref.receiptguid = ra.requestguid 
                           AND rref.tenant_code = rm.tenant_code 
@@ -3548,9 +3923,9 @@ LEFT JOIN doctor_master dm
                         b.custid,
                         COALESCE(cm.custcode, '') AS custcode,
                         COALESCE(NULLIF(TRIM(CONCAT(cm.initial, ' ', cm.name)), ''), NULLIF(cm.name, ''), lrm.name, 'Patient #' || b.custid::text) AS patient_name,
-                        COALESCE(NULLIF(cm.mobileno, ''), NULLIF(cm.phoneno, ''), lrm.mobileno, '') AS mobile_no,
+                        COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), lrm.mobileno, '') AS mobile_no,
                         COALESCE(cm.gender, lrm.gender, '') AS gender,
-                        COALESCE(cm.ageyears, 0) AS age,
+                        COALESCE(NULLIF(cm.ageyears::text, ''), '0') AS age,
                         ROUND(b.total_deposited::numeric, 2) AS total_deposited,
                         ROUND(b.total_used::numeric, 2) AS total_used,
                         ROUND(b.total_refunded::numeric, 2) AS total_refunded,
@@ -3578,6 +3953,7 @@ LEFT JOIN doctor_master dm
                            AND rm_last.tenant_code = @t
                            AND rm_last.receipttype = 'ADVANCE'
                            AND COALESCE(rm_last.isdeleted, false) = false
+                           AND COALESCE(rm_last.deleted, false) = false
                          ORDER BY rm_last.receiptdate DESC NULLS LAST
                          LIMIT 1
                     ) last_rcp ON true
@@ -3586,11 +3962,11 @@ LEFT JOIN doctor_master dm
             var summary = await db.QueryFirstOrDefaultAsync<HmsPatientAdvanceDepositSummary>(
                 $@"{sqlCte}
                    SELECT 
-                     COUNT(1) AS total_patients,
-                     COALESCE(SUM(total_deposited), 0) AS total_deposited,
-                     COALESCE(SUM(total_used), 0) AS total_used,
-                     COALESCE(SUM(total_refunded), 0) AS total_refunded,
-                     COALESCE(SUM(available_balance), 0) AS total_available_balance
+                     COUNT(1)::int AS total_patients,
+                     COALESCE(SUM(total_deposited), 0)::numeric AS total_deposited,
+                     COALESCE(SUM(total_used), 0)::numeric AS total_used,
+                     COALESCE(SUM(total_refunded), 0)::numeric AS total_refunded,
+                     COALESCE(SUM(available_balance), 0)::numeric AS total_available_balance
                    FROM pat_agg
                    {outerWhere}", p) ?? new HmsPatientAdvanceDepositSummary();
 
@@ -3609,13 +3985,16 @@ LEFT JOIN doctor_master dm
             return (rows, totalCount, summary);
         }
 
-        // ── 6. List of advance refunds history ────────────────────────────────
+        // 6. List of advance refunds history
         public async Task<(List<HmsAdvanceRefundHistoryRow> data, int totalCount, HmsAdvanceRefundSummary summary)>
             GetAdvanceRefundHistory(HmsAdvanceRefundFilterRequest filter, string tenantCode)
         {
             using var db = GetConnection();
             var p = new DynamicParameters();
             p.Add("t", tenantCode);
+
+            DateTime? fromDt = filter.from_date ?? filter.fromdate;
+            DateTime? toDt = filter.to_date ?? filter.todate;
 
             string where = @" WHERE rm.tenant_code = @t
                                AND rm.receipttype = 'ADVANCE_REFUND'
@@ -3637,21 +4016,22 @@ LEFT JOIN doctor_master dm
                 where += " AND rm.cntcode = @cnt ";
                 p.Add("cnt", filter.cntcode.Value);
             }
-            if (filter.fromdate.HasValue)
+            if (fromDt.HasValue)
             {
                 where += " AND rm.receiptdate >= @from ";
-                p.Add("from", filter.fromdate.Value.Date);
+                p.Add("from", fromDt.Value.Date);
             }
-            if (filter.todate.HasValue)
+            if (toDt.HasValue)
             {
                 where += " AND rm.receiptdate <= @to ";
-                p.Add("to", filter.todate.Value.Date.AddDays(1).AddSeconds(-1));
+                p.Add("to", toDt.Value.Date.AddDays(1).AddSeconds(-1));
             }
             if (!string.IsNullOrWhiteSpace(filter.search))
             {
                 where += @" AND (rm.receiptsnoprint ILIKE @s
                              OR cm.name ILIKE @s
                              OR cm.custcode ILIKE @s
+                             OR cm.mobile ILIKE @s
                              OR lrm.name ILIKE @s
                              OR lrm.mobileno ILIKE @s
                              OR rm.custid::text ILIKE @s) ";
@@ -3670,17 +4050,20 @@ LEFT JOIN doctor_master dm
                      ORDER BY l.requestdatetime DESC
                      LIMIT 1
                 ) lrm ON true
-                LEFT JOIN mastertenant.user_master um 
-                       ON um.user_code = rm.usercode
-                LEFT JOIN counter_master cnt 
-                       ON cnt.cntcode = rm.cntcode AND cnt.tenant_code = rm.tenant_code
-                LEFT JOIN mastertenant.branch_master bm 
-                       ON bm.bh_code = rm.enteredbhcode AND bm.tenant_code = rm.tenant_code";
+                LEFT JOIN LATERAL (
+                    SELECT name FROM mastertenant.user_master WHERE user_code = rm.usercode LIMIT 1
+                ) um ON true
+                LEFT JOIN LATERAL (
+                    SELECT name FROM counter_master WHERE cntcode = rm.cntcode AND tenant_code = rm.tenant_code LIMIT 1
+                ) cnt ON true
+                LEFT JOIN LATERAL (
+                    SELECT name FROM mastertenant.branch_master WHERE bh_code = rm.enteredbhcode AND tenant_code = rm.tenant_code LIMIT 1
+                ) bm ON true";
 
             var summary = await db.QueryFirstOrDefaultAsync<HmsAdvanceRefundSummary>(
                 $@"SELECT 
-                     COUNT(1) AS total_refund_count,
-                     COALESCE(SUM(rm.amountpaid), 0) AS total_refund_amount
+                     COUNT(1)::int AS total_refund_count,
+                     COALESCE(SUM(rm.amountpaid), 0)::numeric AS total_refund_amount
                    {sqlJoins}
                    {where}", p) ?? new HmsAdvanceRefundSummary();
 
@@ -3698,8 +4081,8 @@ LEFT JOIN doctor_master dm
                      rm.custid,
                      COALESCE(cm.custcode, '') AS custcode,
                      COALESCE(NULLIF(TRIM(CONCAT(cm.initial, ' ', cm.name)), ''), NULLIF(cm.name, ''), lrm.name, 'Patient #' || rm.custid::text) AS patient_name,
-                     COALESCE(NULLIF(cm.mobileno, ''), NULLIF(cm.phoneno, ''), lrm.mobileno, '') AS mobile_no,
-                     rm.amountpaid AS refund_amount,
+                     COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), lrm.mobileno, '') AS mobile_no,
+                     COALESCE(rm.amountpaid, 0)::numeric AS refund_amount,
                      rm.usercode,
                      COALESCE(um.name, 'User #' || rm.usercode::text) AS entered_by,
                      rm.cntcode::int AS cntcode,
@@ -3714,5 +4097,5 @@ LEFT JOIN doctor_master dm
 
             return (rows, totalCount, summary);
         }
-}
+    }
 }

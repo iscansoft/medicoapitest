@@ -1513,7 +1513,6 @@ AND b.tenant_code = @tenant_code
             if (count < 1)
                 count = 1;
 
-            // â”€â”€ 3. PREFIX AND SCOPE â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             string? prefix = null;
             bool sharedSequence = false;
             long? groupId = null;
@@ -1568,7 +1567,6 @@ AND b.tenant_code = @tenant_code
             string FormatToken(string? pfx, int s) =>
                 string.IsNullOrWhiteSpace(pfx) ? s.ToString() : $"{pfx}{s}";
 
-            // â”€â”€ 4. MODE A: WITH SLOT (slot_detail_id is present) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             if (slot_detail_id.HasValue && slot_detail_id.Value != Guid.Empty)
             {
                 // Step 1: Lock slot
@@ -2706,6 +2704,13 @@ AND b.tenant_code = @tenant_code
         // token, no new op_registration row. Purely unbilled-charge inserts,
         // same as ComboRegistration's additional_items loop, but standalone.
         // ─────────────────────────────────────────
+        // ─────────────────────────────────────────
+        // ADD SERVICES TO AN EXISTING OP VISIT
+        // SERVICE and DRESSING items are both pushed to unbilled charges
+        // against the SAME op_id (no token, no new op_registration row).
+        // If auto_route_billing_after_register is ON, everything added here
+        // (services + dressing) is auto-billed to the cash counter.
+        // ─────────────────────────────────────────
         public async Task<string> AddServicesToOp(AddServicesToOpRequest req, string tenant_code)
         {
             try
@@ -2730,7 +2735,7 @@ AND b.tenant_code = @tenant_code
 
                 var op = await db.QueryFirstOrDefaultAsync<OpRegistrationModel>(
                     @"SELECT * FROM op_registration
-              WHERE op_id      = @op_id
+              WHERE op_id       = @op_id
               AND   tenant_code = @tenant_code
               AND   isdeleted   = false",
                     new { req.op_id, tenant_code });
@@ -2746,15 +2751,7 @@ AND b.tenant_code = @tenant_code
                     return "Cannot add services to a cancelled visit";
 
                 var billedItems = new List<string>();
-                var deferredDressing = new List<AddUnbilledConsultationRequest>();
                 int billableCount = 0;
-
-                async Task FlushDressing()
-                {
-                    foreach (var d in deferredDressing)
-                        await _unbilledCls.AddVisitAdditionalCharge(d, "DRESSING", tenant_code);
-                    deferredDressing.Clear();
-                }
 
                 foreach (var item in req.items)
                 {
@@ -2769,12 +2766,13 @@ AND b.tenant_code = @tenant_code
                     {
                         var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
                             @"SELECT * FROM service_type_master
-              WHERE service_id = @service_id AND tenant_code = @tenant_code AND deleted = false",
+                      WHERE service_id  = @service_id
+                      AND   tenant_code = @tenant_code
+                      AND   deleted     = false",
                             new { item.service_id, tenant_code });
 
                         if (svc == null)
                         {
-                            await FlushDressing();
                             return $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|Error:Service id {item.service_id} not configured, remaining items skipped";
                         }
                         serviceName = svc.service_name;
@@ -2790,20 +2788,18 @@ AND b.tenant_code = @tenant_code
                         tcode = itemTcode,
                         rate = itemRate,
                         amount = itemAmount,
-                        quantity = 1
+                        quantity = 1,
+                        particulars = serviceName
                     };
 
-                    if (itemType == "DRESSING")
-                    {
-                        deferredDressing.Add(itemReq);
-                        billedItems.Add(serviceName);
-                        continue;
-                    }
-
+                    // SERVICE and DRESSING are both pushed to unbilledcharges right away
                     var addRes = await _unbilledCls.AddVisitAdditionalCharge(itemReq, itemType, tenant_code);
                     if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
                     {
-                        await FlushDressing();
+                        // Items added before the failure are kept; still try to auto-bill them below
+                        if (billableCount > 0)
+                            await TryAutoBill(db, op, req, tenant_code);
+
                         return $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|Error:{serviceName}: {addRes}";
                     }
 
@@ -2816,14 +2812,14 @@ AND b.tenant_code = @tenant_code
 
                 await db.ExecuteAsync(
                     @"UPDATE op_registration
-      SET notes = @newNotes, updated_at = now()
-      WHERE op_id = @op_id AND tenant_code = @tenant_code",
+              SET notes = @newNotes, updated_at = now()
+              WHERE op_id = @op_id AND tenant_code = @tenant_code",
                     new { newNotes, req.op_id, tenant_code });
 
                 bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
                     @"SELECT auto_route_billing_after_register FROM lab_settings
-      WHERE tenant_code = @tenant_code AND deleted = false
-      ORDER BY (bh_code IS NULL) LIMIT 1",
+              WHERE tenant_code = @tenant_code AND deleted = false
+              ORDER BY (bh_code IS NULL) LIMIT 1",
                     new { tenant_code }) ?? false;
 
                 string autoBillTag = "";
@@ -2837,19 +2833,34 @@ AND b.tenant_code = @tenant_code
                         ? $"|AutoBilled:true|BillNo:{billData?.bill_no}|BillGuid:{billData?.requestguid}|Balance:{billData?.balance_amount}"
                         : $"|AutoBilled:false|AutoBillError:{billStatus}";
                 }
-                else if (routeToBilling)
-                {
-                    autoBillTag = "|AutoBilled:false|AutoBillSkipped:DressingOnly";
-                }
 
-                bool hadDressing = deferredDressing.Count > 0;
-                await FlushDressing();
-
-                return $"Success|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling && billableCount > 0}|DressingUnbilled:{hadDressing}{autoBillTag}";
+                return $"Success|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|RouteToBilling:{routeToBilling && billableCount > 0}|DressingUnbilled:false{autoBillTag}";
             }
             catch (Exception ex)
             {
                 return ex.Message;
+            }
+        }
+
+        // Best-effort auto-bill used on the partial-failure path
+        private async Task TryAutoBill(IDbConnection db, OpRegistrationModel op, AddServicesToOpRequest req, string tenant_code)
+        {
+            try
+            {
+                bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
+                    @"SELECT auto_route_billing_after_register FROM lab_settings
+              WHERE tenant_code = @tenant_code AND deleted = false
+              ORDER BY (bh_code IS NULL) LIMIT 1",
+                    new { tenant_code }) ?? false;
+
+                if (routeToBilling)
+                    await _billingCls.AutoBillOpVisit(
+                        op.op_id.ToString(), op.custid, op.dcode,
+                        req.enteredbhcode, req.cntcode, tenant_code);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ADD-SERVICES] Partial auto-bill failed op_id={op.op_id}: {ex.Message}");
             }
         }
         // null/empty is allowed (field optional); otherwise name must exist for this tenant

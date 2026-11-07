@@ -1,4 +1,4 @@
-﻿using medico_backend.Class;
+using medico_backend.Class;
 using medico_backend.Model;
 using Microsoft.AspNetCore.Mvc;
 using static medico_backend.Model.IpBedsideChartModel;
@@ -207,6 +207,20 @@ namespace medico_backend.Controllers
             if (req.usercode <= 0) return BadRequest("usercode is required");
 
             var res = await cls.AddMedicine(req, req.usercode, tenant);
+            return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
+        }
+
+        // POST api/IpBedsideChart/prescription/save
+        // POST api/IpBedsideChart/medicine/save-prescription
+        [HttpPost("prescription/save")]
+        [HttpPost("medicine/save-prescription")]
+        public async Task<IActionResult> SavePrescription([FromBody] SaveNursePrescriptionRequest req)
+        {
+            var tenant = GetTenantCode();
+            if (string.IsNullOrWhiteSpace(tenant)) return BadRequest("tenant_code header is required");
+            if (req.usercode <= 0) return BadRequest("usercode is required");
+
+            var res = await cls.SaveNursePrescription(req, req.usercode, tenant);
             return res.StartsWith("Success") ? Ok(new { message = res }) : BadRequest(new { message = res });
         }
 

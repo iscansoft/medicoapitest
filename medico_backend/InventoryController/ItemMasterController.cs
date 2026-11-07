@@ -3273,5 +3273,83 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { Status = "Failed", Message = ex.Message });
             }
         }
+        // ============================================================
+        // REVERSE
+        // PENDING / IN_TRANSIT / RECEIVED / PARTIALLY_RECEIVED -> REVERSED
+        // ============================================================
+        [HttpPost("reversestocktransfer")]
+        public async Task<IActionResult> ReverseStockTransfer(
+            [FromBody] stock_transfer_action_request request)
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = false, message = "Tenant code not found." });
+
+                if (request == null || request.transfercode <= 0)
+                    return BadRequest(new { status = false, message = "Invalid transfer code." });
+
+                if (request.usercode <= 0)
+                    return BadRequest(new { status = false, message = "Invalid user code." });
+
+                if (string.IsNullOrWhiteSpace(request.remarks))
+                    return BadRequest(new { status = false, message = "Reverse reason (remarks) is required." });
+
+                bool result = await itemclass.ReverseStockTransfer(
+                    request.transfercode, request.usercode, request.remarks, tenantcode);
+
+                if (!result)
+                    return NotFound(new { status = false, message = "Stock transfer not found." });
+
+                return Ok(new
+                {
+                    status = true,
+                    message = "Stock transfer reversed successfully. Stock quantities restored."
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = false, message = ex.Message });
+            }
+        }
+        // ============================================================
+        // EDIT ISSUE STOCK  (PENDING / IN_TRANSIT only)
+        // ============================================================
+        [HttpPost("editissuestock")]
+        public async Task<IActionResult> EditIssueStock([FromBody] stock_transfer_request request)
+        {
+            try
+            {
+                string tenantcode =
+                    HttpContext.Items["TenantCode"]?.ToString()
+                    ?? Request.Headers["tenantcode"].FirstOrDefault()
+                    ?? string.Empty;
+
+                if (string.IsNullOrEmpty(tenantcode))
+                    return BadRequest(new { status = false, message = "Tenant code not found." });
+
+                if (request == null || request.master == null || request.master.transfercode <= 0)
+                    return BadRequest(new { status = false, message = "Valid transfercode is required." });
+
+                if (request.details == null || request.details.Count == 0)
+                    return BadRequest(new { status = false, message = "At least one item is required." });
+
+                bool result = await itemclass.EditIssueStock(request, tenantcode);
+
+                if (!result)
+                    return NotFound(new { status = false, message = "Issue stock not found." });
+
+                return Ok(new { status = true, message = "Issue stock updated successfully." });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { status = false, message = ex.Message });
+            }
+        }
     }
 }
