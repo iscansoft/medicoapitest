@@ -423,13 +423,21 @@ namespace medico_backend.Controllers
             [FromQuery] bool includeMedicines = true, 
             [FromQuery] bool? isletterhead = false,
             [FromQuery] Guid? op_id = null,
+            [FromQuery] Guid? ip_id = null,
+            [FromQuery] bool? is_ip = null,
             [FromQuery] string? format = null,
             [FromQuery] string? viewtype = null)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
-            var res = await _reportClass.ConsolidatedBillPDF(requestguid, includeMedicines, T, isletterhead, op_id, viewtype);
+            if (requestguid == Guid.Empty)
+            {
+                if (ip_id.HasValue && ip_id.Value != Guid.Empty) requestguid = ip_id.Value;
+                else if (op_id.HasValue && op_id.Value != Guid.Empty) requestguid = op_id.Value;
+            }
+
+            var res = await _reportClass.ConsolidatedBillPDF(requestguid, includeMedicines, T, isletterhead, op_id, viewtype, ip_id, is_ip);
             if (string.Equals(format, "pdf", StringComparison.OrdinalIgnoreCase) || 
                 (Request.Headers.Accept.ToString().Contains("text/html") && !Request.Headers.ContainsKey("tenantcode")))
             {

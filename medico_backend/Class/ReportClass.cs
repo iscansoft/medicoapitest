@@ -6588,9 +6588,9 @@ SELECT
 
     ROW_NUMBER() OVER (
 
-        ORDER BY COALESCE(gm.orderno, 9999),
+        ORDER BY COALESCE(NULLIF(gm.orderno, 0), 9999),
 
-                 COALESCE(tm.orderno, 9999),
+                 COALESCE(NULLIF(tm.orderno, 0), 9999),
 
                  COALESCE(lrd.testsno, 0),
 
@@ -6776,9 +6776,9 @@ WHERE (lrm.requestguid::text = @requestguid OR LOWER(lrm.requestguid::text) = LO
 
   AND COALESCE(lrm.deleted, false) = false
 
-ORDER BY COALESCE(gm.orderno, 9999),
+ORDER BY COALESCE(NULLIF(gm.orderno, 0), 9999),
 
-         COALESCE(tm.orderno, 9999),
+         COALESCE(NULLIF(tm.orderno, 0), 9999),
 
          COALESCE(lrd.testsno, 0),
 
@@ -10721,1377 +10721,808 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
         public async Task<ConsolidatedBillData?> GetConsolidatedBillDataAsync(
-
             string requestGuid, 
-
             bool includeMedicines, 
-
-            string tenant_code)
-
+            string tenant_code,
+            bool? isIpMode = null,
+            string? opIdParam = null,
+            string? ipIdParam = null)
         {
-
             try
-
             {
-
                 using IDbConnection db = new NpgsqlConnection(_conn);
 
-
-
-                // Get request/patient header information
-
-                Guid parsedGuid = Guid.Empty;
-
-                Guid.TryParse(requestGuid, out parsedGuid);
-
-
-
-                string headerSql = @"
-
-                        SELECT 
-
-                            COALESCE(NULLIF(lrm.requestsno::text, ''), NULLIF(lrm.requestguid::text, ''), 'BILL-001') AS BillNo,
-
-                            lrm.requestguid::text AS RequestGuid,
-
-                            COALESCE(lrm.requestdatetime, NOW()) AS BillDate,
-
-                            COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS PatientName,
-
-                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), '') AS PatientId,
-
-                            COALESCE(
-
-                                CASE 
-
-                                    WHEN NULLIF(TRIM(lrm.ageyears), '')::int > 0 AND NULLIF(TRIM(lrm.agemonths), '')::int > 0 
-
-                                        THEN CONCAT(lrm.ageyears, ' Y ', lrm.agemonths, ' M')
-
-                                    WHEN NULLIF(TRIM(lrm.ageyears), '')::int > 0 
-
-                                        THEN CONCAT(lrm.ageyears, ' Y')
-
-                                    WHEN NULLIF(TRIM(lrm.agemonths), '')::int > 0 
-
-                                        THEN CONCAT(lrm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
-
-                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.ageyears, 0) > 0 
-
-                                        THEN CONCAT(cm.ageyears, ' Y')
-
-                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
-
-                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
-
-                                    WHEN COALESCE(cm.agemonths, 0) > 0 
-
-                                        THEN CONCAT(cm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.agedays, 0) > 0 
-
-                                        THEN CONCAT(cm.agedays, ' D')
-
-                                    ELSE ''
-
-                                END, ''
-
-                            ) AS Age,
-
-                            COALESCE(NULLIF(lrm.gender, ''), NULLIF(cm.gender, ''), '') AS Gender,
-
-                            COALESCE(NULLIF(TRIM(lrm.address), ''), NULLIF(CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')), ''), '') AS PatientAddress,
-
-                            COALESCE(NULLIF(lrm.mobileno, ''), NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
-
-                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
-
-                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
-
-                            COALESCE(NULLIF(ip.ip_no, ''), NULLIF(op.op_no, ''), NULLIF(lrm.ip_id::text, ''), NULLIF(lrm.opvisitid, ''), '') AS AdmissionNo,
-
-                            ip.admitdate AS AdmissionDate,
-
-                            ip.dischargedate AS DischargeDate,
-
-                            COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
-
-                            COALESCE(lrm.requestamount, 0) AS TotalAmount,
-
-                            COALESCE(
-
-                                COALESCE(lrm.discountamount, 0) +
-
-                                COALESCE(lrm.ourdiscount, 0) +
-
-                                COALESCE(lrm.specialdiscount, 0), 0
-
-                            ) AS DiscountAmount,
-
-                            COALESCE(lrm.totalamount, 0) AS NetAmount,
-
-                            COALESCE(lrm.paidamount, 0) AS ReceivedAmount,
-
-                            COALESCE(
-
-                                lrm.totalamount - COALESCE(lrm.paidamount, 0), 0
-
-                            ) AS BalanceAmount,
-
-                            COALESCE(um.name, '') AS CreatedBy,
-
-                            COALESCE(lrm.entereddate, lrm.requestdatetime, NOW()) AS CreatedTime,
-
-                            lrm.tenant_code AS TenantCode,
-
-                            COALESCE(lrm.alteredbhcode::int, lrm.enteredbhcode, 0) AS BhCode,
-
-                            lrm.custid AS CustId,
-
-                            lrm.ip_id::text AS IpId,
-
-                            COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, '')) AS OutpatientId
-
-                        FROM lab_request_master lrm
-
-                        LEFT JOIN customerdb.customer_master cm ON cm.custid = lrm.custid
-
-                        LEFT JOIN ip_registration ip ON ip.ip_id = lrm.ip_id
-
-                        LEFT JOIN op_registration op ON (op.op_id::text = lrm.opvisitid OR op.op_id::text = lrm.sheet_id)
-
-                        LEFT JOIN doctor_master dm ON (dm.dcode = lrm.dcode OR dm.dcode = ip.dcode OR dm.dcode = op.dcode)
-
-                        LEFT JOIN mastertenant.user_master um ON um.user_code = lrm.usercode
-
-                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR bm.tenant_code = lrm.tenant_code)
-
-                        WHERE (lrm.requestguid::text = @requestGuid OR LOWER(lrm.requestguid::text) = LOWER(@requestGuid))
-
-                          AND (COALESCE(@tenant_code, '') = '' OR lrm.tenant_code IS NULL OR lrm.tenant_code = '' OR lrm.tenant_code = @tenant_code)
-
-                          AND COALESCE(lrm.deleted, false) = false
-
-                        LIMIT 1";
-
-
-
-                var header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-
-                    headerSql, 
-
-                    new { requestGuid, tenant_code = tenant_code ?? "" },
-
-                    commandTimeout: 120);
-
-
-
-                // Fallback 0: Check lab_request_master by ip_id, opvisitid/sheet_id, requestsno, or custid
-
-                if (header == null)
-
+                // Deterministically resolve IP vs OP mode, identifiers, and active bill GUID
+                bool isIp = isIpMode ?? false;
+                string ipIdStr = ipIdParam ?? "";
+                string opIdStr = opIdParam ?? "";
+                string ipNoStr = "";
+                string opNoStr = "";
+                string activeBillGuid = "";
+
+                // 1. Check if requestGuid directly matches a bill in lab_request_master
+                var lrmDirect = await db.QueryFirstOrDefaultAsync<dynamic>(
+                    @"SELECT requestguid::text AS requestguid, requestsnoprint, ip_id::text AS ip_id, opvisitid, sheet_id::text AS sheet_id, custid, requestdatetime, totalamount, paidamount
+                      FROM lab_request_master 
+                      WHERE (requestguid::text = @requestGuid OR LOWER(requestguid::text) = LOWER(@requestGuid))
+                        AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                        AND COALESCE(deleted, false) = false
+                      LIMIT 1",
+                    new { requestGuid, tenant_code });
+
+                if (lrmDirect != null)
                 {
-
-                    string lrmAltHeaderSql = @"
-
-                        SELECT 
-
-                            COALESCE(NULLIF(lrm.requestsno::text, ''), NULLIF(lrm.requestguid::text, ''), 'BILL-001') AS BillNo,
-
-                            lrm.requestguid::text AS RequestGuid,
-
-                            COALESCE(lrm.requestdatetime, NOW()) AS BillDate,
-
-                            COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS PatientName,
-
-                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), '') AS PatientId,
-
-                            COALESCE(
-
-                                CASE 
-
-                                    WHEN NULLIF(TRIM(lrm.ageyears), '')::int > 0 AND NULLIF(TRIM(lrm.agemonths), '')::int > 0 
-
-                                        THEN CONCAT(lrm.ageyears, ' Y ', lrm.agemonths, ' M')
-
-                                    WHEN NULLIF(TRIM(lrm.ageyears), '')::int > 0 
-
-                                        THEN CONCAT(lrm.ageyears, ' Y')
-
-                                    WHEN NULLIF(TRIM(lrm.agemonths), '')::int > 0 
-
-                                        THEN CONCAT(lrm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
-
-                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.ageyears, 0) > 0 
-
-                                        THEN CONCAT(cm.ageyears, ' Y')
-
-                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
-
-                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
-
-                                    WHEN COALESCE(cm.agemonths, 0) > 0 
-
-                                        THEN CONCAT(cm.agemonths, ' M')
-
-                                    WHEN COALESCE(cm.agedays, 0) > 0 
-
-                                        THEN CONCAT(cm.agedays, ' D')
-
-                                    ELSE ''
-
-                                END, ''
-
-                            ) AS Age,
-
-                            COALESCE(NULLIF(lrm.gender, ''), NULLIF(cm.gender, ''), '') AS Gender,
-
-                            COALESCE(NULLIF(TRIM(lrm.address), ''), NULLIF(CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')), ''), '') AS PatientAddress,
-
-                            COALESCE(NULLIF(lrm.mobileno, ''), NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
-
-                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
-
-                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
-
-                            COALESCE(NULLIF(ip.ip_no, ''), NULLIF(op.op_no, ''), NULLIF(lrm.ip_id::text, ''), NULLIF(lrm.opvisitid, ''), '') AS AdmissionNo,
-
-                            ip.admitdate AS AdmissionDate,
-
-                            ip.dischargedate AS DischargeDate,
-
-                            COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
-
-                            COALESCE(lrm.requestamount, 0) AS TotalAmount,
-
-                            COALESCE(
-
-                                COALESCE(lrm.discountamount, 0) +
-
-                                COALESCE(lrm.ourdiscount, 0) +
-
-                                COALESCE(lrm.specialdiscount, 0), 0
-
-                            ) AS DiscountAmount,
-
-                            COALESCE(lrm.totalamount, 0) AS NetAmount,
-
-                            COALESCE(lrm.paidamount, 0) AS ReceivedAmount,
-
-                            COALESCE(
-
-                                lrm.totalamount - COALESCE(lrm.paidamount, 0), 0
-
-                            ) AS BalanceAmount,
-
-                            COALESCE(um.name, '') AS CreatedBy,
-
-                            COALESCE(lrm.entereddate, lrm.requestdatetime, NOW()) AS CreatedTime,
-
-                            lrm.tenant_code AS TenantCode,
-
-                            COALESCE(lrm.alteredbhcode::int, lrm.enteredbhcode, 0) AS BhCode,
-
-                            lrm.custid AS CustId,
-
-                            lrm.ip_id::text AS IpId,
-
-                            COALESCE(NULLIF(lrm.opvisitid, ''), NULLIF(lrm.sheet_id, '')) AS OutpatientId
-
-                        FROM lab_request_master lrm
-
-                        LEFT JOIN customerdb.customer_master cm ON cm.custid = lrm.custid
-
-                        LEFT JOIN ip_registration ip ON ip.ip_id = lrm.ip_id
-
-                        LEFT JOIN op_registration op ON (op.op_id::text = lrm.opvisitid OR op.op_id::text = lrm.sheet_id)
-
-                        LEFT JOIN doctor_master dm ON (dm.dcode = lrm.dcode OR dm.dcode = ip.dcode OR dm.dcode = op.dcode)
-
-                        LEFT JOIN mastertenant.user_master um ON um.user_code = lrm.usercode
-
-                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR bm.tenant_code = lrm.tenant_code)
-
-                        WHERE (lrm.ip_id::text = @requestGuid
-
-                               OR lrm.opvisitid = @requestGuid
-
-                               OR lrm.sheet_id = @requestGuid
-
-                               OR lrm.requestsno::text = @requestGuid
-
-                               OR lrm.custid::text = @requestGuid)
-
-                          AND (COALESCE(@tenant_code, '') = '' OR lrm.tenant_code IS NULL OR lrm.tenant_code = '' OR lrm.tenant_code = @tenant_code)
-
-                          AND COALESCE(lrm.deleted, false) = false
-
-                        ORDER BY lrm.requestdatetime DESC
-
-                        LIMIT 1";
-
-
-
-                    header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-
-                        lrmAltHeaderSql, 
-
-                        new { requestGuid, tenant_code = tenant_code ?? "" },
-
-                        commandTimeout: 120);
-
-                }
-
-
-
-                // Fallback 1: Check IP Registration
-
-                if (header == null)
-
-                {
-
-                    string ipHeaderSql = @"
-
-                        SELECT 
-
-                            COALESCE(NULLIF(ip.ip_no, ''), 'BILL-IP') AS BillNo,
-
-                            ip.ip_id::text AS RequestGuid,
-
-                            COALESCE(ip.admitdate, NOW()) AS BillDate,
-
-                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
-
-                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(ip.custid::text, ''), '') AS PatientId,
-
-                            CASE 
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agedays, ' D')
-
-                                ELSE ''
-
-                            END AS Age,
-
-                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
-
-                            CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
-
-                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
-
-                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
-
-                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
-
-                            COALESCE(NULLIF(ip.ip_no, ''), ip.ip_id::text) AS AdmissionNo,
-
-                            ip.admitdate AS AdmissionDate,
-
-                            ip.dischargedate AS DischargeDate,
-
-                            COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
-
-                            0 AS TotalAmount,
-
-                            0 AS DiscountAmount,
-
-                            0 AS NetAmount,
-
-                            0 AS ReceivedAmount,
-
-                            0 AS BalanceAmount,
-
-                            '' AS CreatedBy,
-
-                            COALESCE(ip.admitdate, NOW()) AS CreatedTime,
-
-                            ip.tenant_code AS TenantCode,
-
-                            0 AS BhCode,
-
-                            ip.custid AS CustId,
-
-                            ip.ip_id::text AS IpId,
-
-                            '' AS OutpatientId
-
-                        FROM ip_registration ip
-
-                        LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
-
-                        LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
-
-                        LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
-
-                        WHERE (LOWER(ip.ip_id::text) = LOWER(@requestGuid) OR ip.ip_no = @requestGuid)
-
-                          AND (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
-
-                        LIMIT 1";
-
-
-
-                    header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-
-                        ipHeaderSql, 
-
-                        new { requestGuid, tenant_code = tenant_code ?? "" },
-
-                        commandTimeout: 120);
-
-                }
-
-
-
-                // Fallback 2: Check OP Registration
-
-                if (header == null)
-
-                {
-
-                    string opHeaderSql = @"
-
-                        SELECT 
-
-                            COALESCE(NULLIF(op.op_no, ''), 'BILL-OP') AS BillNo,
-
-                            op.op_id::text AS RequestGuid,
-
-                            COALESCE(op.visit_date, NOW()) AS BillDate,
-
-                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
-
-                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(op.custid::text, ''), '') AS PatientId,
-
-                            CASE 
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agedays, ' D')
-
-                                ELSE ''
-
-                            END AS Age,
-
-                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
-
-                            CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
-
-                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
-
-                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
-
-                            COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
-
-                            COALESCE(NULLIF(op.op_no, ''), op.op_id::text) AS AdmissionNo,
-
-                            NULL::timestamp AS AdmissionDate,
-
-                            NULL::timestamp AS DischargeDate,
-
-                            '-' AS BedNo,
-
-                            0 AS TotalAmount,
-
-                            0 AS DiscountAmount,
-
-                            0 AS NetAmount,
-
-                            0 AS ReceivedAmount,
-
-                            0 AS BalanceAmount,
-
-                            '' AS CreatedBy,
-
-                            COALESCE(op.visit_date, NOW()) AS CreatedTime,
-
-                            op.tenant_code AS TenantCode,
-
-                            0 AS BhCode,
-
-                            op.custid AS CustId,
-
-                            '' AS IpId,
-
-                            op.op_id::text AS OutpatientId
-
-                        FROM op_registration op
-
-                        LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
-
-                        LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
-
-                        WHERE (LOWER(op.op_id::text) = LOWER(@requestGuid) OR op.op_no = @requestGuid)
-
-                          AND (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
-
-                        LIMIT 1";
-
-
-
-                    header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-
-                        opHeaderSql, 
-
-                        new { requestGuid, tenant_code = tenant_code ?? "" },
-
-                        commandTimeout: 120);
-
-                }
-
-
-
-                // Fallback 3: Check Customer Master directly
-
-                if (header == null)
-
-                {
-
-                    string cmHeaderSql = @"
-
-                        SELECT 
-
-                            'BILL-CONSOLIDATED' AS BillNo,
-
-                            @requestGuid AS RequestGuid,
-
-                            NOW() AS BillDate,
-
-                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
-
-                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(cm.custid::text, ''), '') AS PatientId,
-
-                            CASE 
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.ageyears, 0) > 0 
-
-                                    THEN CONCAT(cm.ageyears, ' Y')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
-
-                                WHEN COALESCE(cm.agemonths, 0) > 0 
-
-                                    THEN CONCAT(cm.agemonths, ' M')
-
-                                WHEN COALESCE(cm.agedays, 0) > 0 
-
-                                    THEN CONCAT(cm.agedays, ' D')
-
-                                ELSE ''
-
-                            END AS Age,
-
-                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
-
-                            CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
-
-                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
-
-                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
-
-                            'SELF' AS DoctorName,
-
-                            0 AS TotalAmount,
-
-                            0 AS DiscountAmount,
-
-                            0 AS NetAmount,
-
-                            0 AS ReceivedAmount,
-
-                            0 AS BalanceAmount,
-
-                            '' AS CreatedBy,
-
-                            NOW() AS CreatedTime,
-
-                            @tenant_code AS TenantCode,
-
-                            0 AS BhCode,
-
-                            cm.custid AS CustId,
-
-                            '' AS IpId,
-
-                            '' AS OutpatientId
-
-                        FROM customerdb.customer_master cm
-
-                        WHERE (cm.custcode::text = @requestGuid OR cm.custid::text = @requestGuid)
-
-                        LIMIT 1";
-
-
-
-                    header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
-
-                        cmHeaderSql, 
-
-                        new { requestGuid, tenant_code = tenant_code ?? "" },
-
-                        commandTimeout: 120);
-
-                }
-
-
-
-                // Fallback 4: Create default header object so request never fails with null
-
-                if (header == null)
-
-                {
-
-                    header = new RawReportHeader
-
+                    activeBillGuid = (string)lrmDirect.requestguid;
+                    if (lrmDirect.ip_id != null && !string.IsNullOrEmpty((string)lrmDirect.ip_id))
                     {
-
-                        BillNo = "BILL-CONSOLIDATED",
-
-                        RequestGuid = requestGuid,
-
-                        BillDate = DateTime.Now,
-
-                        PatientName = "Patient",
-
-                        PatientId = "",
-
-                        Age = "",
-
-                        Gender = "",
-
-                        PatientAddress = "",
-
-                        CusMobileNo = "",
-
-                        CareOf = "",
-
-                        DoctorName = "SELF",
-
-                        TotalAmount = 0m,
-
-                        DiscountAmount = 0m,
-
-                        NetAmount = 0m,
-
-                        ReceivedAmount = 0m,
-
-                        BalanceAmount = 0m,
-
-                        CreatedBy = "",
-
-                        CreatedTime = DateTime.Now,
-
-                        TenantCode = tenant_code ?? "",
-
-                        BhCode = 0,
-
-                        CustId = null,
-
-                        IpId = "",
-
-                        OutpatientId = ""
-
-                    };
-
+                        isIp = true;
+                        ipIdStr = (string)lrmDirect.ip_id;
+                    }
+                    else
+                    {
+                        isIp = false;
+                        opIdStr = (string?)lrmDirect.opvisitid ?? (string?)lrmDirect.sheet_id ?? "";
+                    }
                 }
 
+                if (isIpMode == true)
+                {
+                    isIp = true;
+                    if (string.IsNullOrEmpty(ipIdStr)) ipIdStr = requestGuid;
+                }
+                else if (isIpMode == false)
+                {
+                    isIp = false;
+                    if (string.IsNullOrEmpty(opIdStr)) opIdStr = requestGuid;
+                }
+                else if (string.IsNullOrEmpty(activeBillGuid))
+                {
+                    // Auto-detect when mode was not passed explicitly
+                    var ipRegCheck = await db.QueryFirstOrDefaultAsync<dynamic>(
+                        @"SELECT ip_id, ip_no FROM ip_registration 
+                          WHERE (ip_id::text = @requestGuid OR LOWER(ip_id::text) = LOWER(@requestGuid) OR ip_no = @requestGuid)
+                            AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                          LIMIT 1",
+                        new { requestGuid, tenant_code });
+                    if (ipRegCheck != null)
+                    {
+                        isIp = true;
+                        ipIdStr = ipRegCheck.ip_id.ToString();
+                        ipNoStr = ipRegCheck.ip_no?.ToString() ?? "";
+                    }
+                    else
+                    {
+                        var opRegCheck = await db.QueryFirstOrDefaultAsync<dynamic>(
+                            @"SELECT op_id, op_no FROM op_registration 
+                              WHERE (op_id::text = @requestGuid OR LOWER(op_id::text) = LOWER(@requestGuid) OR op_no = @requestGuid)
+                                AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                              LIMIT 1",
+                            new { requestGuid, tenant_code });
+                        if (opRegCheck != null)
+                        {
+                            isIp = false;
+                            opIdStr = opRegCheck.op_id.ToString();
+                            opNoStr = opRegCheck.op_no?.ToString() ?? "";
+                        }
+                    }
+                }
 
+                // Strict visit scoping and resolving active hospital bill:
+                if (isIp)
+                {
+                    opIdStr = "";
+                    opNoStr = "";
+                    if (!string.IsNullOrEmpty(ipIdStr))
+                    {
+                        var ipDetails = await db.QueryFirstOrDefaultAsync<dynamic>(
+                            @"SELECT ip_id, ip_no FROM ip_registration 
+                              WHERE (ip_id::text = @ipIdStr OR LOWER(ip_id::text) = LOWER(@ipIdStr) OR ip_no = @ipIdStr)
+                                AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                              LIMIT 1",
+                            new { ipIdStr, tenant_code });
+                        if (ipDetails != null)
+                        {
+                            ipIdStr = ipDetails.ip_id.ToString();
+                            ipNoStr = ipDetails.ip_no?.ToString() ?? "";
+                        }
+                    }
+
+                    // Look for billed bill in unbilledcharges
+                    if (string.IsNullOrEmpty(activeBillGuid) && !string.IsNullOrEmpty(ipIdStr))
+                    {
+                        activeBillGuid = await db.ExecuteScalarAsync<string>(
+                            @"SELECT uc.billid::text 
+                              FROM unbilledcharges uc 
+                              WHERE (uc.ip_id::text = @ipIdStr OR uc.ip_id::text = @ipNoStr)
+                                AND uc.billid IS NOT NULL 
+                                AND COALESCE(uc.billedstatus, false) = true
+                                AND (COALESCE(@tenant_code, '') = '' OR uc.tenant_code = @tenant_code)
+                              ORDER BY uc.billeddate DESC 
+                              LIMIT 1",
+                            new { ipIdStr, ipNoStr, tenant_code }) ?? "";
+
+                        // If not in unbilledcharges, look in lab_request_master for main IP hospital bill
+                        if (string.IsNullOrEmpty(activeBillGuid))
+                        {
+                            activeBillGuid = await db.ExecuteScalarAsync<string>(
+                                @"SELECT lrm.requestguid::text
+                                  FROM lab_request_master lrm
+                                  WHERE (lrm.ip_id::text = @ipIdStr OR lrm.ip_id::text = @ipNoStr)
+                                    AND COALESCE(lrm.deleted, false) = false
+                                    AND (COALESCE(@tenant_code, '') = '' OR lrm.tenant_code = @tenant_code)
+                                  ORDER BY 
+                                    CASE 
+                                      WHEN EXISTS (
+                                        SELECT 1 FROM lab_request_details lrd 
+                                        WHERE lrd.requestguid = lrm.requestguid 
+                                          AND (lrd.chargetype IN ('ROOMRENT', 'REGISTRATION') 
+                                               OR lrd.item_name ILIKE '%ROOM%' 
+                                               OR lrd.item_name ILIKE '%NURSING%' 
+                                               OR lrd.item_name ILIKE '%DOCTOR%')
+                                      ) THEN 0 
+                                      ELSE 1 
+                                    END,
+                                    lrm.requestdatetime DESC
+                                  LIMIT 1",
+                                new { ipIdStr, ipNoStr, tenant_code }) ?? "";
+                        }
+                    }
+                }
+                else
+                {
+                    ipIdStr = "";
+                    ipNoStr = "";
+                    if (!string.IsNullOrEmpty(opIdStr))
+                    {
+                        var opDetails = await db.QueryFirstOrDefaultAsync<dynamic>(
+                            @"SELECT op_id, op_no FROM op_registration 
+                              WHERE (op_id::text = @opIdStr OR LOWER(op_id::text) = LOWER(@opIdStr) OR op_no = @opIdStr)
+                                AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                              LIMIT 1",
+                            new { opIdStr, tenant_code });
+                        if (opDetails != null)
+                        {
+                            opIdStr = opDetails.op_id.ToString();
+                            opNoStr = opDetails.op_no?.ToString() ?? "";
+                        }
+                    }
+
+                    if (string.IsNullOrEmpty(activeBillGuid) && !string.IsNullOrEmpty(opIdStr))
+                    {
+                        activeBillGuid = await db.ExecuteScalarAsync<string>(
+                            @"SELECT lrm.requestguid::text
+                              FROM lab_request_master lrm
+                              WHERE lrm.ip_id IS NULL 
+                                AND (lrm.opvisitid = @opIdStr OR lrm.opvisitid = @opNoStr OR lrm.sheet_id = @opIdStr OR lrm.sheet_id = @opNoStr)
+                                AND COALESCE(lrm.deleted, false) = false
+                                AND (COALESCE(@tenant_code, '') = '' OR lrm.tenant_code = @tenant_code)
+                              ORDER BY lrm.requestdatetime DESC
+                              LIMIT 1",
+                            new { opIdStr, opNoStr, tenant_code }) ?? "";
+                    }
+                }
+
+                // Now fetch header with 100% strict IP/OP separation
+                RawReportHeader? header = null;
+
+                if (isIp)
+                {
+                    if (!string.IsNullOrEmpty(activeBillGuid))
+                    {
+                        string ipBillHeaderSql = @"
+                            SELECT 
+                                COALESCE(NULLIF(lrm.requestsnoprint, ''), NULLIF(lrm.requestsno::text, ''), NULLIF(ip.ip_no, ''), 'BILL-IP') AS BillNo,
+                                lrm.requestguid::text AS RequestGuid,
+                                COALESCE(lrm.requestdatetime, lrm.entereddate, ip.admitdate, NOW()) AS BillDate,
+                                COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                                COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), NULLIF(ip.custid::text, ''), '') AS PatientId,
+                                CASE 
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agedays, ' D')
+                                    ELSE ''
+                                END AS Age,
+                                COALESCE(NULLIF(cm.gender, ''), NULLIF(lrm.gender, ''), '') AS Gender,
+                                CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
+                                COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), NULLIF(lrm.mobileno, ''), '') AS CusMobileNo,
+                                COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
+                                COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                                COALESCE(NULLIF(ip.ip_no, ''), ip.ip_id::text, '') AS AdmissionNo,
+                                ip.admitdate AS AdmissionDate,
+                                ip.dischargedate AS DischargeDate,
+                                COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
+                                COALESCE(lrm.requestamount, lrm.totalamount, 0) AS TotalAmount,
+                                COALESCE(lrm.discountamount, 0) AS DiscountAmount,
+                                COALESCE(lrm.totalamount, 0) AS NetAmount,
+                                COALESCE(lrm.paidamount, 0) AS ReceivedAmount,
+                                COALESCE(lrm.totalamount, 0) - COALESCE(lrm.paidamount, 0) AS BalanceAmount,
+                                COALESCE(um.name, '') AS CreatedBy,
+                                COALESCE(lrm.entereddate, lrm.requestdatetime, NOW()) AS CreatedTime,
+                                COALESCE(lrm.tenant_code, ip.tenant_code) AS TenantCode,
+                                COALESCE(lrm.alteredbhcode::int, lrm.enteredbhcode, 0) AS BhCode,
+                                COALESCE(lrm.custid, ip.custid) AS CustId,
+                                ip.ip_id::text AS IpId,
+                                '' AS OutpatientId
+                            FROM lab_request_master lrm
+                            LEFT JOIN ip_registration ip ON (ip.ip_id = lrm.ip_id OR ip.ip_id::text = @ipIdStr OR ip.ip_no = @ipNoStr)
+                            LEFT JOIN customerdb.customer_master cm ON (cm.custid = lrm.custid OR cm.custid = ip.custid)
+                            LEFT JOIN doctor_master dm ON (dm.dcode = lrm.dcode OR dm.dcode = ip.dcode)
+                            LEFT JOIN mastertenant.user_master um ON um.user_code = lrm.usercode
+                            LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND (bm.tenant_code = ip.tenant_code OR bm.tenant_code = lrm.tenant_code)
+                            WHERE lrm.requestguid::text = @activeBillGuid
+                            LIMIT 1";
+
+                        header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
+                            ipBillHeaderSql, 
+                            new { activeBillGuid, ipIdStr, ipNoStr, tenant_code = tenant_code ?? "" },
+                            commandTimeout: 120);
+                    }
+
+                    if (header == null)
+                    {
+                        // IP Header directly from ip_registration
+                        string ipHeaderSql = @"
+                            SELECT 
+                                COALESCE(NULLIF(ip.ip_no, ''), 'BILL-IP') AS BillNo,
+                                ip.ip_id::text AS RequestGuid,
+                                COALESCE(ip.admitdate, NOW()) AS BillDate,
+                                COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                                COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(ip.custid::text, ''), '') AS PatientId,
+                                CASE 
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agedays, ' D')
+                                    ELSE ''
+                                END AS Age,
+                                COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
+                                CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
+                                COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
+                                COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
+                                COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                                COALESCE(NULLIF(ip.ip_no, ''), ip.ip_id::text) AS AdmissionNo,
+                                ip.admitdate AS AdmissionDate,
+                                ip.dischargedate AS DischargeDate,
+                                COALESCE(bm.bedname, ip.bedcode::text, '-') AS BedNo,
+                                0 AS TotalAmount,
+                                0 AS DiscountAmount,
+                                0 AS NetAmount,
+                                0 AS ReceivedAmount,
+                                0 AS BalanceAmount,
+                                '' AS CreatedBy,
+                                COALESCE(ip.admitdate, NOW()) AS CreatedTime,
+                                ip.tenant_code AS TenantCode,
+                                0 AS BhCode,
+                                ip.custid AS CustId,
+                                ip.ip_id::text AS IpId,
+                                '' AS OutpatientId
+                            FROM ip_registration ip
+                            LEFT JOIN customerdb.customer_master cm ON cm.custid = ip.custid
+                            LEFT JOIN doctor_master dm ON dm.dcode = ip.dcode
+                            LEFT JOIN public.bed_master bm ON bm.bedcode = ip.bedcode AND bm.tenant_code = ip.tenant_code
+                            WHERE (ip.ip_id::text = @ipIdStr OR LOWER(ip.ip_id::text) = LOWER(@ipIdStr) OR ip.ip_no = @ipIdStr OR ip.ip_no = @ipNoStr)
+                              AND (COALESCE(@tenant_code, '') = '' OR ip.tenant_code IS NULL OR ip.tenant_code = '' OR ip.tenant_code = @tenant_code)
+                            LIMIT 1";
+
+                        header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
+                            ipHeaderSql, 
+                            new { ipIdStr, ipNoStr, tenant_code = tenant_code ?? "" },
+                            commandTimeout: 120);
+                    }
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(activeBillGuid))
+                    {
+                        string opBillHeaderSql = @"
+                            SELECT 
+                                COALESCE(NULLIF(lrm.requestsnoprint, ''), NULLIF(lrm.requestsno::text, ''), NULLIF(op.op_no, ''), 'BILL-OP') AS BillNo,
+                                lrm.requestguid::text AS RequestGuid,
+                                COALESCE(lrm.requestdatetime, lrm.entereddate, op.visit_date, NOW()) AS BillDate,
+                                COALESCE(NULLIF(lrm.name, ''), NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                                COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(lrm.custid::text, ''), '') AS PatientId,
+                                CASE 
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agedays, ' D')
+                                    ELSE ''
+                                END AS Age,
+                                COALESCE(NULLIF(cm.gender, ''), NULLIF(lrm.gender, ''), '') AS Gender,
+                                CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
+                                COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), NULLIF(lrm.mobileno, ''), '') AS CusMobileNo,
+                                COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
+                                COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                                COALESCE(NULLIF(op.op_no, ''), op.op_id::text) AS AdmissionNo,
+                                NULL::timestamp AS AdmissionDate,
+                                NULL::timestamp AS DischargeDate,
+                                '-' AS BedNo,
+                                COALESCE(lrm.requestamount, lrm.totalamount, 0) AS TotalAmount,
+                                COALESCE(lrm.discountamount, 0) AS DiscountAmount,
+                                COALESCE(lrm.totalamount, 0) AS NetAmount,
+                                COALESCE(lrm.paidamount, 0) AS ReceivedAmount,
+                                COALESCE(lrm.totalamount, 0) - COALESCE(lrm.paidamount, 0) AS BalanceAmount,
+                                COALESCE(um.name, '') AS CreatedBy,
+                                COALESCE(lrm.entereddate, lrm.requestdatetime, NOW()) AS CreatedTime,
+                                COALESCE(lrm.tenant_code, op.tenant_code) AS TenantCode,
+                                COALESCE(lrm.alteredbhcode::int, lrm.enteredbhcode, 0) AS BhCode,
+                                COALESCE(lrm.custid, op.custid) AS CustId,
+                                '' AS IpId,
+                                op.op_id::text AS OutpatientId
+                            FROM lab_request_master lrm
+                            LEFT JOIN op_registration op ON (op.op_id::text = lrm.opvisitid OR op.op_no = lrm.opvisitid OR op.op_id::text = lrm.sheet_id OR op.op_id::text = @opIdStr OR op.op_no = @opNoStr)
+                            LEFT JOIN customerdb.customer_master cm ON (cm.custid = lrm.custid OR cm.custid = op.custid)
+                            LEFT JOIN doctor_master dm ON (dm.dcode = lrm.dcode OR dm.dcode = op.dcode)
+                            LEFT JOIN mastertenant.user_master um ON um.user_code = lrm.usercode
+                            WHERE lrm.requestguid::text = @activeBillGuid
+                            LIMIT 1";
+
+                        header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
+                            opBillHeaderSql, 
+                            new { activeBillGuid, opIdStr, opNoStr, tenant_code = tenant_code ?? "" },
+                            commandTimeout: 120);
+                    }
+
+                    if (header == null)
+                    {
+                        // OP Header directly from op_registration
+                        string opHeaderSql = @"
+                            SELECT 
+                                COALESCE(NULLIF(op.op_no, ''), 'BILL-OP') AS BillNo,
+                                op.op_id::text AS RequestGuid,
+                                COALESCE(op.visit_date, NOW()) AS BillDate,
+                                COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                                COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(op.custid::text, ''), '') AS PatientId,
+                                CASE 
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.ageyears, 0) > 0 
+                                        THEN CONCAT(cm.ageyears, ' Y')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
+                                    WHEN COALESCE(cm.agemonths, 0) > 0 
+                                        THEN CONCAT(cm.agemonths, ' M')
+                                    WHEN COALESCE(cm.agedays, 0) > 0 
+                                        THEN CONCAT(cm.agedays, ' D')
+                                    ELSE ''
+                                END AS Age,
+                                COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
+                                CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
+                                COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
+                                COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
+                                COALESCE(NULLIF(dm.doctorfullname, ''), NULLIF(dm.name, ''), 'SELF') AS DoctorName,
+                                COALESCE(NULLIF(op.op_no, ''), op.op_id::text) AS AdmissionNo,
+                                NULL::timestamp AS AdmissionDate,
+                                NULL::timestamp AS DischargeDate,
+                                '-' AS BedNo,
+                                0 AS TotalAmount,
+                                0 AS DiscountAmount,
+                                0 AS NetAmount,
+                                0 AS ReceivedAmount,
+                                0 AS BalanceAmount,
+                                '' AS CreatedBy,
+                                COALESCE(op.visit_date, NOW()) AS CreatedTime,
+                                op.tenant_code AS TenantCode,
+                                0 AS BhCode,
+                                op.custid AS CustId,
+                                '' AS IpId,
+                                op.op_id::text AS OutpatientId
+                            FROM op_registration op
+                            LEFT JOIN customerdb.customer_master cm ON cm.custid = op.custid
+                            LEFT JOIN doctor_master dm ON dm.dcode = op.dcode
+                            WHERE (op.op_id::text = @opIdStr OR LOWER(op.op_id::text) = LOWER(@opIdStr) OR op.op_no = @opIdStr OR op.op_no = @opNoStr)
+                              AND (COALESCE(@tenant_code, '') = '' OR op.tenant_code IS NULL OR op.tenant_code = '' OR op.tenant_code = @tenant_code)
+                            LIMIT 1";
+
+                        header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
+                            opHeaderSql, 
+                            new { opIdStr, opNoStr, tenant_code = tenant_code ?? "" },
+                            commandTimeout: 120);
+                    }
+                }
+
+                // Fallback direct check on customer_master if header is still null
+                if (header == null)
+                {
+                    string cmHeaderSql = @"
+                        SELECT 
+                            (CASE WHEN @isIp = true THEN 'BILL-IP' ELSE 'BILL-OP' END) AS BillNo,
+                            @requestGuid AS RequestGuid,
+                            NOW() AS BillDate,
+                            COALESCE(NULLIF(cm.name, ''), 'Patient') AS PatientName,
+                            COALESCE(NULLIF(cm.custcode::text, ''), NULLIF(cm.custid::text, ''), '') AS PatientId,
+                            CASE 
+                                WHEN COALESCE(cm.ageyears, 0) > 0 AND COALESCE(cm.agemonths, 0) > 0 
+                                    THEN CONCAT(cm.ageyears, ' Y ', cm.agemonths, ' M')
+                                WHEN COALESCE(cm.ageyears, 0) > 0 
+                                    THEN CONCAT(cm.ageyears, ' Y')
+                                WHEN COALESCE(cm.agemonths, 0) > 0 AND COALESCE(cm.agedays, 0) > 0 
+                                    THEN CONCAT(cm.agemonths, ' M ', cm.agedays, ' D')
+                                WHEN COALESCE(cm.agemonths, 0) > 0 
+                                    THEN CONCAT(cm.agemonths, ' M')
+                                WHEN COALESCE(cm.agedays, 0) > 0 
+                                    THEN CONCAT(cm.agedays, ' D')
+                                ELSE ''
+                            END AS Age,
+                            COALESCE(NULLIF(cm.gender, ''), '') AS Gender,
+                            CONCAT_WS(', ', NULLIF(cm.street, ''), NULLIF(cm.area, ''), NULLIF(cm.city, ''), NULLIF(cm.state, ''), NULLIF(cm.zipcode, '')) AS PatientAddress,
+                            COALESCE(NULLIF(cm.mobile, ''), NULLIF(cm.phone, ''), '') AS CusMobileNo,
+                            COALESCE(NULLIF(cm.careof, ''), '') AS CareOf,
+                            'SELF' AS DoctorName,
+                            (CASE WHEN @isIp = true THEN COALESCE(NULLIF(@ipNoStr, ''), @ipIdStr) ELSE COALESCE(NULLIF(@opNoStr, ''), @opIdStr) END) AS AdmissionNo,
+                            NULL::timestamp AS AdmissionDate,
+                            NULL::timestamp AS DischargeDate,
+                            '-' AS BedNo,
+                            0 AS TotalAmount,
+                            0 AS DiscountAmount,
+                            0 AS NetAmount,
+                            0 AS ReceivedAmount,
+                            0 AS BalanceAmount,
+                            '' AS CreatedBy,
+                            NOW() AS CreatedTime,
+                            @tenant_code AS TenantCode,
+                            0 AS BhCode,
+                            cm.custid AS CustId,
+                            (CASE WHEN @isIp = true THEN @ipIdStr ELSE '' END) AS IpId,
+                            (CASE WHEN @isIp = false THEN @opIdStr ELSE '' END) AS OutpatientId
+                        FROM customerdb.customer_master cm
+                        WHERE (cm.custcode::text = @requestGuid OR cm.custid::text = @requestGuid)
+                        LIMIT 1";
+
+                    header = await db.QueryFirstOrDefaultAsync<RawReportHeader>(
+                        cmHeaderSql, 
+                        new { isIp, requestGuid, ipIdStr, ipNoStr, opIdStr, opNoStr, tenant_code = tenant_code ?? "" },
+                        commandTimeout: 120);
+                }
+
+                if (header == null)
+                {
+                    header = new RawReportHeader
+                    {
+                        BillNo = isIp ? "BILL-IP" : "BILL-OP",
+                        RequestGuid = requestGuid,
+                        BillDate = DateTime.Now,
+                        PatientName = "Patient",
+                        PatientId = "",
+                        Age = "",
+                        Gender = "",
+                        PatientAddress = "",
+                        CusMobileNo = "",
+                        CareOf = "",
+                        DoctorName = "SELF",
+                        AdmissionNo = isIp ? (!string.IsNullOrEmpty(ipNoStr) ? ipNoStr : ipIdStr) : (!string.IsNullOrEmpty(opNoStr) ? opNoStr : opIdStr),
+                        AdmissionDate = null,
+                        DischargeDate = null,
+                        BedNo = "-",
+                        TotalAmount = 0m,
+                        DiscountAmount = 0m,
+                        NetAmount = 0m,
+                        ReceivedAmount = 0m,
+                        BalanceAmount = 0m,
+                        CreatedBy = "",
+                        CreatedTime = DateTime.Now,
+                        TenantCode = tenant_code ?? "",
+                        BhCode = 0,
+                        CustId = null,
+                        IpId = isIp ? ipIdStr : "",
+                        OutpatientId = isIp ? "" : opIdStr
+                    };
+                }
 
                 if (string.IsNullOrWhiteSpace(tenant_code))
-
                 {
-
                     tenant_code = (string)header.TenantCode ?? "";
-
                 }
 
-
-
                 // Fallback direct check on customer_master if Age or PatientAddress is missing
-
                 if (header.CustId.HasValue && header.CustId.Value > 0)
-
                 {
-
                     if (string.IsNullOrWhiteSpace(header.Age) || string.IsNullOrWhiteSpace(header.PatientAddress))
-
                     {
-
                         var custExtra = await db.QueryFirstOrDefaultAsync<dynamic>(
-
                             @"SELECT ageyears, agemonths, agedays, dateofbirth,
-
                                      CONCAT_WS(', ', NULLIF(street, ''), NULLIF(area, ''), NULLIF(city, ''), NULLIF(state, ''), NULLIF(zipcode, '')) AS address
-
                               FROM customerdb.customer_master 
-
                               WHERE custid = @c LIMIT 1",
-
                             new { c = (int)header.CustId.Value });
 
-
-
                         if (custExtra != null)
-
                         {
-
                             if (string.IsNullOrWhiteSpace(header.PatientAddress) && !string.IsNullOrWhiteSpace((string)custExtra.address))
-
                             {
-
                                 header.PatientAddress = (string)custExtra.address;
-
                             }
 
-
-
                             if (string.IsNullOrWhiteSpace(header.Age))
-
                             {
-
                                 int y = custExtra.ageyears != null ? Convert.ToInt32(custExtra.ageyears) : 0;
-
                                 int m = custExtra.agemonths != null ? Convert.ToInt32(custExtra.agemonths) : 0;
-
                                 int d = custExtra.agedays != null ? Convert.ToInt32(custExtra.agedays) : 0;
-
                                 if (y == 0 && custExtra.dateofbirth != null)
-
                                 {
-
                                     DateTime dob = Convert.ToDateTime(custExtra.dateofbirth);
-
                                     y = DateTime.Now.Year - dob.Year;
-
                                     if (DateTime.Now.DayOfYear < dob.DayOfYear) y--;
-
                                 }
 
                                 if (y > 0 && m > 0) header.Age = $"{y} Y {m} M";
-
                                 else if (y > 0) header.Age = $"{y} Y";
-
                                 else if (m > 0 && d > 0) header.Age = $"{m} M {d} D";
-
                                 else if (m > 0) header.Age = $"{m} M";
-
                                 else if (d > 0) header.Age = $"{d} D";
-
                             }
-
                         }
-
                     }
-
                 }
-
-
 
                 // Get company/tenant information
-
                 string companySql = @"
-
                     SELECT t.legal_name, 
-
                            bm.name AS branch_name,
-
                            t.address_line1,
-
                            t.address_line2,
-
                            t.city,
-
                            t.state,
-
                            t.pincode,
-
                            bm.address AS branch_address,
-
                            bm.city AS branch_city,
-
                            bm.pincode AS branch_pincode,
-
-                           bm.state AS branch_state,
-
-                           COALESCE(NULLIF(bm.mobile, ''), NULLIF(bm.phone, ''), NULLIF(t.contact_number, '')) AS contact_number,
-
-                           COALESCE(NULLIF(bm.email, ''), NULLIF(t.contact_email, '')) AS contact_email,
-
-                           COALESCE(NULLIF(bm.website, ''), NULLIF(t.host_url, '')) AS host_url
-
+                           bm.phone AS branch_mobile,
+                           t.contact_number AS company_mobile,
+                           t.contact_email AS email,
+                           bm.email AS branch_email
                     FROM mastertenant.tenants t
-
-                    LEFT JOIN mastertenant.branch_master bm ON bm.tenant_code = t.tenant_code AND (bm.bh_code = @bh OR @bh IS NULL)
-
-                    WHERE t.tenant_code = @tenant_code
-
+                    LEFT JOIN mastertenant.branch_master bm 
+                           ON bm.tenant_code = t.tenant_code 
+                          AND bm.bh_code = @bhCode
+                    WHERE t.tenant_code = @tenant_code 
                     LIMIT 1";
 
-
-
+                int headerBhCode = header.BhCode != null ? Convert.ToInt32(header.BhCode) : 0;
                 var company = await db.QueryFirstOrDefaultAsync<dynamic>(
-
                     companySql, 
-
-                    new { tenant_code, bh = header.BhCode > 0 ? (int?)header.BhCode : null });
-
-
+                    new { tenant_code, bhCode = headerBhCode },
+                    commandTimeout: 120);
 
                 string hospitalAddress = "";
-
+                if (company != null)
                 {
+                    string rawStreet = (string)(company.branch_address ?? company.address_line1 ?? "");
+                    string line2 = (string)(company.address_line2 ?? "");
+                    if (!string.IsNullOrWhiteSpace(line2))
+                    {
+                        rawStreet = !string.IsNullOrWhiteSpace(rawStreet) ? $"{rawStreet}, {line2}" : line2;
+                    }
+
+                    string city = (string)(company.branch_city ?? company.city ?? "");
+                    string state = (string)(company.state ?? "");
+                    string pin = (string)(company.branch_pincode ?? company.pincode ?? "");
 
                     var addrLines = new List<string>();
-
-                    string addr1 = (string)(company?.address_line1 ?? "");
-
-                    string addr2 = (string)(company?.address_line2 ?? "");
-
-                    string branchAddr = (string)(company?.branch_address ?? "");
-
-
-
-                    // Extract street / area parts
-
-                    var rawParts = new List<string>();
-
-                    if (!string.IsNullOrWhiteSpace(branchAddr))
-
-                    {
-
-                        rawParts.AddRange(branchAddr.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()));
-
-                    }
-
-                    else
-
-                    {
-
-                        if (!string.IsNullOrWhiteSpace(addr1)) rawParts.AddRange(addr1.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()));
-
-                        if (!string.IsNullOrWhiteSpace(addr2)) rawParts.AddRange(addr2.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(p => p.Trim()));
-
-                    }
-
-
-
-                    string city = ((string)(company?.city ?? company?.branch_city ?? "")).Trim();
-
-                    string state = ((string)(company?.state ?? company?.branch_state ?? "")).Trim();
-
-                    string pin = ((string)(company?.pincode ?? company?.branch_pincode ?? "")).Trim();
-
-
+                    var rawParts = rawStreet.Split(new[] { ',', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                                           .Select(p => p.Trim())
+                                           .Where(p => !string.IsNullOrWhiteSpace(p))
+                                           .ToList();
 
                     var cleanStreetParts = new List<string>();
-
                     foreach (var p in rawParts)
-
                     {
-
                         var item = p;
-
                         if (!string.IsNullOrEmpty(pin))
-
                         {
-
                             item = item.Replace(pin, "").Trim().Trim('-', ',');
-
                         }
-
                         if (!string.IsNullOrEmpty(city) && string.Equals(item, city, StringComparison.OrdinalIgnoreCase))
-
                         {
-
                             continue;
-
                         }
-
                         if (!string.IsNullOrWhiteSpace(item) && !cleanStreetParts.Contains(item, StringComparer.OrdinalIgnoreCase))
-
                         {
-
                             cleanStreetParts.Add(item);
-
                         }
-
                     }
-
-
 
                     if (cleanStreetParts.Count > 0)
-
                     {
-
                         addrLines.Add(string.Join(", ", cleanStreetParts));
-
                     }
-
-
 
                     var cityStateList = new List<string>();
-
                     if (!string.IsNullOrWhiteSpace(city)) cityStateList.Add(city);
-
                     if (!string.IsNullOrWhiteSpace(state)) cityStateList.Add(state);
-
                     string cityStateStr = string.Join(", ", cityStateList);
 
-
-
                     if (!string.IsNullOrWhiteSpace(pin))
-
                     {
-
                         cityStateStr = !string.IsNullOrWhiteSpace(cityStateStr) ? $"{cityStateStr} - {pin}" : pin;
-
                     }
-
-
 
                     if (!string.IsNullOrWhiteSpace(cityStateStr))
-
                     {
-
                         addrLines.Add(cityStateStr);
-
                     }
-
-
 
                     hospitalAddress = string.Join(Environment.NewLine, addrLines);
-
                 }
-
-
 
                 string rGuid = header.RequestGuid?.ToString() ?? requestGuid;
-
-                string ipIdStr = header.IpId?.ToString() ?? "";
-
-                string opIdStr = header.OutpatientId?.ToString() ?? "";
-
                 decimal custId = header.CustId ?? 0m;
-
                 DateTime? admitDate = header.AdmissionDate;
-
                 DateTime? dischargeDate = header.DischargeDate;
 
-
-
-                bool isIp = false;
-
-
-
-                // 1. Check IP registration
-
-                if (!string.IsNullOrEmpty(ipIdStr))
-
-                {
-
-                    isIp = true;
-
-                }
-
-                else
-
-                {
-
-                    var ipReg = await db.QueryFirstOrDefaultAsync<dynamic>(
-
-                        @"SELECT ip_id, ip_no, admitdate, dischargedate, bedcode, dcode, custid 
-
-                          FROM ip_registration 
-
-                          WHERE (ip_id::text = @requestGuid OR LOWER(ip_id::text) = LOWER(@requestGuid) OR ip_no = @requestGuid)
-
-                            AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                          LIMIT 1",
-
-                        new { requestGuid, tenant_code });
-
-                    if (ipReg != null)
-
-                    {
-
-                        isIp = true;
-
-                        ipIdStr = ipReg.ip_id.ToString();
-
-                        admitDate = ipReg.admitdate;
-
-                        dischargeDate = ipReg.dischargedate;
-
-                        if (custId == 0 && ipReg.custid != null) custId = (decimal)ipReg.custid;
-
-                        if (string.IsNullOrEmpty(header.AdmissionNo)) header.AdmissionNo = ipReg.ip_no?.ToString() ?? ipIdStr;
-
-                    }
-
-                }
-
-
-
-                // 2. Check OP registration if not IP
-
-                if (!isIp)
-
-                {
-
-                    var opReg = await db.QueryFirstOrDefaultAsync<dynamic>(
-
-                        @"SELECT op_id, op_no, visit_date, dcode, custid 
-
-                          FROM op_registration 
-
-                          WHERE (op_id::text = @requestGuid OR LOWER(op_id::text) = LOWER(@requestGuid) OR op_no = @requestGuid)
-
-                            AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                          LIMIT 1",
-
-                        new { requestGuid, tenant_code });
-
-                    if (opReg != null)
-
-                    {
-
-                        isIp = false;
-
-                        opIdStr = opReg.op_id.ToString();
-
-                        if (custId == 0 && opReg.custid != null) custId = (decimal)opReg.custid;
-
-                        if (string.IsNullOrEmpty(header.AdmissionNo)) header.AdmissionNo = opReg.op_no?.ToString() ?? opIdStr;
-
-                    }
-
-                    else if (!string.IsNullOrEmpty(opIdStr))
-
-                    {
-
-                        isIp = false;
-
-                    }
-
-                }
-
-
-
                 // Strict visit scoping:
-
                 if (isIp)
-
                 {
-
                     opIdStr = "";
-
+                    opNoStr = "";
                 }
-
                 else
-
                 {
-
                     ipIdStr = "";
-
+                    ipNoStr = "";
                     admitDate = null;
-
                     dischargeDate = null;
-
                     header.AdmissionDate = null;
-
                     header.DischargeDate = null;
-
                     header.BedNo = "-";
-
                 }
 
-
-
-                // Fetch candidate items strictly scoped to this IP stay or OP visit
 
                 var candidateItems = new List<RawCandidateBillItem>();
 
-
-
                 // 1. Line items from lab_request_details & lab_request_master
-
                 string lrdSql = @"
-
                     SELECT 
-
                         lrd.requestdetailsid::text AS Code,
-
                         COALESCE(tm.name, lrd.item_name, 'Service Charge') AS ItemName,
-
                         COALESCE(lrd.item_name, tm.name, '') AS Description,
-
                         CAST(COALESCE(NULLIF(lrd.qty, 0), 1) AS NUMERIC) AS Quantity,
-
                         COALESCE(NULLIF(lrd.testrate, 0), lrd.testamount, 0) AS UnitPrice,
-
                         COALESCE(lrd.testamount, 0) AS Amount,
-
                         COALESCE(lrm.requestdatetime, lrm.entereddate, NOW()) AS ServiceDate,
-
                         COALESCE(lrm.requestdatetime, lrm.entereddate, NOW()) AS DateTime,
-
                         COALESCE(lrd.ttid, 0) AS TtId,
-
                         COALESCE(lrd.chargetype, '') AS ChargeType
-
                     FROM lab_request_details lrd
-
                     INNER JOIN lab_request_master lrm ON lrm.requestguid::text = lrd.requestguid::text
-
                     LEFT JOIN test_master tm ON tm.tcode = lrd.tcode
-
                     WHERE (
-
-                        (@isIp = true AND (
-
-                            (COALESCE(@ipIdStr, '') <> '' AND lrm.ip_id::text = @ipIdStr)
-
-                            OR (lrm.requestguid::text = @rGuid OR LOWER(lrm.requestguid::text) = LOWER(@rGuid))
-
-                            OR (lrm.requestguid::text = @requestGuid OR LOWER(lrm.requestguid::text) = LOWER(@requestGuid))
-
-                        ))
-
-                        OR (@isIp = false AND (
-
-                            (COALESCE(@opIdStr, '') <> '' AND (lrm.opvisitid = @opIdStr OR lrm.sheet_id = @opIdStr))
-
-                            OR (lrm.requestguid::text = @rGuid OR LOWER(lrm.requestguid::text) = LOWER(@rGuid))
-
-                            OR (lrm.requestguid::text = @requestGuid OR LOWER(lrm.requestguid::text) = LOWER(@requestGuid))
-
-                        ) AND lrm.ip_id IS NULL)
-
+                        (COALESCE(@activeBillGuid, '') <> '' AND lrm.requestguid::text = @activeBillGuid)
+                        OR (
+                            COALESCE(@activeBillGuid, '') = '' AND (
+                                (@isIp = true AND lrm.ip_id IS NOT NULL AND (
+                                    (COALESCE(@ipIdStr, '') <> '' AND lrm.ip_id::text = @ipIdStr)
+                                    OR (COALESCE(@ipNoStr, '') <> '' AND lrm.ip_id::text = @ipNoStr)
+                                ))
+                                OR (@isIp = false AND lrm.ip_id IS NULL AND (
+                                    (COALESCE(@opIdStr, '') <> '' AND (lrm.opvisitid = @opIdStr OR lrm.sheet_id = @opIdStr))
+                                    OR (COALESCE(@opNoStr, '') <> '' AND (lrm.opvisitid = @opNoStr OR lrm.sheet_id = @opNoStr))
+                                    OR (COALESCE(@rGuid, '') <> '' AND (lrm.requestguid::text = @rGuid OR LOWER(lrm.requestguid::text) = LOWER(@rGuid)))
+                                ))
+                            )
+                        )
                     )
-
                     AND (COALESCE(@tenant_code, '') = '' OR lrd.tenant_code IS NULL OR lrd.tenant_code = '' OR lrd.tenant_code = @tenant_code)
-
                     AND COALESCE(lrd.isdeleted, false) = false
-
                     AND COALESCE(lrm.deleted, false) = false
-
-                    ORDER BY COALESCE(lrm.requestdatetime, lrm.entereddate, NOW()), lrd.testsno";
-
-
+                    ORDER BY lrd.testsno, COALESCE(lrm.requestdatetime, lrm.entereddate, NOW())";
 
                 var lrdList = (await db.QueryAsync<RawCandidateBillItem>(
-
                     lrdSql, 
-
-                    new { isIp, rGuid, requestGuid, ipIdStr, opIdStr, tenant_code }, 
-
+                    new { isIp, activeBillGuid, rGuid, requestGuid, ipIdStr, ipNoStr, opIdStr, opNoStr, tenant_code }, 
                     commandTimeout: 120)).ToList();
 
                 candidateItems.AddRange(lrdList);
 
-
-
-                // 2. Unbilled items from op_investigation_detail
-
-                try
-
+                // Unbilled items only when no finalized activeBillGuid exists
+                if (string.IsNullOrEmpty(activeBillGuid))
                 {
-
-                    string oidSql = @"
-
-                        SELECT 
-
-                            oid.inv_det_id::text AS Code,
-
-                            COALESCE(oid.test_name, 'Lab Test / Investigation') AS ItemName,
-
-                            COALESCE(oid.test_category, '') AS Description,
-
-                            CAST(COALESCE(oid.quantity, 1) AS NUMERIC) AS Quantity,
-
-                            COALESCE(oid.rate, 0) AS UnitPrice,
-
-                            COALESCE(oid.amount, COALESCE(oid.quantity, 1) * COALESCE(oid.rate, 0)) AS Amount,
-
-                            COALESCE(oim.created_at, NOW()) AS ServiceDate,
-
-                            COALESCE(oim.created_at, NOW()) AS DateTime,
-
-                            0 AS TtId,
-
-                            'INVESTIGATION' AS ChargeType
-
-                        FROM op_investigation_detail oid
-
-                        INNER JOIN op_investigation_master oim ON oim.inv_id = oid.inv_id
-
-                        LEFT JOIN op_case_sheet cs ON cs.sheet_id = oim.sheet_id
-
-                        WHERE (
-
-                            (@isIp = true AND (
-
-                                (COALESCE(@ipIdStr, '') <> '' AND (oim.ip_id::text = @ipIdStr OR cs.ip_id::text = @ipIdStr))
-
-                            ))
-
-                            OR (@isIp = false AND (
-
-                                (COALESCE(@opIdStr, '') <> '' AND (oim.sheet_id::text = @opIdStr OR oim.op_id::text = @opIdStr OR cs.op_id::text = @opIdStr OR cs.sheet_id::text = @opIdStr))
-
-                            ) AND oim.ip_id IS NULL AND cs.ip_id IS NULL)
-
-                        )
-
-                        AND (COALESCE(@tenant_code, '') = '' OR oid.tenant_code IS NULL OR oid.tenant_code = '' OR oid.tenant_code = @tenant_code)
-
-                        AND COALESCE(oid.isdeleted, false) = false
-
-                        AND COALESCE(oid.is_billed, false) = false";
-
-
-
-                    var oidList = (await db.QueryAsync<RawCandidateBillItem>(
-
-                        oidSql, 
-
-                        new { isIp, ipIdStr, opIdStr, tenant_code }, 
-
-                        commandTimeout: 120)).ToList();
-
-                    candidateItems.AddRange(oidList);
-
-                }
-
-                catch (Exception exOid)
-
-                {
-
-                    Console.WriteLine($"[ConsolidatedBill] Warning querying op_investigation_detail: {exOid.Message}");
-
-                }
-
-
-
-                // 3. Unbilled items from unbilledcharges (avoiding duplicate billed items)
-
-                try
-
-                {
-
-                    string ucSql = @"
-
-                        SELECT 
-
-                            uc.unbilledid AS Code,
-
-                            COALESCE(NULLIF(uc.particulars, ''), NULLIF(tm.name, ''), NULLIF(bm.bedname, ''), NULLIF(rm.name, ''), uc.entrytype, 'Hospital Service') AS ItemName,
-
-                            COALESCE(uc.particulars, bm.shortname, rm.name, '') AS Description,
-
-                            CAST(COALESCE(uc.quantity, 1) AS NUMERIC) AS Quantity,
-
-                            COALESCE(uc.rate, 0) AS UnitPrice,
-
-                            CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END AS Amount,
-
-                            COALESCE(uc.chargedate, NOW()) AS ServiceDate,
-
-                            COALESCE(uc.chargedate, NOW()) AS DateTime,
-
-                            0 AS TtId,
-
-                            COALESCE(uc.entrytype, '') AS ChargeType
-
-                        FROM unbilledcharges uc
-
-                        LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
-
-                        LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND rm.tenant_code = uc.tenant_code
-
-                        LEFT JOIN public.bed_master bm ON bm.bedcode = uc.bedcode AND bm.tenant_code = uc.tenant_code
-
-                        WHERE (
-
-                            (@isIp = true AND (COALESCE(@ipIdStr, '') <> '' AND uc.ip_id::text = @ipIdStr))
-
-                            OR (@isIp = false AND (COALESCE(@opIdStr, '') <> '' AND (uc.opvisitid = @opIdStr OR uc.entryid::text = @opIdStr)) AND uc.ip_id IS NULL)
-
-                        )
-
-                        AND (COALESCE(@tenant_code, '') = '' OR uc.tenant_code IS NULL OR uc.tenant_code = '' OR uc.tenant_code = @tenant_code)
-
-                        AND COALESCE(uc.billedstatus, false) = false";
-
-
-
-                    var ucList = (await db.QueryAsync<RawCandidateBillItem>(
-
-                        ucSql, 
-
-                        new { isIp, ipIdStr, opIdStr, tenant_code }, 
-
-                        commandTimeout: 120)).ToList();
-
-                    candidateItems.AddRange(ucList);
-
-                }
-
-                catch (Exception exUc)
-
-                {
-
-                    Console.WriteLine($"[ConsolidatedBill] Warning querying unbilledcharges: {exUc.Message}");
-
+                    // 2. Unbilled items from op_investigation_detail
+                    try
+                    {
+                        string oidSql = @"
+                            SELECT 
+                                oid.inv_det_id::text AS Code,
+                                COALESCE(oid.test_name, 'Lab Test / Investigation') AS ItemName,
+                                COALESCE(oid.test_category, '') AS Description,
+                                CAST(COALESCE(oid.quantity, 1) AS NUMERIC) AS Quantity,
+                                COALESCE(oid.rate, 0) AS UnitPrice,
+                                COALESCE(oid.amount, COALESCE(oid.quantity, 1) * COALESCE(oid.rate, 0)) AS Amount,
+                                COALESCE(oim.created_at, NOW()) AS ServiceDate,
+                                COALESCE(oim.created_at, NOW()) AS DateTime,
+                                0 AS TtId,
+                                'INVESTIGATION' AS ChargeType
+                            FROM op_investigation_detail oid
+                            INNER JOIN op_investigation_master oim ON oim.inv_id = oid.inv_id
+                            LEFT JOIN op_case_sheet cs ON cs.sheet_id = oim.sheet_id
+                            WHERE (
+                                (@isIp = true AND (
+                                    (COALESCE(@ipIdStr, '') <> '' AND (oim.ip_id::text = @ipIdStr OR cs.ip_id::text = @ipIdStr))
+                                    OR (COALESCE(@ipNoStr, '') <> '' AND (oim.ip_id::text = @ipNoStr OR cs.ip_id::text = @ipNoStr))
+                                ))
+                                OR (@isIp = false AND oim.ip_id IS NULL AND cs.ip_id IS NULL AND (
+                                    (COALESCE(@opIdStr, '') <> '' AND (oim.sheet_id::text = @opIdStr OR oim.op_id::text = @opIdStr OR cs.op_id::text = @opIdStr OR cs.sheet_id::text = @opIdStr))
+                                    OR (COALESCE(@opNoStr, '') <> '' AND (oim.sheet_id::text = @opNoStr OR oim.op_id::text = @opNoStr OR cs.op_id::text = @opNoStr OR cs.sheet_id::text = @opNoStr))
+                                ))
+                            )
+                            AND (COALESCE(@tenant_code, '') = '' OR oid.tenant_code IS NULL OR oid.tenant_code = '' OR oid.tenant_code = @tenant_code)
+                            AND COALESCE(oid.isdeleted, false) = false
+                            AND COALESCE(oid.is_billed, false) = false";
+
+                        var oidList = (await db.QueryAsync<RawCandidateBillItem>(
+                            oidSql, 
+                            new { isIp, ipIdStr, ipNoStr, opIdStr, opNoStr, tenant_code }, 
+                            commandTimeout: 120)).ToList();
+
+                        candidateItems.AddRange(oidList);
+                    }
+                    catch (Exception exOid)
+                    {
+                        Console.WriteLine($"[ConsolidatedBill] Warning querying op_investigation_detail: {exOid.Message}");
+                    }
+
+                    // 3. Unbilled items from unbilledcharges (avoiding duplicate billed items)
+                    try
+                    {
+                        string ucSql = @"
+                            SELECT 
+                                uc.unbilledid AS Code,
+                                COALESCE(NULLIF(uc.particulars, ''), NULLIF(tm.name, ''), NULLIF(bm.bedname, ''), NULLIF(rm.name, ''), uc.entrytype, 'Hospital Service') AS ItemName,
+                                COALESCE(uc.particulars, bm.shortname, rm.name, '') AS Description,
+                                CAST(COALESCE(uc.quantity, 1) AS NUMERIC) AS Quantity,
+                                COALESCE(uc.rate, 0) AS UnitPrice,
+                                CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END AS Amount,
+                                COALESCE(uc.chargedate, NOW()) AS ServiceDate,
+                                COALESCE(uc.chargedate, NOW()) AS DateTime,
+                                0 AS TtId,
+                                COALESCE(uc.entrytype, '') AS ChargeType
+                            FROM unbilledcharges uc
+                            LEFT JOIN test_master tm ON tm.tcode::text = uc.tcode::text
+                            LEFT JOIN public.roomtype_master rm ON rm.rmtcode = uc.tcode AND rm.tenant_code = uc.tenant_code
+                            LEFT JOIN public.bed_master bm ON bm.bedcode = uc.bedcode AND bm.tenant_code = uc.tenant_code
+                            WHERE (
+                                (@isIp = true AND (
+                                    (COALESCE(@ipIdStr, '') <> '' AND uc.ip_id::text = @ipIdStr)
+                                    OR (COALESCE(@ipNoStr, '') <> '' AND uc.ip_id::text = @ipNoStr)
+                                ))
+                                OR (@isIp = false AND uc.ip_id IS NULL AND (
+                                    (COALESCE(@opIdStr, '') <> '' AND (uc.opvisitid = @opIdStr OR uc.entryid::text = @opIdStr))
+                                    OR (COALESCE(@opNoStr, '') <> '' AND (uc.opvisitid = @opNoStr OR uc.entryid::text = @opNoStr))
+                                ))
+                            )
+                            AND (COALESCE(@tenant_code, '') = '' OR uc.tenant_code IS NULL OR uc.tenant_code = '' OR uc.tenant_code = @tenant_code)
+                            AND COALESCE(uc.billedstatus, false) = false";
+
+                        var ucList = (await db.QueryAsync<RawCandidateBillItem>(
+                            ucSql, 
+                            new { isIp, ipIdStr, ipNoStr, opIdStr, opNoStr, tenant_code }, 
+                            commandTimeout: 120)).ToList();
+
+                        candidateItems.AddRange(ucList);
+                    }
+                    catch (Exception exUc)
+                    {
+                        Console.WriteLine($"[ConsolidatedBill] Warning querying unbilledcharges: {exUc.Message}");
+                    }
                 }
 
 
@@ -12457,78 +11888,44 @@ WHERE lrd.requestguid::text = @requestguid::text
                 {
 
                     string medicinesSql = @"
-
                         SELECT 
-
                             ROW_NUMBER() OVER (ORDER BY opd.sno) AS SNo,
-
                             COALESCE(opd.drug_name, 'Medicine') AS ItemName,
-
                             CONCAT(
-
                                 COALESCE(opd.morning, '0'), '-',
-
                                 COALESCE(opd.afternoon, '0'), '-',
-
                                 COALESCE(opd.evening, '0'), '-',
-
                                 COALESCE(opd.night, '0'),
-
                                 ' for ', COALESCE(opd.days::text, '0'), ' days'
-
                             ) AS Description,
-
                             CAST(COALESCE(opd.qty, 0) AS NUMERIC) AS Quantity,
-
                             CAST(COALESCE(opd.qty, 0) AS NUMERIC) AS Units,
-
                             COALESCE(opd.rate, 0) AS Rate,
-
                             COALESCE(opd.rate, 0) AS UnitPrice,
-
                             COALESCE(opd.qty, 0) * COALESCE(opd.rate, 0) AS Amount,
-
                             COALESCE(opm.created_at, opd.created_at, NOW()) AS ServiceDate,
-
                             COALESCE(opm.created_at, opd.created_at, NOW()) AS DateTime
-
                         FROM op_prescription_detail opd
-
                         INNER JOIN op_prescription_master opm ON opm.pr_id = opd.pr_id
-
                         LEFT JOIN op_case_sheet cs ON cs.sheet_id = opm.sheet_id
-
                         WHERE (
-
                             (@isIp = true AND (
-
                                 (COALESCE(@ipIdStr, '') <> '' AND (opm.ip_id::text = @ipIdStr OR cs.ip_id::text = @ipIdStr))
-
+                                OR (COALESCE(@ipNoStr, '') <> '' AND (opm.ip_id::text = @ipNoStr OR cs.ip_id::text = @ipNoStr))
                             ))
-
-                            OR (@isIp = false AND (
-
+                            OR (@isIp = false AND opm.ip_id IS NULL AND cs.ip_id IS NULL AND (
                                 (COALESCE(@opIdStr, '') <> '' AND (opm.sheet_id::text = @opIdStr OR opm.op_id::text = @opIdStr OR cs.op_id::text = @opIdStr OR cs.sheet_id::text = @opIdStr))
-
-                            ) AND opm.ip_id IS NULL AND cs.ip_id IS NULL)
-
+                                OR (COALESCE(@opNoStr, '') <> '' AND (opm.sheet_id::text = @opNoStr OR opm.op_id::text = @opNoStr OR cs.op_id::text = @opNoStr OR cs.sheet_id::text = @opNoStr))
+                            ))
                         )
-
                         AND (COALESCE(@tenant_code, '') = '' OR opd.tenant_code IS NULL OR opd.tenant_code = '' OR opd.tenant_code = @tenant_code)
-
                         AND COALESCE(opd.isdeleted, false) = false
-
                         AND COALESCE(opd.is_billed, false) = false
-
                         ORDER BY opd.sno";
 
-
-
                     var medicineItems = (await db.QueryAsync<ConsolidatedBillItem>(
-
                         medicinesSql, 
-
-                        new { isIp, opIdStr, ipIdStr, tenant_code })).ToList();
+                        new { isIp, opIdStr, opNoStr, ipIdStr, ipNoStr, tenant_code })).ToList();
 
 
 
@@ -12704,361 +12101,246 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-                // Fetch actual paid amount from balancecollectionby strictly scoped to this visit/admission
-
-                string paidAmountSql = @"
-
-                    SELECT COALESCE(SUM(bcb.collectedamount), 0)
-
-                    FROM balancecollectionby bcb
-
-                    WHERE COALESCE(bcb.deleted, false) = false
-
-                      AND (
-
-                          (@isIp = true AND (
-
-                              (COALESCE(@ipIdStr, '') <> '' AND bcb.request_guid IN (
-
-                                  SELECT lrm2.requestguid::text
-
-                                  FROM lab_request_master lrm2
-
-                                  WHERE lrm2.ip_id::text = @ipIdStr AND COALESCE(lrm2.deleted, false) = false
-
+                // Fetch actual paid amount from balancecollectionby strictly scoped to this bill or visit
+                string paidAmountSql;
+                object paidParams;
+                if (!string.IsNullOrEmpty(activeBillGuid))
+                {
+                    paidAmountSql = @"
+                        SELECT COALESCE(SUM(bcb.collectedamount), 0)
+                        FROM balancecollectionby bcb
+                        WHERE COALESCE(bcb.deleted, false) = false
+                          AND (bcb.request_guid = @activeBillGuid OR bcb.requestguid = @activeBillGuid)
+                          AND (COALESCE(@tenant_code, '') = '' OR bcb.tenant_code IS NULL OR bcb.tenant_code = '' OR bcb.tenant_code = @tenant_code)";
+                    paidParams = new { activeBillGuid, tenant_code };
+                }
+                else
+                {
+                    paidAmountSql = @"
+                        SELECT COALESCE(SUM(bcb.collectedamount), 0)
+                        FROM balancecollectionby bcb
+                        WHERE COALESCE(bcb.deleted, false) = false
+                          AND (
+                              (@isIp = true AND (
+                                  (COALESCE(@ipIdStr, '') <> '' AND (
+                                      bcb.request_guid = @ipIdStr OR bcb.requestguid = @ipIdStr
+                                      OR bcb.request_guid = @ipNoStr OR bcb.requestguid = @ipNoStr
+                                  ))
                               ))
-
-                              OR (COALESCE(@ipIdStr, '') <> '' AND bcb.requestguid IN (
-
-                                  SELECT lrm2.requestguid::text
-
-                                  FROM lab_request_master lrm2
-
-                                  WHERE lrm2.ip_id::text = @ipIdStr AND COALESCE(lrm2.deleted, false) = false
-
+                              OR (@isIp = false AND (
+                                  (COALESCE(@opIdStr, '') <> '' AND (
+                                      bcb.request_guid = @opIdStr OR bcb.requestguid = @opIdStr
+                                      OR bcb.request_guid = @opNoStr OR bcb.requestguid = @opNoStr
+                                  ))
                               ))
+                          )
+                          AND (COALESCE(@tenant_code, '') = '' OR bcb.tenant_code IS NULL OR bcb.tenant_code = '' OR bcb.tenant_code = @tenant_code)";
+                    paidParams = new { isIp, ipIdStr, ipNoStr, opIdStr, opNoStr, tenant_code };
+                }
 
-                              OR (COALESCE(@rGuid, '') <> '' AND (LOWER(bcb.request_guid) = LOWER(@rGuid) OR LOWER(bcb.requestguid) = LOWER(@rGuid)))
-
-                          ))
-
-                          OR (@isIp = false AND (
-
-                              (COALESCE(@opIdStr, '') <> '' AND bcb.request_guid IN (
-
-                                  SELECT lrm2.requestguid::text
-
-                                  FROM lab_request_master lrm2
-
-                                  WHERE (lrm2.opvisitid = @opIdStr OR lrm2.sheet_id = @opIdStr) AND COALESCE(lrm2.deleted, false) = false
-
-                              ))
-
-                              OR (COALESCE(@opIdStr, '') <> '' AND bcb.requestguid IN (
-
-                                  SELECT lrm2.requestguid::text
-
-                                  FROM lab_request_master lrm2
-
-                                  WHERE (lrm2.opvisitid = @opIdStr OR lrm2.sheet_id = @opIdStr) AND COALESCE(lrm2.deleted, false) = false
-
-                              ))
-
-                              OR (COALESCE(@rGuid, '') <> '' AND (LOWER(bcb.request_guid) = LOWER(@rGuid) OR LOWER(bcb.requestguid) = LOWER(@rGuid)))
-
-                          ))
-
-                      )
-
-                      AND (COALESCE(@tenant_code, '') = '' OR bcb.tenant_code IS NULL OR bcb.tenant_code = '' OR bcb.tenant_code = @tenant_code)";
-
-
-
-                var bcbPaidObj = await db.ExecuteScalarAsync<object?>(
-
-                    paidAmountSql,
-
-                    new { isIp, rGuid, requestGuid, ipIdStr, opIdStr, tenant_code });
-
+                var bcbPaidObj = await db.ExecuteScalarAsync<object?>(paidAmountSql, paidParams);
                 decimal bcbPaid = bcbPaidObj != null ? Convert.ToDecimal(bcbPaidObj) : 0m;
 
-
-
                 decimal rawPaidHeader = header.ReceivedAmount != null ? Convert.ToDecimal(header.ReceivedAmount) : 0m;
-
                 decimal rawPaid = bcbPaid > 0m ? bcbPaid : rawPaidHeader;
-
-                decimal finalBalance = finalNet - rawPaid;
-
+                decimal finalBalance = Math.Max(0m, finalNet - rawPaid);
 
 
-                // Query Advances strictly scoped to this visit/stay
 
+                // Query Advances & Payments strictly scoped to this bill/visit
                 var advancesList = new List<ConsolidatedBillAdvanceRow>();
-
                 if (custId > 0)
-
                 {
-
                     try
-
                     {
+                        string advancesSql;
+                        object advParams;
 
-                        string advancesSql = @"
-
-                            SELECT 
-
-                                rm.receiptsnoprint AS ReceiptNo,
-
-                                rm.receiptdate AS Date,
-
-                                COALESCE(
-
-                                    (
-
-                                        SELECT bcb.collection_type 
-
-                                        FROM balancecollectionby bcb 
-
-                                        WHERE bcb.receipt_guid = rm.receiptguid 
-
-                                          AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
-
-                                          AND COALESCE(bcb.deleted, false) = false
-
-                                        LIMIT 1
-
-                                    ),
-
-                                    'Cash'
-
-                                ) AS PaymentMode,
-
-                                'Advance Deposit' AS Particulars,
-
-                                COALESCE((
-
-                                    SELECT SUM(ra.receiptamount)
-
-                                    FROM receipt_advances ra
-
-                                    WHERE ra.receiptguid = rm.receiptguid 
-
-                                      AND ra.requestguid IS NULL
-
-                                      AND COALESCE(ra.deleted, false) = false
-
-                                ), rm.amountpaid) AS DepositAmount,
-
-                                COALESCE((
-
-                                    SELECT SUM(ra.receiptamount)
-
-                                    FROM receipt_advances ra
-
-                                    WHERE ra.receiptguid = rm.receiptguid 
-
-                                      AND ra.requestguid IN (
-
-                                          SELECT lrm_sub.requestguid::text 
-
-                                          FROM lab_request_master lrm_sub 
-
-                                          WHERE (
-
-                                              (@isIp = true AND (
-
-                                                  (COALESCE(@ipIdStr, '') <> '' AND lrm_sub.ip_id::text = @ipIdStr)
-
-                                                  OR (COALESCE(@rGuid, '') <> '' AND (LOWER(lrm_sub.requestguid::text) = LOWER(@rGuid) OR LOWER(lrm_sub.ip_id::text) = LOWER(@rGuid)))
-
-                                              ))
-
-                                              OR (@isIp = false AND (
-
-                                                  (COALESCE(@opIdStr, '') <> '' AND (lrm_sub.opvisitid = @opIdStr OR lrm_sub.sheet_id = @opIdStr))
-
-                                                  OR (COALESCE(@rGuid, '') <> '' AND LOWER(lrm_sub.requestguid::text) = LOWER(@rGuid))
-
-                                              ))
-
-                                          )
-
-                                          AND COALESCE(lrm_sub.deleted, false) = false
-
+                        if (!string.IsNullOrEmpty(activeBillGuid))
+                        {
+                            advancesSql = @"
+                                SELECT 
+                                    rm.receiptsnoprint AS ReceiptNo,
+                                    rm.receiptdate AS Date,
+                                    COALESCE(
+                                        (
+                                            SELECT bcb.collection_type 
+                                            FROM balancecollectionby bcb 
+                                            WHERE bcb.receipt_guid = rm.receiptguid 
+                                              AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
+                                              AND COALESCE(bcb.deleted, false) = false
+                                            LIMIT 1
+                                        ),
+                                        'Cash'
+                                    ) AS PaymentMode,
+                                    'Advance Deposit' AS Particulars,
+                                    rm.amountpaid AS DepositAmount,
+                                    COALESCE(
+                                        (
+                                            SELECT SUM(ra.receiptamount)
+                                            FROM receipt_advances ra
+                                            WHERE ra.receiptguid = rm.receiptguid 
+                                              AND ra.requestguid::text = @activeBillGuid
+                                              AND COALESCE(ra.deleted, false) = false
+                                        ),
+                                        (
+                                            SELECT SUM(bcb.collectedamount)
+                                            FROM balancecollectionby bcb
+                                            WHERE bcb.receipt_guid = rm.receiptguid
+                                              AND bcb.request_guid = @activeBillGuid
+                                              AND bcb.collection_type = 'ADVANCE'
+                                              AND COALESCE(bcb.deleted, false) = false
+                                        ),
+                                        0
+                                    ) AS AdjustedAmount,
+                                    0.0 AS RefundAmount,
+                                    'DEPOSIT' AS Type,
+                                    rm.amountpaid AS Amount,
+                                    COALESCE(rm.receipttype, rm.remarks, '') AS Description
+                                FROM receipt_master rm
+                                WHERE rm.custid = @custId
+                                  AND (COALESCE(@tenant_code, '') = '' OR rm.tenant_code = @tenant_code)
+                                  AND rm.receipttype = 'ADVANCE'
+                                  AND COALESCE(rm.isdeleted, false) = false
+                                  AND (
+                                      rm.receiptguid IN (
+                                          SELECT ra.receiptguid FROM receipt_advances ra 
+                                          WHERE ra.requestguid::text = @activeBillGuid AND COALESCE(ra.deleted, false) = false
                                       )
+                                      OR rm.receiptguid IN (
+                                          SELECT bcb.receipt_guid FROM balancecollectionby bcb 
+                                          WHERE bcb.request_guid = @activeBillGuid AND bcb.collection_type = 'ADVANCE' AND COALESCE(bcb.deleted, false) = false
+                                      )
+                                  )
 
-                                      AND COALESCE(ra.deleted, false) = false
+                                UNION ALL
 
-                                ), 0) AS AdjustedAmount,
+                                SELECT 
+                                    rm.receiptsnoprint AS ReceiptNo,
+                                    rm.receiptdate AS Date,
+                                    COALESCE(bcb.collection_type, rm.receipttype, 'Cash') AS PaymentMode,
+                                    'Bill Payment' AS Particulars,
+                                    0.0 AS DepositAmount,
+                                    CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS AdjustedAmount,
+                                    0.0 AS RefundAmount,
+                                    'PAYMENT' AS Type,
+                                    CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS Amount,
+                                    COALESCE(bcb.collection_type, rm.receipttype, '') AS Description
+                                FROM balancecollectionby bcb
+                                INNER JOIN receipt_master rm
+                                        ON rm.receiptguid  = bcb.receipt_guid
+                                WHERE (COALESCE(@tenant_code, '') = '' OR bcb.tenant_code = @tenant_code)
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND COALESCE(rm.isdeleted, false) = false
+                                  AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
+                                  AND (bcb.request_guid = @activeBillGuid OR bcb.requestguid = @activeBillGuid)
 
-                                COALESCE((
+                                ORDER BY Date ASC";
 
-                                    SELECT SUM(ra.receiptamount)
-
-                                    FROM receipt_advances ra
-
-                                    LEFT JOIN receipt_master rref ON rref.receiptguid = ra.requestguid
-
-                                    WHERE ra.receiptguid = rm.receiptguid 
-
-                                      AND (rref.receipttype = 'ADVANCE_REFUND' OR COALESCE(rref.isrefund, false) = true)
-
-                                      AND COALESCE(ra.deleted, false) = false
-
-                                ), 0) AS RefundAmount,
-
-                                'DEPOSIT' AS Type,
-
-                                COALESCE((
-
-                                    SELECT SUM(ra.receiptamount)
-
-                                    FROM receipt_advances ra
-
-                                    WHERE ra.receiptguid = rm.receiptguid 
-
-                                      AND ra.requestguid IS NULL
-
-                                      AND COALESCE(ra.deleted, false) = false
-
-                                ), rm.amountpaid) AS Amount,
-
-                                COALESCE(rm.receipttype, rm.remarks, '') AS Description
-
-                            FROM receipt_master rm
-
-                            WHERE rm.custid      = @custId
-
-                              AND rm.tenant_code = @tenant_code
-
-                              AND rm.receipttype = 'ADVANCE'
-
-                              AND COALESCE(rm.isdeleted, false) = false
-
-                              AND (
-
-                                  (@isIp = true AND (
-
-                                      (@admitDate IS NOT NULL AND rm.receiptdate >= @admitDate AND (@dischargeDate IS NULL OR rm.receiptdate <= @dischargeDate))
-
-                                      OR rm.opvisitid IS NULL OR rm.opvisitid = ''
-
-                                  ))
-
-                                  OR (@isIp = false AND (COALESCE(@opIdStr, '') <> '' AND rm.opvisitid = @opIdStr))
-
-                              )
-
-
-
-                            UNION ALL
-
-
-
-                            SELECT 
-
-                                rm.receiptsnoprint AS ReceiptNo,
-
-                                rm.receiptdate AS Date,
-
-                                COALESCE(bcb.collection_type, rm.receipttype, 'Cash') AS PaymentMode,
-
-                                'Bill Payment' AS Particulars,
-
-                                0.0 AS DepositAmount,
-
-                                CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS AdjustedAmount,
-
-                                0.0 AS RefundAmount,
-
-                                'PAYMENT' AS Type,
-
-                                CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS Amount,
-
-                                COALESCE(bcb.collection_type, rm.receipttype, '') AS Description
-
-                            FROM balancecollectionby bcb
-
-                            INNER JOIN receipt_master rm
-
-                                    ON rm.receiptguid  = bcb.receipt_guid
-
-                                   AND rm.tenant_code  = bcb.tenant_code
-
-                            WHERE bcb.tenant_code = @tenant_code
-
-                              AND COALESCE(bcb.deleted, false) = false
-
-                              AND COALESCE(rm.isdeleted, false) = false
-
-                              AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
-
-                              AND (
-
-                                  (@isIp = true AND (
-
-                                      (COALESCE(@ipIdStr, '') <> '' AND bcb.request_guid IN (
-
-                                          SELECT lrm2.requestguid::text
-
-                                          FROM lab_request_master lrm2
-
-                                          WHERE lrm2.ip_id::text = @ipIdStr AND COALESCE(lrm2.deleted, false) = false
-
+                            advParams = new { activeBillGuid, custId = (int)custId, tenant_code };
+                        }
+                        else
+                        {
+                            advancesSql = @"
+                                SELECT 
+                                    rm.receiptsnoprint AS ReceiptNo,
+                                    rm.receiptdate AS Date,
+                                    COALESCE(
+                                        (
+                                            SELECT bcb.collection_type 
+                                            FROM balancecollectionby bcb 
+                                            WHERE bcb.receipt_guid = rm.receiptguid 
+                                              AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
+                                              AND COALESCE(bcb.deleted, false) = false
+                                            LIMIT 1
+                                        ),
+                                        'Cash'
+                                    ) AS PaymentMode,
+                                    'Advance Deposit' AS Particulars,
+                                    COALESCE((
+                                        SELECT SUM(ra.receiptamount)
+                                        FROM receipt_advances ra
+                                        WHERE ra.receiptguid = rm.receiptguid 
+                                          AND ra.requestguid IS NULL
+                                          AND COALESCE(ra.deleted, false) = false
+                                    ), rm.amountpaid) AS DepositAmount,
+                                    0.0 AS AdjustedAmount,
+                                    COALESCE((
+                                        SELECT SUM(ra.receiptamount)
+                                        FROM receipt_advances ra
+                                        LEFT JOIN receipt_master rref ON rref.receiptguid = ra.requestguid
+                                        WHERE ra.receiptguid = rm.receiptguid 
+                                          AND (rref.receipttype = 'ADVANCE_REFUND' OR COALESCE(rref.isrefund, false) = true)
+                                          AND COALESCE(ra.deleted, false) = false
+                                    ), 0) AS RefundAmount,
+                                    'DEPOSIT' AS Type,
+                                    rm.amountpaid AS Amount,
+                                    COALESCE(rm.receipttype, rm.remarks, '') AS Description
+                                FROM receipt_master rm
+                                WHERE rm.custid      = @custId
+                                  AND (COALESCE(@tenant_code, '') = '' OR rm.tenant_code = @tenant_code)
+                                  AND rm.receipttype = 'ADVANCE'
+                                  AND COALESCE(rm.isdeleted, false) = false
+                                  AND (
+                                      (@isIp = true AND (
+                                          (COALESCE(@ipIdStr, '') <> '' AND (rm.opvisitid = @ipIdStr OR rm.opvisitid = @ipNoStr))
+                                          OR
+                                          (COALESCE(@ipIdStr, '') <> '' AND @admitDate IS NOT NULL 
+                                           AND rm.receiptdate >= @admitDate 
+                                           AND (@dischargeDate IS NULL OR rm.receiptdate <= @dischargeDate)
+                                           AND (rm.opvisitid IS NULL OR rm.opvisitid = '' OR rm.opvisitid = @ipIdStr OR rm.opvisitid = @ipNoStr))
                                       ))
-
-                                      OR (COALESCE(@ipIdStr, '') <> '' AND bcb.requestguid IN (
-
-                                          SELECT lrm2.requestguid::text
-
-                                          FROM lab_request_master lrm2
-
-                                          WHERE lrm2.ip_id::text = @ipIdStr AND COALESCE(lrm2.deleted, false) = false
-
+                                      OR (@isIp = false AND (
+                                          COALESCE(@opIdStr, '') <> '' AND (rm.opvisitid = @opIdStr OR rm.opvisitid = @opNoStr)
                                       ))
+                                  )
 
-                                      OR (COALESCE(@rGuid, '') <> '' AND (LOWER(bcb.request_guid) = LOWER(@rGuid) OR LOWER(bcb.requestguid) = LOWER(@rGuid)))
+                                UNION ALL
 
-                                  ))
-
-                                  OR (@isIp = false AND (
-
-                                      (COALESCE(@opIdStr, '') <> '' AND bcb.request_guid IN (
-
-                                          SELECT lrm2.requestguid::text
-
-                                          FROM lab_request_master lrm2
-
-                                          WHERE (lrm2.opvisitid = @opIdStr OR lrm2.sheet_id = @opIdStr) AND COALESCE(lrm2.deleted, false) = false
-
+                                SELECT 
+                                    rm.receiptsnoprint AS ReceiptNo,
+                                    rm.receiptdate AS Date,
+                                    COALESCE(bcb.collection_type, rm.receipttype, 'Cash') AS PaymentMode,
+                                    'Bill Payment' AS Particulars,
+                                    0.0 AS DepositAmount,
+                                    CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS AdjustedAmount,
+                                    0.0 AS RefundAmount,
+                                    'PAYMENT' AS Type,
+                                    CAST(COALESCE(bcb.collectedamount, 0) AS DECIMAL) AS Amount,
+                                    COALESCE(bcb.collection_type, rm.receipttype, '') AS Description
+                                FROM balancecollectionby bcb
+                                INNER JOIN receipt_master rm
+                                        ON rm.receiptguid  = bcb.receipt_guid
+                                WHERE (COALESCE(@tenant_code, '') = '' OR bcb.tenant_code = @tenant_code)
+                                  AND COALESCE(bcb.deleted, false) = false
+                                  AND COALESCE(rm.isdeleted, false) = false
+                                  AND bcb.collection_type NOT IN ('ADVANCE', 'ADVANCE_ADJUSTED')
+                                  AND (
+                                      (@isIp = true AND (
+                                          (COALESCE(@ipIdStr, '') <> '' AND (
+                                              bcb.request_guid = @ipIdStr
+                                              OR bcb.requestguid = @ipIdStr
+                                              OR bcb.request_guid = @ipNoStr
+                                              OR bcb.requestguid = @ipNoStr
+                                          ))
                                       ))
-
-                                      OR (COALESCE(@opIdStr, '') <> '' AND bcb.requestguid IN (
-
-                                          SELECT lrm2.requestguid::text
-
-                                          FROM lab_request_master lrm2
-
-                                          WHERE (lrm2.opvisitid = @opIdStr OR lrm2.sheet_id = @opIdStr) AND COALESCE(lrm2.deleted, false) = false
-
+                                      OR (@isIp = false AND (
+                                          (COALESCE(@opIdStr, '') <> '' AND (
+                                              bcb.request_guid = @opIdStr
+                                              OR bcb.requestguid = @opIdStr
+                                              OR bcb.request_guid = @opNoStr
+                                              OR bcb.requestguid = @opNoStr
+                                          ))
                                       ))
+                                  )
+                                ORDER BY Date ASC";
 
-                                      OR (COALESCE(@rGuid, '') <> '' AND (LOWER(bcb.request_guid) = LOWER(@rGuid) OR LOWER(bcb.requestguid) = LOWER(@rGuid)))
-
-                                  ))
-
-                              )
-
-                            ORDER BY Date ASC";
-
-
+                            advParams = new { isIp, custId = (int)custId, tenant_code, ipIdStr, ipNoStr, opIdStr, opNoStr, admitDate, dischargeDate };
+                        }
 
                         var advRows = await db.QueryAsync<ConsolidatedBillAdvanceRow>(
-
                             advancesSql,
-
-                            new { isIp, custId = (int)custId, tenant_code, rGuid, requestGuid, ipIdStr, opIdStr, admitDate, dischargeDate });
+                            advParams);
 
                         
 
@@ -13246,220 +12528,141 @@ WHERE lrd.requestguid::text = @requestguid::text
         /// </summary>
 
         public async Task<string> ConsolidatedBillPDF(
-
             Guid requestguid, 
-
             bool includeMedicines, 
-
             string tenant_code, 
-
             bool? isletterhead = false,
-
             Guid? op_id = null,
-
-            string? viewType = null)
-
+            string? viewType = null,
+            Guid? ip_id = null,
+            bool? is_ip = null)
         {
-
             try
-
             {
-
                 using IDbConnection db = new NpgsqlConnection(_conn);
 
+                string requestguidStr = (requestguid != Guid.Empty ? requestguid : (ip_id ?? op_id ?? Guid.Empty)).ToString();
+                bool? explicitIsIp = is_ip;
+                string? explicitOpId = (op_id.HasValue && op_id.Value != Guid.Empty) ? op_id.Value.ToString() : null;
+                string? explicitIpId = (ip_id.HasValue && ip_id.Value != Guid.Empty) ? ip_id.Value.ToString() : null;
 
-
-                // Resolve the ID to use: op_id (explicit OP), ip_id (IP patient), or requestguid fallback
-
-                string resolvedIpId = requestguid.ToString();
-
-
-
-                // If op_id is explicitly provided, skip resolution and use it directly
-
-                if (op_id.HasValue && op_id.Value != Guid.Empty)
-
+                if (explicitOpId != null)
                 {
-
-                    resolvedIpId = op_id.Value.ToString();
-
+                    explicitIsIp = false;
+                }
+                else if (explicitIpId != null)
+                {
+                    explicitIsIp = true;
                 }
 
-                else
-
+                // If mode is not explicitly given, accurately determine if requestguid belongs to IP or OP
+                if (!explicitIsIp.HasValue)
                 {
-
-                    // 1. Try to resolve from lab_request_master (IP path)
-
+                    // 1. Try to match as IP registration directly
                     string resolveIpSql = @"
-
                         SELECT ip_id::text 
-
-                        FROM lab_request_master 
-
-                        WHERE (requestguid::text = @requestguidStr) 
-
+                        FROM ip_registration 
+                        WHERE (LOWER(ip_id::text) = LOWER(@requestguidStr) OR ip_no = @requestguidStr)
                           AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                          AND ip_id IS NOT NULL 
-
                         LIMIT 1";
-
-                    string ipIdStr = await db.QueryFirstOrDefaultAsync<string>(resolveIpSql, new { requestguidStr = requestguid.ToString(), tenant_code });
-
-                    if (!string.IsNullOrEmpty(ipIdStr))
-
+                    string? ipIdFromReg = await db.QueryFirstOrDefaultAsync<string>(resolveIpSql, new { requestguidStr, tenant_code });
+                    if (!string.IsNullOrEmpty(ipIdFromReg))
                     {
-
-                        resolvedIpId = ipIdStr;
-
+                        explicitIsIp = true;
+                        explicitIpId = ipIdFromReg;
                     }
-
-                    else
-
-                    {
-
-                        // 2. Try to resolve from op_case_sheet (IP path via sheet)
-
-                        string resolveIpFromSheetSql = @"
-
-                            SELECT ip_id::text 
-
-                            FROM op_case_sheet 
-
-                            WHERE (sheet_id::text = @requestguidStr)
-
-                              AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                              AND ip_id IS NOT NULL 
-
-                            LIMIT 1";
-
-                        string ipIdFromSheet = await db.QueryFirstOrDefaultAsync<string>(resolveIpFromSheetSql, new { requestguidStr = requestguid.ToString(), tenant_code });
-
-                        if (!string.IsNullOrEmpty(ipIdFromSheet))
-
-                        {
-
-                            resolvedIpId = ipIdFromSheet;
-
-                        }
-
-                        else
-
-                        {
-
-                            // 3. Try to resolve as OP registration directly (OP patient path)
-
-                            string resolveOpSql = @"
-
-                                SELECT op_id::text 
-
-                                FROM op_registration 
-
-                                WHERE (LOWER(op_id::text) = LOWER(@requestguidStr) OR op_no = @requestguidStr)
-
-                                  AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                                LIMIT 1";
-
-                            string opIdFromReg = await db.QueryFirstOrDefaultAsync<string>(resolveOpSql, new { requestguidStr = requestguid.ToString(), tenant_code });
-
-                            if (!string.IsNullOrEmpty(opIdFromReg))
-
-                            {
-
-                                resolvedIpId = opIdFromReg;
-
-                            }
-
-                            else
-
-                            {
-
-                                // 4. Try to resolve op_id from lab_request_master (OP path via opvisitid/sheet_id)
-
-                                string resolveOpFromLrmSql = @"
-
-                                    SELECT COALESCE(NULLIF(opvisitid, ''), NULLIF(sheet_id, '')) AS op_id_str
-
-                                    FROM lab_request_master 
-
-                                    WHERE (requestguid::text = @requestguidStr) 
-
-                                      AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
-
-                                      AND ip_id IS NULL
-
-                                      AND (opvisitid IS NOT NULL OR sheet_id IS NOT NULL)
-
-                                    LIMIT 1";
-
-                                string opIdFromLrm = await db.QueryFirstOrDefaultAsync<string>(resolveOpFromLrmSql, new { requestguidStr = requestguid.ToString(), tenant_code });
-
-                                if (!string.IsNullOrEmpty(opIdFromLrm))
-
-                                {
-
-                                    resolvedIpId = opIdFromLrm;
-
-                                }
-
-                            }
-
-                        }
-
-                    }
-
                 }
 
+                if (!explicitIsIp.HasValue)
+                {
+                    // 2. Try to match as OP registration directly
+                    string resolveOpSql = @"
+                        SELECT op_id::text 
+                        FROM op_registration 
+                        WHERE (LOWER(op_id::text) = LOWER(@requestguidStr) OR op_no = @requestguidStr)
+                          AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                        LIMIT 1";
+                    string? opIdFromReg = await db.QueryFirstOrDefaultAsync<string>(resolveOpSql, new { requestguidStr, tenant_code });
+                    if (!string.IsNullOrEmpty(opIdFromReg))
+                    {
+                        explicitIsIp = false;
+                        explicitOpId = opIdFromReg;
+                    }
+                }
 
+                if (!explicitIsIp.HasValue)
+                {
+                    // 3. Try to check lab_request_master
+                    string resolveLrmSql = @"
+                        SELECT ip_id::text AS ipId, COALESCE(NULLIF(opvisitid, ''), NULLIF(sheet_id, '')) AS opId
+                        FROM lab_request_master 
+                        WHERE (requestguid::text = @requestguidStr OR LOWER(requestguid::text) = LOWER(@requestguidStr)) 
+                          AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                        LIMIT 1";
+                    var lrmRow = await db.QueryFirstOrDefaultAsync<dynamic>(resolveLrmSql, new { requestguidStr, tenant_code });
+                    if (lrmRow != null)
+                    {
+                        string? ipFromLrm = (string?)lrmRow.ipid;
+                        string? opFromLrm = (string?)lrmRow.opid;
+                        if (!string.IsNullOrEmpty(ipFromLrm))
+                        {
+                            explicitIsIp = true;
+                            explicitIpId = ipFromLrm;
+                        }
+                        else
+                        {
+                            explicitIsIp = false;
+                            if (!string.IsNullOrEmpty(opFromLrm)) explicitOpId = opFromLrm;
+                        }
+                    }
+                }
 
+                if (!explicitIsIp.HasValue)
+                {
+                    // 4. Try to check op_case_sheet (OP path)
+                    string resolveSheetSql = @"
+                        SELECT COALESCE(NULLIF(op_id::text, ''), sheet_id::text) AS opId
+                        FROM op_case_sheet 
+                        WHERE (sheet_id::text = @requestguidStr)
+                          AND (COALESCE(@tenant_code, '') = '' OR tenant_code = @tenant_code)
+                        LIMIT 1";
+                    string? sheetOpId = await db.QueryFirstOrDefaultAsync<string>(resolveSheetSql, new { requestguidStr, tenant_code });
+                    if (!string.IsNullOrEmpty(sheetOpId))
+                    {
+                        explicitIsIp = false;
+                        explicitOpId = sheetOpId;
+                    }
+                }
 
+                string resolvedTargetId = requestguidStr;
 
                 // Verify bill data exists
-
                 var billData = await GetConsolidatedBillDataAsync(
-
-                    resolvedIpId.ToString(), 
-
+                    resolvedTargetId, 
                     includeMedicines, 
-
-                    tenant_code);
-
-
+                    tenant_code,
+                    explicitIsIp,
+                    explicitOpId,
+                    explicitIpId);
 
                 if (billData == null)
-
                     throw new Exception("Consolidated bill data not found");
 
-
-
                 // Fetch lab settings for header/footer images
-
                 var lsConfig = await db.QueryFirstOrDefaultAsync<LabSettingModel.lab_settings>(
-
                     @"SELECT * FROM lab_settings 
-
                       WHERE tenant_code = @tenant_code 
-
                         AND COALESCE(deleted, false) = false 
-
                       ORDER BY bh_code 
-
                       LIMIT 1",
-
                     new { tenant_code });
 
                 // Set BillFormat from lab_settings (defaults to "BOTH")
                 string billFormat = lsConfig?.ip_consolidated_bill_format ?? "BOTH";
                 billData.BillFormat = billFormat;
 
-
-
                 // Determine whether bill is IP or OP
-
-                bool isIp = billData.AdmissionDate.HasValue || (!string.IsNullOrWhiteSpace(billData.BedNo) && billData.BedNo != "-");
+                bool isIp = explicitIsIp ?? (billData.AdmissionDate.HasValue || (!string.IsNullOrWhiteSpace(billData.BedNo) && billData.BedNo != "-"));
 
 
 
@@ -13581,7 +12784,7 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                 {
 
-                    RequestGuid = resolvedIpId.ToString(),
+                    RequestGuid = resolvedTargetId,
 
                     TenantId = tenant_code,
 
