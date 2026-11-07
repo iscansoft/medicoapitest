@@ -768,5 +768,39 @@ namespace medico_backend.Controllers
                 return StatusCode(500, new { success = false, message = ex.Message });
             }
         }
-}
+
+        // POST /api/HmsDueCollection/advance/revert-used
+        [HttpPost("advance/revert-used")]
+        public async Task<IActionResult> RevertUsedAdvance([FromBody] HmsAdvanceRevertRequest req)
+        {
+            try
+            {
+                var (status, data) = await _service.RevertUsedAdvance(req, ResolveTenantCode());
+                if (status != "SUCCESS") return BadRequest(new { success = false, message = status });
+                return Ok(new { success = true, message = "Used advance reverted to wallet and collected via selected paymode.", data });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error reverting used advance for bill={rg}", req?.requestguid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+
+        // GET /api/HmsDueCollection/advance/used/{requestguid}
+        [HttpGet("advance/used/{requestguid}")]
+        public async Task<IActionResult> GetBillAdvanceUsage(string requestguid)
+        {
+            try
+            {
+                var (status, data) = await _service.GetBillAdvanceUsage(requestguid, ResolveTenantCode());
+                if (status != "SUCCESS") return BadRequest(new { success = false, message = status });
+                return Ok(new { success = true, data });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error fetching advance usage for bill={rg}", requestguid);
+                return StatusCode(500, new { success = false, message = ex.Message });
+            }
+        }
+    }
 }

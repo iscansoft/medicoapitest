@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -735,6 +735,17 @@ namespace medico_backend.Model
         public string? concessionreason { get; set; }
         public string? card_refno { get; set; }
         public string? bank_app { get; set; }
+
+        // ── Optional: revert advance that was used on this bill into a paymode ──
+        public bool? revert_all_advance { get; set; }        // true = revert everything used
+        public double? revert_advance_amount { get; set; }   // or a specific amount
+        public decimal? revert_pmcode { get; set; }          // paymode_master.pmcode (required when reverting)
+        public string? revert_reference_no { get; set; }
+        public string? revert_bank_name { get; set; }
+        public string? revert_card_no { get; set; }
+        public DateTime? revert_cheque_date { get; set; }
+        public string? revert_reason { get; set; }
+
         public List<HmsBillLineItemDto> items { get; set; } = new();
     }
 
@@ -767,6 +778,10 @@ namespace medico_backend.Model
         public double? pmc1_amount { get; set; }
         public double? pmc2_amount { get; set; }
         public double? pmc3_amount { get; set; }
+        public double? advance_reverted_amount { get; set; }
+        public string? revert_receipt_guid { get; set; }
+        public string? revert_receipt_no { get; set; }
+        public double? advance_balance_after { get; set; }
         public List<HmsBillLineResponse> items { get; set; } = new();
     }
     public class AutoBillOpRequest
