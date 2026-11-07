@@ -3191,6 +3191,9 @@ WHERE stockcode=@stockcode;";
             if (request?.master == null || request.master.salescode == 0)
                 return "salescode is required";
 
+            if (request.details == null || request.details.Count == 0)
+                return "At least one item is required";
+
             using (var conn = new NpgsqlConnection(con))
             {
                 await conn.OpenAsync();
@@ -3198,73 +3201,91 @@ WHERE stockcode=@stockcode;";
                 {
                     try
                     {
+                        string tenantcode = request.master.tenantcode!;
+
+                        // 1. Update master
                         string updateMaster = @"
-                    UPDATE sales_master SET
-                        billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
-                        invoicedate=@invoicedate, customercode=@customercode,
-                        salestype=@salestype, warehousefield=@warehousefield,
-                        patientid=@patientid, patientname=@patientname,
-                        mobileno=@mobileno,
-                        address=@address, consultant=@consultant,
-                        prescribeddays=@prescribeddays,   
-                        converteddays=@converteddays,     
-                        grossamount=@grossamount,discountpercentage=@discountpercentage, discountamount=@discountamount,
-                        taxamount=@taxamount,roundoff=@roundoff, netamount=@netamount,
-                        paymentmode=@paymentmode, paymentstatus=@paymentstatus,
-                        currencycode=@currencycode, remarks=@remarks,
-                        modifieddate=NOW(), usercode=@usercode,
-                        branchcode=@branchcode, companycode=@companycode,
-                        ordercode=@ordercode,cntcode=@cntcode,
-                        bh_code=@bh_code
-                    WHERE salescode = @salescode
-                      AND tenantcode = @tenantcode
-                      AND deleted = false";
+            UPDATE sales_master SET
+                billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
+                invoicedate=@invoicedate, customercode=@customercode,
+                salestype=@salestype, warehousefield=@warehousefield,
+                patientid=@patientid, patientname=@patientname,
+                mobileno=@mobileno,
+                address=@address, consultant=@consultant,
+                prescribeddays=@prescribeddays,
+                converteddays=@converteddays,
+                grossamount=@grossamount,discountpercentage=@discountpercentage, discountamount=@discountamount,
+                taxamount=@taxamount,roundoff=@roundoff, netamount=@netamount,
+                paymentmode=@paymentmode, paymentstatus=@paymentstatus,
+                currencycode=@currencycode, remarks=@remarks,
+                modifieddate=NOW(), usercode=@usercode,
+                branchcode=@branchcode, companycode=@companycode,
+                ordercode=@ordercode,cntcode=@cntcode,
+                bh_code=@bh_code
+            WHERE salescode = @salescode
+              AND tenantcode = @tenantcode
+              AND deleted = false";
 
                         int masterRows = await conn.ExecuteAsync(updateMaster, request.master, trans);
 
-                        // STOP here if master didn't match — don't touch details
                         if (masterRows == 0)
                         {
                             await trans.RollbackAsync();
                             return $"Sales record not found (salescode={request.master.salescode}, tenantcode={request.master.tenantcode})";
                         }
 
+                        // 2. Read OLD details and give their stock back
+                        var oldDetails = (await conn.QueryAsync<sales_detail>(@"
+            SELECT * FROM sales_detail
+            WHERE salescode = @salescode AND tenantcode = @tenantcode;",
+                            new { request.master.salescode, tenantcode }, trans)).ToList();
+
+                        await ReverseSalesStock(conn, trans, oldDetails, tenantcode);
+
+                        // 3. Delete old details
                         await conn.ExecuteAsync(
                             "DELETE FROM sales_detail WHERE salescode=@salescode AND tenantcode=@tenantcode",
-                            new { request.master.salescode, request.master.tenantcode },
-                            trans);
+                            new { request.master.salescode, tenantcode }, trans);
 
-                        // Do NOT pass salesdetailcode — let identity generate it
+                        // 4. Insert NEW details and deduct stock
                         string detailQuery = @"
-                    INSERT INTO sales_detail
-                    (
-                        salescode, itemcode, quantity,
-                        freequantity, uomcode, rate,
-                        discountpercentage, discountamount,
-                        taxpercentage, taxamount,
-                        amount, totalamount, batchno,
-                        manufacturingdate, expirydate,
-                        soldqty, days,returnedqty, warehousecode,
-                        tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
-                    )
-                    VALUES
-                    (
-                        @salescode, @itemcode, @quantity,
-                        @freequantity, @uomcode, @rate,
-                        @discountpercentage, @discountamount,
-                        @taxpercentage, @taxamount,
-                        @amount, @totalamount, @batchno,
-                        @manufacturingdate, @expirydate,
-                        @soldqty, @days,@returnedqty, @warehousecode,
-                        @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
-                    )";
+            INSERT INTO sales_detail
+            (
+                salescode, itemcode, quantity,
+                freequantity, uomcode, rate,
+                discountpercentage, discountamount,
+                taxpercentage, taxamount,
+                amount, totalamount, batchno,
+                manufacturingdate, expirydate,
+                soldqty, days,returnedqty, warehousecode,
+                tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
+            )
+            VALUES
+            (
+                @salescode, @itemcode, @quantity,
+                @freequantity, @uomcode, @rate,
+                @discountpercentage, @discountamount,
+                @taxpercentage, @taxamount,
+                @amount, @totalamount, @batchno,
+                @manufacturingdate, @expirydate,
+                @soldqty, @days,@returnedqty, @warehousecode,
+                @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
+            )";
 
                         foreach (var item in request.details)
                         {
                             item.salescode = request.master.salescode;
-                            item.tenantcode = request.master.tenantcode;
+                            item.tenantcode = tenantcode;
+                            item.batchno = NormBatch(item.batchno);
+
                             await conn.ExecuteAsync(detailQuery, item, trans);
+                            await ApplySalesStock(conn, trans, item, tenantcode);
                         }
+
+                        // 5. Refresh item master price for every touched item
+                        foreach (var itemcode in oldDetails.Select(d => d.itemcode)
+                                                 .Concat(request.details.Select(d => d.itemcode)).Distinct())
+                            await RefreshItemMasterPrice(conn, trans, itemcode, tenantcode);
 
                         await trans.CommitAsync();
                         return "Sales Updated Successfully";
@@ -3311,19 +3332,43 @@ WHERE stockcode=@stockcode;";
                 using var trans = await conn.BeginTransactionAsync();
                 try
                 {
+                    // Lock only a NOT-yet-deleted sale (prevents restoring stock twice)
+                    var existing = await conn.ExecuteScalarAsync<long?>(@"
+        SELECT salescode FROM sales_master
+        WHERE salescode = @salescode AND tenantcode = @tenantcode AND deleted = false
+        FOR UPDATE;",
+                        new { salescode, tenantcode }, trans);
+
+                    if (existing == null)
+                    {
+                        await trans.RollbackAsync();
+                        return "Sales record not found or already deleted";
+                    }
+
+                    // Give sold quantity back to stock
+                    var details = (await conn.QueryAsync<sales_detail>(@"
+        SELECT * FROM sales_detail
+        WHERE salescode = @salescode AND tenantcode = @tenantcode;",
+                        new { salescode, tenantcode }, trans)).ToList();
+
+                    await ReverseSalesStock(conn, trans, details, tenantcode);
+
                     await conn.ExecuteAsync(@"
-                UPDATE sales_master
-                SET deleted = true, isactive = false, modifieddate = NOW()
-                WHERE salescode = @salescode AND tenantcode = @tenantcode",
+        UPDATE sales_master
+        SET deleted = true, isactive = false, modifieddate = NOW()
+        WHERE salescode = @salescode AND tenantcode = @tenantcode",
                         new { salescode, tenantcode }, trans);
 
                     // release pharmacy queue rows linked to this sale
                     await conn.ExecuteAsync(@"
-                UPDATE pharmacy_prescription_queue
-                SET billed_status = false, billno = NULL, salescode = NULL,
-                    billed_date = NULL, updated_at = NOW()
-                WHERE salescode = @salescode AND tenant_code = @tenantcode;",
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = false, billno = NULL, salescode = NULL,
+            billed_date = NULL, updated_at = NOW()
+        WHERE salescode = @salescode AND tenant_code = @tenantcode;",
                         new { salescode, tenantcode }, trans);
+
+                    foreach (var itemcode in details.Select(d => d.itemcode).Distinct())
+                        await RefreshItemMasterPrice(conn, trans, itemcode, tenantcode);
 
                     await trans.CommitAsync();
                     return "Sales Deleted Successfully";
@@ -4435,8 +4480,8 @@ AND tenantcode = @tenantcode;";
             );
         }
         public async Task<long> InsertStockTransfer(
-stock_transfer_request request,
-string tenantcode)
+    stock_transfer_request request,
+    string tenantcode)
         {
             using var conn = new NpgsqlConnection(con);
             await conn.OpenAsync();
@@ -4444,71 +4489,48 @@ string tenantcode)
 
             try
             {
-                // ----------------------------------------------------
-                // Serialize concurrent inserts for the same tenant so
-                // the indentcode MAX()+1 calculation below doesn't race.
-                // ----------------------------------------------------
-
+                // Serialize concurrent inserts for the same tenant
                 await conn.ExecuteAsync(
                     "SELECT pg_advisory_xact_lock(hashtext(@lockkey));",
                     new { lockkey = "STOCKTRANSFER_" + tenantcode },
                     transaction);
 
-                // ----------------------------------------------------
-                // Compute indentcode BEFORE the insert — the column is
-                // NOT NULL, so it must be supplied in the INSERT itself,
-                // not patched in afterwards.
-                // ----------------------------------------------------
-
                 long indentcode = await conn.ExecuteScalarAsync<long>(
-                    @"
-            SELECT COALESCE(MAX(indentcode), 0) + 1
-            FROM stock_transfer_master
-            WHERE tenantcode = @tenantcode
-            ",
-                    new { tenantcode },
-                    transaction);
+                    @"SELECT COALESCE(MAX(indentcode), 0) + 1
+              FROM stock_transfer_master
+              WHERE tenantcode = @tenantcode",
+                    new { tenantcode }, transaction);
 
-                // ----------------------------------------------------
-                // Insert Master — let the IDENTITY column generate
-                // transfercode, but supply indentcode up front.
-                // ----------------------------------------------------
+                // ── TENANT-WISE issue stock number: TRF-000001, TRF-000002 ... per tenant ──
+                long nextSeq = await conn.ExecuteScalarAsync<long>(
+                    @"SELECT COALESCE(MAX(CAST(SUBSTRING(transferno FROM 5) AS bigint)), 0) + 1
+              FROM stock_transfer_master
+              WHERE tenantcode = @tenantcode
+                AND transferno ~ '^TRF-[0-9]+$'",
+                    new { tenantcode }, transaction);
+
+                string transferno = $"TRF-{nextSeq:D6}";
 
                 long transfercode = await conn.ExecuteScalarAsync<long>(
                     @"
             INSERT INTO stock_transfer_master
             (
-                transferdate,
-                transfertype,
-                fromwarehousecode,
-                towarehousecode,
-                branchcode,
-                reason,
-                remarks,
-                status,
-                createdby,
-                createddate,
-                tenantcode,
-                indentcode
+                transferno, transferdate, transfertype,
+                fromwarehousecode, towarehousecode, branchcode,
+                reason, remarks, status,
+                createdby, createddate, tenantcode, indentcode
             )
             VALUES
             (
-                @transferdate,
-                @transfertype,
-                @fromwarehousecode,
-                @towarehousecode,
-                @branchcode,
-                @reason,
-                @remarks,
-                'PENDING',
-                @createdby,
-                CURRENT_TIMESTAMP,
-                @tenantcode,
-                @indentcode
+                @transferno, @transferdate, @transfertype,
+                @fromwarehousecode, @towarehousecode, @branchcode,
+                @reason, @remarks, 'PENDING',
+                @createdby, CURRENT_TIMESTAMP, @tenantcode, @indentcode
             )
             RETURNING transfercode;",
                     new
                     {
+                        transferno,
                         transferdate = request.master.transferdate,
                         transfertype = request.master.transfertype,
                         fromwarehousecode = request.master.fromwarehousecode,
@@ -4522,47 +4544,22 @@ string tenantcode)
                     },
                     transaction);
 
-                // ----------------------------------------------------
-                // Now that we have the real transfercode, build the
-                // human-readable transferno and store it.
-                // ----------------------------------------------------
-
-                string transferno = $"TRF-{transfercode:D6}";
-
-                await conn.ExecuteAsync(
-                    @"
-            UPDATE stock_transfer_master
-            SET transferno = @transferno
-            WHERE transfercode = @transfercode
-              AND tenantcode = @tenantcode;",
-                    new { transferno, transfercode, tenantcode },
-                    transaction);
-
-                // ----------------------------------------------------
-                // Insert Details — let the IDENTITY column generate
-                // transferdetailcode. No manual MAX()+1 needed.
-                // ----------------------------------------------------
-
                 foreach (var detail in request.details)
                 {
                     if (detail.transferqty <= 0)
-                    {
-                        throw new Exception(
-                            $"Transfer quantity must be greater than zero for Item {detail.itemcode}");
-                    }
+                        throw new Exception($"Transfer quantity must be greater than zero for Item {detail.itemcode}");
 
                     var sourceStock = await conn.QueryFirstOrDefaultAsync<stock_master>(
                         @"
-        SELECT *
-        FROM stock_master
-        WHERE warehousecode = @warehousecode
-          AND itemcode = @itemcode
-          AND batchno = @batchno
-          AND tenantcode = @tenantcode
-          AND deleted = false
-          AND isactive = true
-        FOR UPDATE
-        ",
+                SELECT *
+                FROM stock_master
+                WHERE warehousecode = @warehousecode
+                  AND itemcode = @itemcode
+                  AND batchno = @batchno
+                  AND tenantcode = @tenantcode
+                  AND deleted = false
+                  AND isactive = true
+                FOR UPDATE",
                         new
                         {
                             warehousecode = request.master.fromwarehousecode,
@@ -4573,36 +4570,31 @@ string tenantcode)
                         transaction);
 
                     if (sourceStock == null)
-                    {
                         throw new Exception(
                             $"Stock not found. Warehouse: {request.master.fromwarehousecode}, " +
                             $"Item: {detail.itemcode}, Batch: {detail.batchno}");
-                    }
 
                     if (sourceStock.closingstock < detail.transferqty)
-                    {
                         throw new Exception(
                             $"Insufficient stock for Item {detail.itemcode}, Batch {detail.batchno}. " +
                             $"Available: {sourceStock.closingstock}, Transfer: {detail.transferqty}");
-                    }
 
                     await conn.ExecuteAsync(
                         @"
-        INSERT INTO stock_transfer_detail
-        (
-            transfercode, itemcode, batchno,
-            manufacturingdate, expirydate, uomcode,
-            availableqty, requestedqty, approvedqty, transferqty,
-            unitcost, stockvalue, remarks, tenantcode
-        )
-        VALUES
-        (
-            @transfercode, @itemcode, @batchno,
-            @manufacturingdate, @expirydate, @uomcode,
-            @availableqty, @requestedqty, 0, @transferqty,
-            @unitcost, @stockvalue, @remarks, @tenantcode
-        )
-        ",
+                INSERT INTO stock_transfer_detail
+                (
+                    transfercode, itemcode, batchno,
+                    manufacturingdate, expirydate, uomcode,
+                    availableqty, requestedqty, approvedqty, transferqty,
+                    unitcost, stockvalue, remarks, tenantcode
+                )
+                VALUES
+                (
+                    @transfercode, @itemcode, @batchno,
+                    @manufacturingdate, @expirydate, @uomcode,
+                    @availableqty, @requestedqty, 0, @transferqty,
+                    @unitcost, @stockvalue, @remarks, @tenantcode
+                )",
                         new
                         {
                             transfercode,
@@ -9711,6 +9703,287 @@ AND deleted = false;";
             WHERE transfercode = @transfercode
               AND tenantcode = @tenantcode;",
                     new { usercode, reason, transfercode, tenantcode }, transaction);
+
+                await transaction.CommitAsync();
+                return true;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+        // ─── SALES STOCK HELPERS (used by UpdateSales / DeleteSales) ─────────────────────
+
+        // Give the OLD sold quantity back to stock (net of anything already returned via sales return)
+        private async Task ReverseSalesStock(IDbConnection db, IDbTransaction tx,
+            IEnumerable<sales_detail> oldDetails, string tenantcode)
+        {
+            foreach (var old in oldDetails)
+            {
+                decimal qty = old.quantity - old.returnedqty;   // returned qty was already added back by sales return
+                if (qty <= 0) continue;
+
+                int rows = await db.ExecuteAsync(@"
+            UPDATE stock_master
+            SET soldqty      = GREATEST(COALESCE(soldqty,0) - @qty, 0),
+                closingstock = COALESCE(closingstock,0) + @qty,
+                stockvalue   = (COALESCE(closingstock,0) + @qty) * unitcost,
+                modifieddate = CURRENT_TIMESTAMP
+            WHERE stockcode = (
+                SELECT stockcode FROM stock_master
+                WHERE itemcode = @itemcode
+                  AND warehousecode = @warehousecode
+                  AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+                  AND tenantcode = @tenantcode
+                ORDER BY stockcode
+                LIMIT 1
+                FOR UPDATE
+            );",
+                    new
+                    {
+                        qty,
+                        old.itemcode,
+                        old.warehousecode,
+                        batchno = NormBatch(old.batchno),
+                        tenantcode
+                    }, tx);
+
+                if (rows == 0)
+                    throw new Exception(
+                        $"Stock row not found to restore item {old.itemcode}, batch {(string.IsNullOrEmpty(old.batchno) ? "(none)" : old.batchno)}");
+            }
+        }
+
+        // Deduct NEW sold quantity from stock (same validation as InsertSales)
+        private async Task ApplySalesStock(IDbConnection db, IDbTransaction tx,
+            sales_detail item, string tenantcode)
+        {
+            decimal qty = item.quantity - item.returnedqty;
+            if (qty <= 0) return;
+
+            var stock = await db.QueryFirstOrDefaultAsync(@"
+        SELECT stockcode, closingstock, mrpunit
+        FROM stock_master
+        WHERE itemcode = @itemcode
+          AND warehousecode = @warehousecode
+          AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+          AND tenantcode = @tenantcode
+        ORDER BY stockcode
+        LIMIT 1
+        FOR UPDATE;",
+                new { item.itemcode, item.warehousecode, batchno = item.batchno, tenantcode }, tx);
+
+            if (stock == null)
+                throw new Exception(string.IsNullOrEmpty(item.batchno)
+                    ? $"Stock not found for Item : {item.itemcode} (no batch)"
+                    : $"Stock not found for Item : {item.itemcode}, Batch : {item.batchno}");
+
+            decimal closingStock = stock.closingstock;
+            if (closingStock < qty)
+                throw new Exception($"Insufficient stock for Item : {item.itemcode}. Available: {closingStock}, Required: {qty}");
+
+            decimal batchMrp = (decimal)(stock.mrpunit ?? 0m);
+            if (batchMrp > 0 && item.rate > batchMrp + 0.01m)
+                throw new Exception($"Rate {item.rate} is higher than batch MRP {batchMrp} for Item : {item.itemcode}, Batch : {item.batchno}");
+
+            await db.ExecuteAsync(@"
+        UPDATE stock_master
+        SET soldqty      = COALESCE(soldqty,0) + @qty,
+            closingstock = COALESCE(closingstock,0) - @qty,
+            stockvalue   = (COALESCE(closingstock,0) - @qty) * unitcost,
+            modifieddate = CURRENT_TIMESTAMP
+        WHERE stockcode = @stockcode;",
+                new { qty, stockcode = (long)stock.stockcode }, tx);
+        }
+        // ============================================================
+        // EDIT ISSUE STOCK (stock transfer)
+        // PENDING     -> just replace details (no stock moved yet)
+        // IN_TRANSIT  -> old qty returned to source, new qty deducted from source
+        // others      -> not editable (use reverse)
+        // transferno / status are NOT changed.
+        // ============================================================
+        public async Task<bool> EditIssueStock(stock_transfer_request request, string tenantcode)
+        {
+            using var conn = new NpgsqlConnection(con);
+            await conn.OpenAsync();
+            using var transaction = await conn.BeginTransactionAsync();
+
+            try
+            {
+                long transfercode = request.master.transfercode;
+
+                var master = await conn.QueryFirstOrDefaultAsync<stock_transfer_master>(@"
+            SELECT * FROM stock_transfer_master
+            WHERE transfercode = @transfercode AND tenantcode = @tenantcode
+            FOR UPDATE;",
+                    new { transfercode, tenantcode }, transaction);
+
+                if (master == null) return false;
+
+                string status = master.status ?? "";
+                if (status != "PENDING" && status != "IN_TRANSIT")
+                    throw new Exception(
+                        $"Issue stock cannot be edited because current status is {status}. Reverse it first.");
+
+                if (request.master.fromwarehousecode == null || request.master.towarehousecode == null)
+                    throw new Exception("Source and destination warehouse are required.");
+
+                if (request.master.fromwarehousecode == request.master.towarehousecode)
+                    throw new Exception("Source and destination warehouse cannot be the same.");
+
+                if (request.details == null || request.details.Count == 0)
+                    throw new Exception("At least one item is required.");
+
+                // ── 1. IN_TRANSIT: give OLD quantities back to the OLD source warehouse ──
+                var oldDetails = (await conn.QueryAsync<stock_transfer_detail>(@"
+            SELECT * FROM stock_transfer_detail
+            WHERE transfercode = @transfercode AND tenantcode = @tenantcode;",
+                    new { transfercode, tenantcode }, transaction)).ToList();
+
+                if (status == "IN_TRANSIT")
+                {
+                    foreach (var od in oldDetails)
+                    {
+                        int rows = await conn.ExecuteAsync(@"
+                    UPDATE stock_master
+                    SET closingstock = closingstock + @qty,
+                        stockvalue   = (closingstock + @qty) * unitcost,
+                        modifieddate = CURRENT_TIMESTAMP
+                    WHERE stockcode = (
+                        SELECT stockcode FROM stock_master
+                        WHERE warehousecode = @wh
+                          AND itemcode = @itemcode
+                          AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+                          AND tenantcode = @tenantcode
+                          AND deleted = false
+                        ORDER BY stockcode
+                        LIMIT 1
+                        FOR UPDATE
+                    );",
+                            new
+                            {
+                                qty = od.transferqty,
+                                wh = master.fromwarehousecode,
+                                od.itemcode,
+                                od.batchno,
+                                tenantcode
+                            }, transaction);
+
+                        if (rows == 0)
+                            throw new Exception($"Source stock not found to restore. Item: {od.itemcode}, Batch: {od.batchno}");
+                    }
+                }
+
+                // ── 2. Update master (transferno / status stay as they are) ──
+                await conn.ExecuteAsync(@"
+            UPDATE stock_transfer_master
+            SET transferdate      = @transferdate,
+                transfertype      = @transfertype,
+                fromwarehousecode = @fromwarehousecode,
+                towarehousecode   = @towarehousecode,
+                branchcode        = @branchcode,
+                reason            = @reason,
+                remarks           = @remarks
+            WHERE transfercode = @transfercode AND tenantcode = @tenantcode;",
+                    new
+                    {
+                        transfercode,
+                        request.master.transferdate,
+                        request.master.transfertype,
+                        request.master.fromwarehousecode,
+                        request.master.towarehousecode,
+                        request.master.branchcode,
+                        request.master.reason,
+                        request.master.remarks,
+                        tenantcode
+                    }, transaction);
+
+                // ── 3. Replace details ──
+                await conn.ExecuteAsync(@"
+            DELETE FROM stock_transfer_detail
+            WHERE transfercode = @transfercode AND tenantcode = @tenantcode;",
+                    new { transfercode, tenantcode }, transaction);
+
+                foreach (var detail in request.details)
+                {
+                    if (detail.transferqty <= 0)
+                        throw new Exception($"Transfer quantity must be greater than zero for Item {detail.itemcode}");
+
+                    var sourceStock = await conn.QueryFirstOrDefaultAsync<stock_master>(@"
+                SELECT * FROM stock_master
+                WHERE warehousecode = @wh
+                  AND itemcode = @itemcode
+                  AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+                  AND tenantcode = @tenantcode
+                  AND deleted = false
+                  AND isactive = true
+                ORDER BY stockcode
+                LIMIT 1
+                FOR UPDATE;",
+                        new
+                        {
+                            wh = request.master.fromwarehousecode,
+                            detail.itemcode,
+                            detail.batchno,
+                            tenantcode
+                        }, transaction);
+
+                    if (sourceStock == null)
+                        throw new Exception(
+                            $"Stock not found. Warehouse: {request.master.fromwarehousecode}, Item: {detail.itemcode}, Batch: {detail.batchno}");
+
+                    if (sourceStock.closingstock < detail.transferqty)
+                        throw new Exception(
+                            $"Insufficient stock for Item {detail.itemcode}, Batch {detail.batchno}. " +
+                            $"Available: {sourceStock.closingstock}, Transfer: {detail.transferqty}");
+
+                    await conn.ExecuteAsync(@"
+                INSERT INTO stock_transfer_detail
+                (
+                    transfercode, itemcode, batchno,
+                    manufacturingdate, expirydate, uomcode,
+                    availableqty, requestedqty, approvedqty, transferqty,
+                    unitcost, stockvalue, remarks, tenantcode
+                )
+                VALUES
+                (
+                    @transfercode, @itemcode, @batchno,
+                    @manufacturingdate, @expirydate, @uomcode,
+                    @availableqty, @requestedqty, 0, @transferqty,
+                    @unitcost, @stockvalue, @remarks, @tenantcode
+                );",
+                        new
+                        {
+                            transfercode,
+                            detail.itemcode,
+                            detail.batchno,
+                            detail.manufacturingdate,
+                            detail.expirydate,
+                            detail.uomcode,
+                            availableqty = sourceStock.closingstock,
+                            detail.requestedqty,
+                            detail.transferqty,
+                            detail.unitcost,
+                            stockvalue = detail.transferqty * detail.unitcost,
+                            detail.remarks,
+                            tenantcode
+                        }, transaction);
+
+                    // ── 4. IN_TRANSIT: deduct NEW quantity from source ──
+                    if (status == "IN_TRANSIT")
+                    {
+                        decimal newClosing = sourceStock.closingstock - detail.transferqty;
+
+                        await conn.ExecuteAsync(@"
+                    UPDATE stock_master
+                    SET closingstock = @closing,
+                        stockvalue   = @closing * unitcost,
+                        modifieddate = CURRENT_TIMESTAMP
+                    WHERE stockcode = @stockcode AND tenantcode = @tenantcode;",
+                            new { closing = newClosing, stockcode = sourceStock.stockcode, tenantcode }, transaction);
+                    }
+                }
 
                 await transaction.CommitAsync();
                 return true;
