@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace medico_backend.Controllers
 {
     [Route("api/[controller]")]
+    [Route("api/OpStatusConfiguration")]   // alias: both URLs work
     [ApiController]
     public class OpStatusMasterController : ControllerBase
     {
@@ -15,36 +16,63 @@ namespace medico_backend.Controllers
             cls = _cls;
         }
 
-        // POST api/OpStatusMaster/create
-        [HttpPost("create")]
-        public async Task<IActionResult> Create([FromBody] OpStatusMasterModel data)
-        {
-            data.tenant_code = Request.Headers["tenant_code"].ToString();
-            return Ok(await cls.Create(data));
-        }
+        private string Tenant => Request.Headers["tenant_code"].ToString().Trim();
 
-        // POST api/OpStatusMaster/update
-        [HttpPost("update")]
-        public async Task<IActionResult> Update([FromBody] OpStatusMasterModel data)
-        {
-            data.tenant_code = Request.Headers["tenant_code"].ToString();
-            return Ok(await cls.Update(data));
-        }
+        private IActionResult NoTenant() =>
+            Unauthorized(new { status = "Error", message = "tenant_code header is required", data = (object?)null });
 
-        // POST api/OpStatusMaster/delete?op_status_id=1
-        [HttpPost("delete")]
-        public async Task<IActionResult> Delete(int op_status_id)
-        {
-            var tenant = Request.Headers["tenant_code"].ToString();
-            return Ok(await cls.Delete(op_status_id, tenant));
-        }
-
-        // GET api/OpStatusMaster/all?activeOnly=true   (use this for the dropdown)
+        // GET api/OpStatusMaster/all
         [HttpGet("all")]
-        public async Task<IActionResult> GetAll(bool activeOnly = false)
+        public async Task<IActionResult> GetAll()
         {
-            var tenant = Request.Headers["tenant_code"].ToString();
-            return Ok(await cls.GetAll(tenant, activeOnly));
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.GetAll(Tenant);
+            return StatusCode(res.http_code, res);
+        }
+
+        // GET api/OpStatusMaster/WAITING
+        [HttpGet("{statusCode}")]
+        public async Task<IActionResult> GetByCode(string statusCode)
+        {
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.GetByCode(Tenant, statusCode);
+            return StatusCode(res.http_code, res);
+        }
+
+        // POST api/OpStatusMaster/save
+        [HttpPost("save")]
+        public async Task<IActionResult> Save([FromBody] OpStatusSaveRequest data)
+        {
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.Save(Tenant, data);
+            return StatusCode(res.http_code, res);
+        }
+
+        // POST api/OpStatusMaster/bulk-save
+        [HttpPost("bulk-save")]
+        public async Task<IActionResult> BulkSave([FromBody] OpStatusBulkSaveRequest data)
+        {
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.BulkSave(Tenant, data);
+            return StatusCode(res.http_code, res);
+        }
+
+        // POST api/OpStatusMaster/reset/WAITING
+        [HttpPost("reset/{statusCode}")]
+        public async Task<IActionResult> Reset(string statusCode)
+        {
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.Reset(Tenant, statusCode);
+            return StatusCode(res.http_code, res);
+        }
+
+        // POST api/OpStatusMaster/reset-all
+        [HttpPost("reset-all")]
+        public async Task<IActionResult> ResetAll()
+        {
+            if (string.IsNullOrWhiteSpace(Tenant)) return NoTenant();
+            var res = await cls.ResetAll(Tenant);
+            return StatusCode(res.http_code, res);
         }
     }
 }

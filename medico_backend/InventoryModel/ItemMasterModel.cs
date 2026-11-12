@@ -1663,5 +1663,10 @@ public long? customercode { get; set; }
         public ItemSalesReportSummaryInfo Summary { get; set; } = new();
         public List<ItemSalesReportRowInfo> Transactions { get; set; } = new();
     }
-
+    public class UnbillCancelQueueRequest
+    {
+        public List<Guid> queue_ids { get; set; } = new();
+        public bool cancel { get; set; } = false;   // true = also mark the queue item CANCELLED
+        public string? reason { get; set; }
+    }
 }

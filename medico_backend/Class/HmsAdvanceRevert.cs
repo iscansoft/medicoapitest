@@ -57,8 +57,8 @@ namespace medico_backend.Class
             bool isCheque = collectionType == "CHEQUE" || input.cheque_date != null
                             || !string.IsNullOrWhiteSpace(input.bank_name);
             var refRequired = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "CARD", "UPI", "CHEQUE", "BANK" };
-            if (refRequired.Contains(collectionType) && string.IsNullOrWhiteSpace(input.reference_no))
-                return ($"Transaction reference number is required for payment mode '{collectionType}'.", null);
+            //if (refRequired.Contains(collectionType) && string.IsNullOrWhiteSpace(input.reference_no))
+            //    return ($"Transaction reference number is required for payment mode '{collectionType}'.", null);
 
             // ── How much advance is currently used on this bill ───────────────
             double totalUsed = await db.ExecuteScalarAsync<double>(

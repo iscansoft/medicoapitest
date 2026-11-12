@@ -2294,7 +2294,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
 
             var lines = (await db.QueryAsync<HmsOpCategoryLine>(sql, p, commandTimeout: 60)).ToList();
 
-            // â”€â”€ Payments per bill per paymode â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             var billGuids = lines.Select(l => l.requestguid).Distinct().ToArray();
             var payRows = billGuids.Length == 0
                 ? new List<HmsOpBillPayRow>()
@@ -2560,7 +2559,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 _logger.LogWarning(ex, "Failed to compute IP category row for tenant {Tenant}", tenantCode);
             }
 
-            // â”€â”€ Pharmacy Category Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             var pharmCategoryRow = new HmsOpCategoryAmountRow { category = HmsOpCategories.Pharmacy };
             try
             {
@@ -2762,7 +2760,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 .Where(r => !optional.Contains(r.category) || r.item_count > 0 || r.net_amount > 0)
                 .ToList();
 
-            // â”€â”€ Per-service breakdown â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             var services = lines
                 .Where(l => l.category == "SERVICE")
                 .GroupBy(l => new { l.service_id, name = l.service_name ?? l.item_name ?? "Service" })
@@ -2795,7 +2792,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 .OrderByDescending(s => s.net_amount)
                 .ToList();
 
-            // â”€â”€ Per-visit rows â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             var visits = lines
                 .GroupBy(l => l.op_id)
                 .Select(g =>
@@ -2834,7 +2830,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 .OrderBy(v => v.visit_date).ThenBy(v => v.op_no)
                 .ToList();
 
-            // â”€â”€ Combined paymodes across OP, IP, and Pharmacy â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             var allPaymodes = Agg(lines);
             var combinedPaymodes = allPaymodes
                 .Concat(ipCategoryRow.paymodes)
@@ -2850,7 +2845,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 .OrderByDescending(x => x.amount)
                 .ToList();
 
-            // â”€â”€ Totals across all active categories â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
             double totalGross = categories.Sum(c => c.gross_amount);
             double totalDiscount = categories.Sum(c => c.discount_amount);
             double totalNet = categories.Sum(c => c.net_amount);
