@@ -470,6 +470,8 @@ WHERE  (lrm.requestguid = @RequestGUID OR lrm.requestguid::text = @RequestGUIDTe
                     }
                 }
 
+                results = SortLabResultEntries(results);
+
                 return new ResultEntryModel
                 {
                     results = results,
@@ -484,6 +486,67 @@ WHERE  (lrm.requestguid = @RequestGUID OR lrm.requestguid::text = @RequestGUIDTe
                 Console.WriteLine($"[GetResult] ERROR: {ex.Message}\n{ex}");
                 throw;
             }
+        }
+
+        private static List<LabResultEntry> SortLabResultEntries(List<LabResultEntry> list)
+        {
+            if (list == null || list.Count == 0) return new List<LabResultEntry>();
+
+            var parentInfoMap = new Dictionary<string, (int firstIndex, int groupOrder, int orderNo, int testSno, string testName)>();
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                var x = list[i];
+                long parentTCode = x.tcode > 0 ? (long)x.tcode : (x.fromtcode > 0 ? (long)x.fromtcode : 0);
+                string parentKey = parentTCode > 0 ? parentTCode.ToString() : (x.testname?.Trim().ToLower() ?? $"idx_{i}");
+
+                int groupOrd = x.grouporder > 0 ? x.grouporder : 9999;
+                int ordNo = x.orderno > 0 ? x.orderno : 9999;
+                int tSno = 9999;
+                string tName = !string.IsNullOrWhiteSpace(x.testname) ? x.testname.Trim() : "";
+
+                if (!parentInfoMap.TryGetValue(parentKey, out var existing))
+                {
+                    parentInfoMap[parentKey] = (i, groupOrd, ordNo, tSno, tName);
+                }
+                else
+                {
+                    int bestGroupOrd = Math.Min(existing.groupOrder, groupOrd);
+                    int bestOrdNo = Math.Min(existing.orderNo, ordNo);
+                    int bestTSno = Math.Min(existing.testSno, tSno);
+                    string bestTName = !string.IsNullOrWhiteSpace(existing.testName) ? existing.testName : tName;
+                    parentInfoMap[parentKey] = (existing.firstIndex, bestGroupOrd, bestOrdNo, bestTSno, bestTName);
+                }
+            }
+
+            return list
+                .OrderBy(x =>
+                {
+                    long parentTCode = x.tcode > 0 ? (long)x.tcode : (x.fromtcode > 0 ? (long)x.fromtcode : 0);
+                    string parentKey = parentTCode > 0 ? parentTCode.ToString() : (x.testname?.Trim().ToLower() ?? "");
+                    return parentInfoMap.TryGetValue(parentKey, out var info) ? info.groupOrder : (x.grouporder > 0 ? x.grouporder : 9999);
+                })
+                .ThenBy(x =>
+                {
+                    long parentTCode = x.tcode > 0 ? (long)x.tcode : (x.fromtcode > 0 ? (long)x.fromtcode : 0);
+                    string parentKey = parentTCode > 0 ? parentTCode.ToString() : (x.testname?.Trim().ToLower() ?? "");
+                    return parentInfoMap.TryGetValue(parentKey, out var info) ? info.orderNo : (x.orderno > 0 ? x.orderno : 9999);
+                })
+                .ThenBy(x =>
+                {
+                    long parentTCode = x.tcode > 0 ? (long)x.tcode : (x.fromtcode > 0 ? (long)x.fromtcode : 0);
+                    string parentKey = parentTCode > 0 ? parentTCode.ToString() : (x.testname?.Trim().ToLower() ?? "");
+                    return parentInfoMap.TryGetValue(parentKey, out var info) ? info.firstIndex : 9999;
+                })
+                .ThenBy(x =>
+                {
+                    long parentTCode = x.tcode > 0 ? (long)x.tcode : (x.fromtcode > 0 ? (long)x.fromtcode : 0);
+                    return parentTCode > 0 ? parentTCode.ToString() : (x.testname?.Trim().ToLower() ?? "");
+                })
+                .ThenBy(x => (x.resultvaluetype == "Title" && x.slno <= 0) ? 0 : 1)
+                .ThenBy(x => x.slno >= 0 ? x.slno : 9999)
+                .ThenBy(x => (x.resultvaluetype == "Title" || x.resultvaluetype == "SubTitle") ? 0 : 1)
+                .ToList();
         }
 
         public async Task<TestResultDetailsModel> GetTestResultDetails(Guid testResultId, string tenantCode)
