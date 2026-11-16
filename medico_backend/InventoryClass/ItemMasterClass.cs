@@ -3203,28 +3203,86 @@ WHERE stockcode=@stockcode;";
                     {
                         string tenantcode = request.master.tenantcode!;
 
-                        // 1. Update master
+                        // 0. Lock the existing bill (stops two people editing the same bill at once)
+                        var oldMaster = await conn.QueryFirstOrDefaultAsync<sales_master>(@"
+        SELECT salescode, billno, patientid, patientname, netamount
+        FROM sales_master
+        WHERE salescode = @salescode
+          AND tenantcode = @tenantcode
+          AND deleted = false
+        FOR UPDATE;",
+                            new { request.master.salescode, tenantcode }, trans);
+
+                        if (oldMaster == null)
+                        {
+                            await trans.RollbackAsync();
+                            return $"Sales record not found (salescode={request.master.salescode}, tenantcode={request.master.tenantcode})";
+                        }
+
+                        // keep the original bill number if the client did not send one
+                        if (string.IsNullOrWhiteSpace(request.master.billno))
+                            request.master.billno = oldMaster.billno;
+
+                        // Did the bill move to a different patient?
+                        string oldPid = (oldMaster.patientid ?? "").Trim();
+                        string newPid = (request.master.patientid ?? "").Trim();
+                        bool patientChanged =
+                            (oldPid.Length > 0 || newPid.Length > 0)
+                                ? !string.Equals(oldPid, newPid, StringComparison.OrdinalIgnoreCase)
+                                : !string.Equals((oldMaster.patientname ?? "").Trim(),
+                                                 (request.master.patientname ?? "").Trim(),
+                                                 StringComparison.OrdinalIgnoreCase);
+
+                        // Due collections already taken on this bill
+                        decimal collected = await GetCollectedForBill(conn, trans, request.master.salescode, tenantcode);
+                        if (collected > 0)
+                        {
+                            if (patientChanged)
+                                throw new Exception("Cannot change the patient: due collection has already been received on this bill.");
+                            if (request.master.netamount < collected)
+                                throw new Exception($"Net amount ({request.master.netamount}) cannot be less than the amount already collected ({collected}).");
+                        }
+
+                        // 1. Read OLD details (before anything changes)
+                        var oldDetails = (await conn.QueryAsync<sales_detail>(@"
+        SELECT * FROM sales_detail
+        WHERE salescode = @salescode AND tenantcode = @tenantcode;",
+                            new { request.master.salescode, tenantcode }, trans)).ToList();
+
+                        // Returned qty per item+warehouse+batch (sales return already added this back to stock)
+                        string LineKey(long item, long? wh, string? batch) =>
+                            $"{item}|{wh}|{NormBatch(batch) ?? ""}";
+
+                        var returnedByLine = new Dictionary<string, decimal>();
+                        foreach (var od in oldDetails)
+                        {
+                            if (od.returnedqty <= 0) continue;
+                            var k = LineKey(od.itemcode, od.warehousecode, od.batchno);
+                            returnedByLine[k] = returnedByLine.GetValueOrDefault(k) + od.returnedqty;
+                        }
+
+                        // 2. Update master
                         string updateMaster = @"
-            UPDATE sales_master SET
-                billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
-                invoicedate=@invoicedate, customercode=@customercode,
-                salestype=@salestype, warehousefield=@warehousefield,
-                patientid=@patientid, patientname=@patientname,
-                mobileno=@mobileno,
-                address=@address, consultant=@consultant,
-                prescribeddays=@prescribeddays,
-                converteddays=@converteddays,
-                grossamount=@grossamount,discountpercentage=@discountpercentage, discountamount=@discountamount,
-                taxamount=@taxamount,roundoff=@roundoff, netamount=@netamount,
-                paymentmode=@paymentmode, paymentstatus=@paymentstatus,
-                currencycode=@currencycode, remarks=@remarks,
-                modifieddate=NOW(), usercode=@usercode,
-                branchcode=@branchcode, companycode=@companycode,
-                ordercode=@ordercode,cntcode=@cntcode,
-                bh_code=@bh_code
-            WHERE salescode = @salescode
-              AND tenantcode = @tenantcode
-              AND deleted = false";
+        UPDATE sales_master SET
+            billno=@billno, billdate=@billdate, invoiceno=@invoiceno,
+            invoicedate=@invoicedate, customercode=@customercode,
+            salestype=@salestype, warehousefield=@warehousefield,
+            patientid=@patientid, patientname=@patientname,
+            mobileno=@mobileno,
+            address=@address, consultant=@consultant,
+            prescribeddays=@prescribeddays,
+            converteddays=@converteddays,
+            grossamount=@grossamount,discountpercentage=@discountpercentage, discountamount=@discountamount,
+            taxamount=@taxamount,roundoff=@roundoff, netamount=@netamount,
+            paymentmode=@paymentmode, paymentstatus=@paymentstatus,
+            currencycode=@currencycode, remarks=@remarks,
+            modifieddate=NOW(), usercode=@usercode,
+            branchcode=@branchcode, companycode=@companycode,
+            ordercode=@ordercode,cntcode=@cntcode,
+            bh_code=@bh_code
+        WHERE salescode = @salescode
+          AND tenantcode = @tenantcode
+          AND deleted = false";
 
                         int masterRows = await conn.ExecuteAsync(updateMaster, request.master, trans);
 
@@ -3234,43 +3292,38 @@ WHERE stockcode=@stockcode;";
                             return $"Sales record not found (salescode={request.master.salescode}, tenantcode={request.master.tenantcode})";
                         }
 
-                        // 2. Read OLD details and give their stock back
-                        var oldDetails = (await conn.QueryAsync<sales_detail>(@"
-            SELECT * FROM sales_detail
-            WHERE salescode = @salescode AND tenantcode = @tenantcode;",
-                            new { request.master.salescode, tenantcode }, trans)).ToList();
-
+                        // 3. Give the OLD sold quantity back to the exact stock rows
                         await ReverseSalesStock(conn, trans, oldDetails, tenantcode);
 
-                        // 3. Delete old details
+                        // 4. Delete old details
                         await conn.ExecuteAsync(
                             "DELETE FROM sales_detail WHERE salescode=@salescode AND tenantcode=@tenantcode",
                             new { request.master.salescode, tenantcode }, trans);
 
-                        // 4. Insert NEW details and deduct stock
+                        // 5. Insert NEW details and deduct stock
                         string detailQuery = @"
-            INSERT INTO sales_detail
-            (
-                salescode, itemcode, quantity,
-                freequantity, uomcode, rate,
-                discountpercentage, discountamount,
-                taxpercentage, taxamount,
-                amount, totalamount, batchno,
-                manufacturingdate, expirydate,
-                soldqty, days,returnedqty, warehousecode,
-                tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
-            )
-            VALUES
-            (
-                @salescode, @itemcode, @quantity,
-                @freequantity, @uomcode, @rate,
-                @discountpercentage, @discountamount,
-                @taxpercentage, @taxamount,
-                @amount, @totalamount, @batchno,
-                @manufacturingdate, @expirydate,
-                @soldqty, @days,@returnedqty, @warehousecode,
-                @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
-            )";
+        INSERT INTO sales_detail
+        (
+            salescode, itemcode, quantity,
+            freequantity, uomcode, rate,
+            discountpercentage, discountamount,
+            taxpercentage, taxamount,
+            amount, totalamount, batchno,
+            manufacturingdate, expirydate,
+            soldqty, days,returnedqty, warehousecode,
+            tenantcode,morning_dose, afternoon_dose, evening_dose, night_dose
+        )
+        VALUES
+        (
+            @salescode, @itemcode, @quantity,
+            @freequantity, @uomcode, @rate,
+            @discountpercentage, @discountamount,
+            @taxpercentage, @taxamount,
+            @amount, @totalamount, @batchno,
+            @manufacturingdate, @expirydate,
+            @soldqty, @days,@returnedqty, @warehousecode,
+            @tenantcode,@morning_dose, @afternoon_dose, @evening_dose, @night_dose
+        )";
 
                         foreach (var item in request.details)
                         {
@@ -3278,11 +3331,65 @@ WHERE stockcode=@stockcode;";
                             item.tenantcode = tenantcode;
                             item.batchno = NormBatch(item.batchno);
 
+                            // carry over the qty already returned for this same item+batch+warehouse
+                            var key = LineKey(item.itemcode, item.warehousecode, item.batchno);
+                            decimal carried = 0;
+                            if (returnedByLine.TryGetValue(key, out var avail) && avail > 0)
+                            {
+                                carried = Math.Min(avail, item.quantity);
+                                if (item.quantity < avail)
+                                    throw new Exception(
+                                        $"Item {item.itemcode}, batch {(string.IsNullOrEmpty(item.batchno) ? "(none)" : item.batchno)}: " +
+                                        $"quantity {item.quantity} is less than the {avail} already returned.");
+                                returnedByLine[key] = avail - carried;
+                            }
+                            item.returnedqty = carried;
+
                             await conn.ExecuteAsync(detailQuery, item, trans);
                             await ApplySalesStock(conn, trans, item, tenantcode);
                         }
 
-                        // 5. Refresh item master price for every touched item
+                        // an item that had a sales return was removed / its batch changed
+                        var lost = returnedByLine.FirstOrDefault(x => x.Value > 0);
+                        if (lost.Key != null)
+                            throw new Exception(
+                                $"Cannot remove or change an item that already has a sales return ({lost.Key.Split('|')[0]}).");
+
+                        // 6. Pharmacy queue: release old patient's rows, link the new ones
+                        bool hasNewQueue = request.queue_ids != null && request.queue_ids.Any();
+
+                        if (patientChanged || hasNewQueue)
+                        {
+                            await conn.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = false, billno = NULL, salescode = NULL,
+            billed_date = NULL, updated_at = NOW()
+        WHERE salescode = @salescode AND tenant_code = @tenantcode;",
+                                new { request.master.salescode, tenantcode }, trans);
+                        }
+
+                        if (hasNewQueue)
+                        {
+                            var ids = request.queue_ids!.Distinct().ToArray();
+
+                            int marked = await conn.ExecuteAsync(@"
+        UPDATE pharmacy_prescription_queue
+        SET billed_status = true,
+            billno        = @billno,
+            salescode     = @salescode,
+            billed_date   = NOW(),
+            updated_at    = NOW()
+        WHERE queue_id = ANY(@ids)
+          AND tenant_code = @tenantcode
+          AND COALESCE(billed_status, false) = false
+          AND status <> 'CANCELLED';",
+                                new { billno = request.master.billno, request.master.salescode, ids, tenantcode }, trans);
+
+                            if (marked != ids.Length)
+                                throw new Exception("One or more pharmacy queue items are already billed or cancelled.");
+                        }
+
+                        // 7. Refresh item master price for every touched item
                         foreach (var itemcode in oldDetails.Select(d => d.itemcode)
                                                  .Concat(request.details.Select(d => d.itemcode)).Distinct())
                             await RefreshItemMasterPrice(conn, trans, itemcode, tenantcode);
@@ -6440,7 +6547,8 @@ stock_transfer_partial_reject_request request)
             int rows = await db.ExecuteAsync(
                 @"UPDATE pharmacy_prescription_queue
           SET status = @status, updated_at = NOW()
-          WHERE queue_id = @queue_id AND tenant_code = @tenant_code",
+          WHERE queue_id = @queue_id AND tenant_code = @tenant_code
+  AND (@status <> 'CANCELLED' OR COALESCE(billed_status,false) = false)",
                 new { status = status.ToUpper(), queue_id, tenant_code });
 
             return rows > 0 ? "Success" : "Queue item not found";
@@ -7440,7 +7548,8 @@ AND deleted = false;";
                 @"UPDATE pharmacy_prescription_queue
           SET status = 'CANCELLED', updated_at = NOW()
           WHERE pr_det_id = @pr_det_id AND tenant_code = @tenant_code
-          AND status <> 'DISPENSED'",
+          AND status <> 'DISPENSED'
+AND COALESCE(billed_status, false) = false",
                 new { pr_det_id, tenant_code });
             return rows > 0 ? "Success" : "Queue item not found";
         }
@@ -9992,6 +10101,90 @@ AND deleted = false;";
             {
                 await transaction.RollbackAsync();
                 throw;
+            }
+        }
+        // Unbill (and optionally cancel) pharmacy queue items — one transaction, all or nothing.
+        // - Billed item whose sale is still ACTIVE  -> blocked (delete the sale first)
+        // - Billed item, sale deleted / billed manually (no salescode) -> unbilled
+        // - cancel = true -> item is also set to CANCELLED (works on unbilled items too)
+        public async Task<string> UnbillOrCancelQueue(UnbillCancelQueueRequest req, string tenant_code)
+        {
+            if (req.queue_ids == null || !req.queue_ids.Any()) return "queue_ids is required";
+
+            var ids = req.queue_ids.Distinct().ToArray();
+
+            using IDbConnection db = new NpgsqlConnection(con);
+            db.Open();
+            using var tx = db.BeginTransaction();
+
+            try
+            {
+                var rows = (await db.QueryAsync<PharmacyPrescriptionQueueRow>(@"
+            SELECT * FROM pharmacy_prescription_queue
+            WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+            FOR UPDATE;",
+                    new { ids, tenant_code }, tx)).ToList();
+
+                if (rows.Count != ids.Length)
+                    return "One or more queue items were not found.";
+
+                foreach (var r in rows)
+                {
+                    if (string.Equals(r.status, "DISPENSED", StringComparison.OrdinalIgnoreCase))
+                        return $"'{r.drug_name}' is already dispensed and cannot be unbilled/cancelled.";
+
+                    if (string.Equals(r.status, "CANCELLED", StringComparison.OrdinalIgnoreCase))
+                        return $"'{r.drug_name}' is already cancelled.";
+
+                    if (r.billed_status && r.salescode.HasValue)
+                    {
+                        bool saleActive = await db.ExecuteScalarAsync<bool>(@"
+                    SELECT EXISTS (SELECT 1 FROM public.sales_master
+                                   WHERE salescode = @salescode
+                                     AND tenantcode = @tenant_code
+                                     AND deleted = false);",
+                            new { salescode = r.salescode.Value, tenant_code }, tx);
+
+                        if (saleActive)
+                            return $"'{r.drug_name}' is billed in bill {r.billno}. Delete that sale first " +
+                                   "(this restores stock), or use sales return.";
+                    }
+                }
+
+                var billedIds = rows.Where(r => r.billed_status).Select(r => r.queue_id).ToArray();
+
+                if (!req.cancel && billedIds.Length == 0)
+                    return "No billed queue items found to unbill.";
+
+                int unbilled = 0, cancelled = 0;
+
+                if (billedIds.Length > 0)
+                {
+                    unbilled = await db.ExecuteAsync(@"
+                UPDATE pharmacy_prescription_queue
+                SET billed_status = false, billno = NULL, salescode = NULL,
+                    billed_date = NULL, updated_at = NOW()
+                WHERE queue_id = ANY(@billedIds) AND tenant_code = @tenant_code;",
+                        new { billedIds, tenant_code }, tx);
+                }
+
+                if (req.cancel)
+                {
+                    cancelled = await db.ExecuteAsync(@"
+                UPDATE pharmacy_prescription_queue
+                SET status = 'CANCELLED', updated_at = NOW()
+                WHERE queue_id = ANY(@ids) AND tenant_code = @tenant_code
+                  AND COALESCE(billed_status, false) = false;",
+                        new { ids, tenant_code }, tx);
+                }
+
+                tx.Commit();
+                return $"Success|Unbilled:{unbilled}|Cancelled:{cancelled}";
+            }
+            catch (Exception ex)
+            {
+                try { tx.Rollback(); } catch { }
+                return ex.Message;
             }
         }
     }

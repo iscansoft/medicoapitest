@@ -3351,5 +3351,20 @@ namespace medico_backend.InventoryController
                 return BadRequest(new { status = false, message = ex.Message });
             }
         }
+        [HttpPost("pharmacy-queue/unbill-cancel")]
+        public async Task<IActionResult> UnbillOrCancelQueue([FromBody] UnbillCancelQueueRequest req)
+        {
+            try
+            {
+                var tenantcode = GetTenantCode();
+                if (string.IsNullOrEmpty(tenantcode)) return MissingTenantCode();
+
+                var result = await itemclass.UnbillOrCancelQueue(req, tenantcode);
+                return result.StartsWith("Success")
+                    ? Ok(new { Status = "Success", Message = result })
+                    : BadRequest(new { Status = "Failed", Message = result });
+            }
+            catch (Exception ex) { return BadRequest(new { Status = "Failed", Message = ex.Message }); }
+        }
     }
 }
