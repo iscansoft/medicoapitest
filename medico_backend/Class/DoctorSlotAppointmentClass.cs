@@ -326,6 +326,17 @@ namespace Medico_Backend.Class
         // ═══════════════════════════════════════════
         // MASTER - BULK UPDATE
         // ═══════════════════════════════════════════
+        private class OldSlotRow
+        {
+            public int dcode { get; set; }
+            public DateOnly? slot_date { get; set; }
+        }
+
+        private class UsedSeatsRow
+        {
+            public int walkin_count { get; set; }
+            public int online_count { get; set; }
+        }
         public async Task<object> BulkUpdateMaster(
             List<DoctorAppointmentSlotMasterModel> slots,
             string tenant_code)
@@ -344,21 +355,21 @@ namespace Medico_Backend.Class
                     data.updated_at = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Utc);
 
                     // remember the old doctor/date so its ranges can be re-flowed too
-                    var old = await db.QueryFirstOrDefaultAsync<(int dcode, DateTime? slot_date)?>(
+                    var old = await db.QueryFirstOrDefaultAsync<OldSlotRow>(
                         @"SELECT dcode, slot_date FROM doctor_appointment_slot_master
-                  WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code",
+      WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code",
                         new { data.slot_master_id, tenant_code }, tx);
 
                     // never shrink below seats already used
-                    var used = await db.QueryFirstOrDefaultAsync<(int walkin_count, int online_count)?>(
+                    var used = await db.QueryFirstOrDefaultAsync<UsedSeatsRow>(
                         @"SELECT walkin_count, online_count FROM doctor_appointment_slot_details
-                  WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code AND isdeleted = false",
+      WHERE slot_master_id = @slot_master_id AND tenant_code = @tenant_code AND isdeleted = false",
                         new { data.slot_master_id, tenant_code }, tx);
 
-                    if (used.HasValue && (data.max_walkin < used.Value.walkin_count || data.max_online < used.Value.online_count))
+                    if (used != null && (data.max_walkin < used.walkin_count || data.max_online < used.online_count))
                     {
                         tx.Rollback();
-                        failed.Add($"Cannot reduce below used seats (walkin used {used.Value.walkin_count}, online used {used.Value.online_count}): {data.slot_master_id}");
+                        failed.Add($"Cannot reduce below used seats (walkin used {used.walkin_count}, online used {used.online_count}): {data.slot_master_id}");
                         continue;
                     }
 
@@ -432,13 +443,16 @@ namespace Medico_Backend.Class
                         }, tx);
 
                     // re-flow token ranges for the new doctor/date, and the old one if it moved
+                    // re-flow token ranges for the new doctor/date, and the old one if it moved
                     string? err = null;
                     if (data.slot_date.HasValue)
-                        err = await RecalculateTokenRanges(db, tx, data.dcode, data.slot_date.Value.ToDateTime(TimeOnly.MinValue), tenant_code);
+                        err = await RecalculateTokenRanges(db, tx, data.dcode,
+                            data.slot_date.Value.ToDateTime(TimeOnly.MinValue), tenant_code);
 
-                    if (err == null && old.HasValue && old.Value.slot_date.HasValue &&
-                        (old.Value.dcode != data.dcode || old.Value.slot_date.Value.Date != data.slot_date?.ToDateTime(TimeOnly.MinValue).Date))
-                        err = await RecalculateTokenRanges(db, tx, old.Value.dcode, old.Value.slot_date.Value, tenant_code);
+                    if (err == null && old != null && old.slot_date.HasValue &&
+                        (old.dcode != data.dcode || old.slot_date != data.slot_date))
+                        err = await RecalculateTokenRanges(db, tx, old.dcode,
+                            old.slot_date.Value.ToDateTime(TimeOnly.MinValue), tenant_code);
 
                     if (err != null)
                     {

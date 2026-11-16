@@ -259,46 +259,87 @@ VALUES
                 }
 
                 // ═══════════════════════════════════════════════════════
-                // SLOT-REQUIRED MODE — unchanged from before
+                // SLOT-REQUIRED MODE
                 // ═══════════════════════════════════════════════════════
-                string checkSql = @"SELECT slot_status, booked_count, max_patients,
-                   walkin_count, max_walkin,
-                   online_count, max_online
-            FROM   doctor_appointment_slot_details  
-            WHERE  slot_detail_id = @slot_detail_id
-            AND    tenant_code    = @tenant_code
-            AND    isdeleted      = false
-            AND    is_active      = true";
-
-                var slot = await db.QueryFirstOrDefaultAsync(
-                    checkSql, new { data.slot_detail_id, data.tenant_code });
-
-                if (slot == null) return "Slot not found";
-                if (slot.slot_status != "OPEN") return "Slot is FULL or not available";
-                if (slot.booked_count >= slot.max_patients) return "Slot is fully booked";
-
-                if (data.booking_type == "WALKIN" && slot.walkin_count >= slot.max_walkin)
-                    return "Walk-in limit reached for this slot";
-
-                if ((data.booking_type == "ONLINE" || data.booking_type == "WHATSAPP")
-                 && slot.online_count >= slot.max_online)
-                    return "Online booking limit reached for this slot";
+                bool isWalkin = data.booking_type == "WALKIN";
 
                 using var tx2 = db.BeginTransaction();
                 try
                 {
+                    // 🔒 Lock this slot row. A second booking for the same slot waits here
+                    // until the first one commits, then sees the updated counts and tokens.
+                    var slot = await db.QueryFirstOrDefaultAsync(@"
+        SELECT slot_status, booked_count, max_patients,
+               walkin_count, max_walkin,
+               online_count, max_online
+        FROM   doctor_appointment_slot_details
+        WHERE  slot_detail_id = @slot_detail_id
+        AND    tenant_code    = @tenant_code
+        AND    isdeleted      = false
+        AND    is_active      = true
+        FOR UPDATE",
+                        new { data.slot_detail_id, data.tenant_code }, tx2);
+
+                    if (slot == null) { tx2.Rollback(); return "Slot not found"; }
+
+                    if (slot.slot_status == "CANCELLED" || slot.slot_status == "CLOSED")
+                    { tx2.Rollback(); return "Slot is not available"; }
+
+                    // real counts, read inside the locked transaction (not the stored counters)
+                    var live = await db.QueryFirstAsync(@"
+        SELECT COUNT(*)                                        AS total,
+               COUNT(*) FILTER (WHERE booking_type = 'WALKIN') AS walkin,
+               COUNT(*) FILTER (WHERE booking_type <> 'WALKIN') AS online
+        FROM   appointment_booking
+        WHERE  slot_detail_id  = @slot_detail_id
+        AND    tenant_code     = @tenant_code
+        AND    isdeleted       = false
+        AND    booking_status <> 'CANCELLED'",
+                        new { data.slot_detail_id, data.tenant_code }, tx2);
+
+                    int liveTotal  = (int)live.total;
+                    int liveWalkin = (int)live.walkin;
+                    int liveOnline = (int)live.online;
+
+                    if (liveTotal >= (int)slot.max_patients)
+                    {
+                        tx2.Rollback();
+                        return $"Slot limit exceeded. This slot allows only {slot.max_patients} patients and is fully booked";
+                    }
+
+                    if (isWalkin && liveWalkin >= (int)slot.max_walkin)
+                    {
+                        tx2.Rollback();
+                        return $"Slot limit exceeded. Walk-in limit ({slot.max_walkin}) reached for this slot";
+                    }
+
+                    if (!isWalkin && liveOnline >= (int)slot.max_online)
+                    {
+                        tx2.Rollback();
+                        return $"Slot limit exceeded. Online booking limit ({slot.max_online}) reached for this slot";
+                    }
+
                     var (opToken, opSeq) = await _opCls.GenerateTokenForBooking(
                         db, tx2, data.dcode, data.slot_detail_id, regTypeForToken,
                         data.appointment_date, data.tenant_code!);
 
                     data.op_token_no = opToken;
                     data.op_queue_no = opSeq;
-                    data.token_no = await GetNextToken(data.slot_detail_id!.Value, data.tenant_code!);
+
+                    // token read on the SAME connection/transaction, safe because the slot row is locked
+                    data.token_no = await db.ExecuteScalarAsync<int>(@"
+        SELECT COALESCE(MAX(token_no), 0) + 1
+        FROM   appointment_booking
+        WHERE  slot_detail_id  = @slot_detail_id
+        AND    tenant_code     = @tenant_code
+        AND    isdeleted       = false
+        AND    booking_status != 'CANCELLED'",
+                        new { data.slot_detail_id, data.tenant_code }, tx2);
 
                     string insertSql = @"INSERT INTO appointment_booking
 (booking_id, custid, dcode, slot_detail_id, slot_master_id,
  appointment_date, slot_start_time, slot_end_time,
- token_no, op_token_no, op_queue_no, booking_no, booking_status, booking_type, notes,    
+ token_no, op_token_no, op_queue_no, booking_no, booking_status, booking_type, notes,
  rescheduled_from, reschedule_reason,
  tenant_code, isdeleted, usercode, created_at, updated_at)
 VALUES
@@ -335,15 +376,23 @@ VALUES
                     }, tx2);
 
                     await db.ExecuteAsync(@"
-                UPDATE doctor_appointment_slot_details
-                SET booked_count = booked_count + 1,
-                    slot_status  = CASE
-                                     WHEN booked_count + 1 >= max_patients THEN 'FULL'
-                                     ELSE 'OPEN'
-                                   END,
-                    updated_at   = now()
-                WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
-                        new { data.slot_detail_id, data.tenant_code }, tx2);
+        UPDATE doctor_appointment_slot_details
+        SET booked_count = @total  + 1,
+            walkin_count = @walkin + @w,
+            online_count = @online + @o,
+            slot_status  = CASE WHEN @total + 1 >= max_patients THEN 'FULL' ELSE 'OPEN' END,
+            updated_at   = now()
+        WHERE slot_detail_id = @slot_detail_id AND tenant_code = @tenant_code",
+                        new
+                        {
+                            data.slot_detail_id,
+                            data.tenant_code,
+                            total  = liveTotal,
+                            walkin = liveWalkin,
+                            online = liveOnline,
+                            w = isWalkin ? 1 : 0,
+                            o = isWalkin ? 0 : 1
+                        }, tx2);
 
                     tx2.Commit();
                 }
