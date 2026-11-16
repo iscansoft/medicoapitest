@@ -30,6 +30,8 @@ namespace medico_backend.Model
         public string? CompanyEmail { get; set; }
         public string? reporttype { get; set; } = "Stock Master Report";
         public DateTime? asofdate { get; set; }
+        public DateTime? fromdate { get; set; }
+        public DateTime? todate { get; set; }
     }
 
     public class SalesReportModel

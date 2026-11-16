@@ -12852,68 +12852,146 @@ WHERE lrd.requestguid::text = @requestguid::text
 
 
 
-        public async Task<string?> StockReportPDF(string tenant_code, string? warehousecode = null, DateTime? date = null)
-
+        public async Task<string?> StockReportPDF(
+            string tenant_code, 
+            string? warehousecode = null, 
+            DateTime? date = null, 
+            DateTime? fromdate = null, 
+            DateTime? todate = null, 
+            long? itemcode = null, 
+            string? search = null)
         {
-
             try
-
             {
-
                 string inventoryConn = _config.GetConnectionString("inventory_conn");
-
                 List<StockReportModel> stockList;
 
+                DateTime effectiveFrom = fromdate?.Date ?? date?.Date ?? DateTime.Today;
+                DateTime effectiveTo = (todate ?? date ?? DateTime.Today).Date.AddDays(1).AddSeconds(-1);
+
                 using (IDbConnection dbInv = new NpgsqlConnection(inventoryConn))
-
                 {
-
                     string sqlStock = @"
-
+                        WITH item_filtered AS (
+                            SELECT 
+                                im.itemcode,
+                                im.itemname,
+                                COALESCE(im.purchaserate, 0) AS purchaserate,
+                                COALESCE(im.salesrate, 0) AS salesrate
+                            FROM public.item_master im
+                            WHERE im.tenantcode = @tenant_code
+                              AND COALESCE(im.deleted, false) = false
+                              AND (@itemcode IS NULL OR im.itemcode = @itemcode)
+                              AND (@search IS NULL OR LOWER(im.itemname) LIKE @search)
+                        ),
+                        stock_base AS (
+                            SELECT 
+                                sm.stockcode,
+                                sm.itemcode,
+                                COALESCE(sm.batchno, '') AS batchno,
+                                sm.expirydate,
+                                sm.warehousecode,
+                                wm.warehousename,
+                                COALESCE(sm.unitcost, 0) AS unitcost,
+                                COALESCE(sm.openingstock, 0) AS initial_opening,
+                                COALESCE(sm.closingstock, 0) AS current_closing
+                            FROM public.stock_master sm
+                            JOIN item_filtered im ON im.itemcode = sm.itemcode
+                            LEFT JOIN public.warehouse_master wm ON wm.warehousecode::text = sm.warehousecode::text
+                            WHERE COALESCE(sm.deleted, false) = false
+                              AND sm.tenantcode = @tenant_code
+                              AND (COALESCE(@warehousecode, '') = '' OR sm.warehousecode::text = @warehousecode)
+                        ),
+                        prior_purchases AS (
+                            SELECT 
+                                pd.itemcode,
+                                COALESCE(pd.batchno, '') AS batchno,
+                                SUM(COALESCE(pd.quantity, 0) + COALESCE(pd.freequantity, 0)) AS prior_qty
+                            FROM public.purchase_detail pd
+                            JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                            WHERE pd.tenantcode = @tenant_code
+                              AND COALESCE(pm.deleted, false) = false
+                              AND (COALESCE(@warehousecode, '') = '' OR pd.warehousecode::text = @warehousecode)
+                              AND COALESCE(pm.billdate, pm.invoicedate, pm.createddate) < @fromdate::timestamp
+                            GROUP BY pd.itemcode, COALESCE(pd.batchno, '')
+                        ),
+                        prior_sales AS (
+                            SELECT 
+                                sd.itemcode,
+                                COALESCE(sd.batchno, '') AS batchno,
+                                SUM(COALESCE(sd.quantity, 0)) AS prior_qty
+                            FROM public.sales_detail sd
+                            JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                            WHERE sd.tenantcode = @tenant_code
+                              AND COALESCE(sm.deleted, false) = false
+                              AND (COALESCE(@warehousecode, '') = '' OR sm.warehousefield::text = @warehousecode OR sm.warehousecode::text = @warehousecode OR sd.warehousecode::text = @warehousecode)
+                              AND sm.billdate < @fromdate::timestamp
+                            GROUP BY sd.itemcode, COALESCE(sd.batchno, '')
+                        ),
+                        period_purchases AS (
+                            SELECT 
+                                pd.itemcode,
+                                COALESCE(pd.batchno, '') AS batchno,
+                                SUM(COALESCE(pd.quantity, 0) + COALESCE(pd.freequantity, 0)) AS period_qty
+                            FROM public.purchase_detail pd
+                            JOIN public.purchase_master pm ON pm.purchasecode = pd.purchasecode AND pm.tenantcode = pd.tenantcode
+                            WHERE pd.tenantcode = @tenant_code
+                              AND COALESCE(pm.deleted, false) = false
+                              AND (COALESCE(@warehousecode, '') = '' OR pd.warehousecode::text = @warehousecode)
+                              AND COALESCE(pm.billdate, pm.invoicedate, pm.createddate) >= @fromdate::timestamp
+                              AND COALESCE(pm.billdate, pm.invoicedate, pm.createddate) <= @todate::timestamp
+                            GROUP BY pd.itemcode, COALESCE(pd.batchno, '')
+                        ),
+                        period_sales AS (
+                            SELECT 
+                                sd.itemcode,
+                                COALESCE(sd.batchno, '') AS batchno,
+                                SUM(COALESCE(sd.quantity, 0)) AS period_qty
+                            FROM public.sales_detail sd
+                            JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                            WHERE sd.tenantcode = @tenant_code
+                              AND COALESCE(sm.deleted, false) = false
+                              AND (COALESCE(@warehousecode, '') = '' OR sm.warehousefield::text = @warehousecode OR sm.warehousecode::text = @warehousecode OR sd.warehousecode::text = @warehousecode)
+                              AND sm.billdate >= @fromdate::timestamp
+                              AND sm.billdate <= @todate::timestamp
+                            GROUP BY sd.itemcode, COALESCE(sd.batchno, '')
+                        )
                         SELECT 
-
-                            sm.stockcode,
-
-                            sm.itemcode,
-
+                            sb.stockcode,
+                            sb.itemcode,
                             im.itemname,
+                            sb.batchno,
+                            sb.expirydate,
+                            COALESCE(sb.warehousename, 'Main Store') AS warehousename,
+                            GREATEST(0, (sb.initial_opening + COALESCE(pp.prior_qty, 0) - COALESCE(ps.prior_qty, 0))) AS openingstock,
+                            COALESCE(curr_p.period_qty, 0) AS purchasedqty,
+                            COALESCE(curr_s.period_qty, 0) AS soldqty,
+                            GREATEST(0, (GREATEST(0, (sb.initial_opening + COALESCE(pp.prior_qty, 0) - COALESCE(ps.prior_qty, 0))) + COALESCE(curr_p.period_qty, 0) - COALESCE(curr_s.period_qty, 0))) AS closingstock,
+                            COALESCE(NULLIF(sb.unitcost, 0), im.purchaserate, 0) AS unitcost,
+                            (GREATEST(0, (GREATEST(0, (sb.initial_opening + COALESCE(pp.prior_qty, 0) - COALESCE(ps.prior_qty, 0))) + COALESCE(curr_p.period_qty, 0) - COALESCE(curr_s.period_qty, 0))) * COALESCE(NULLIF(sb.unitcost, 0), im.purchaserate, 0)) AS stockvalue
+                        FROM stock_base sb
+                        JOIN item_filtered im ON im.itemcode = sb.itemcode
+                        LEFT JOIN prior_purchases pp ON pp.itemcode = sb.itemcode AND pp.batchno = sb.batchno
+                        LEFT JOIN prior_sales ps ON ps.itemcode = sb.itemcode AND ps.batchno = sb.batchno
+                        LEFT JOIN period_purchases curr_p ON curr_p.itemcode = sb.itemcode AND curr_p.batchno = sb.batchno
+                        LEFT JOIN period_sales curr_s ON curr_s.itemcode = sb.itemcode AND curr_s.batchno = sb.batchno
+                        WHERE (
+                            (sb.initial_opening + COALESCE(pp.prior_qty, 0) - COALESCE(ps.prior_qty, 0)) != 0
+                            OR COALESCE(curr_p.period_qty, 0) != 0
+                            OR COALESCE(curr_s.period_qty, 0) != 0
+                            OR sb.current_closing != 0
+                        )
+                        ORDER BY im.itemname, sb.batchno;";
 
-                            sm.batchno,
-
-                            sm.expirydate,
-
-                            wm.warehousename,
-
-                            COALESCE(sm.openingstock, 0) AS openingstock,
-
-                            COALESCE(sm.purchasedqty, 0) AS purchasedqty,
-
-                            COALESCE(sm.soldqty, 0) AS soldqty,
-
-                            COALESCE(sm.closingstock, 0) AS closingstock,
-
-                            COALESCE(sm.unitcost, 0) AS unitcost,
-
-                            COALESCE(sm.stockvalue, 0) AS stockvalue
-
-                        FROM public.stock_master sm
-
-                        LEFT JOIN public.item_master im ON im.itemcode::text = sm.itemcode::text
-
-                        LEFT JOIN public.warehouse_master wm ON wm.warehousecode::text = sm.warehousecode::text
-
-                        WHERE COALESCE(sm.deleted, false) = false 
-
-                          AND sm.tenantcode = @tenant_code
-
-                          AND (COALESCE(@warehousecode, '') = '' OR sm.warehousecode::text = @warehousecode)
-
-                        ORDER BY im.itemname, sm.batchno";
-
-
-
-                    stockList = (await dbInv.QueryAsync<StockReportModel>(sqlStock, new { tenant_code, warehousecode })).ToList();
-
+                    string? searchPattern = string.IsNullOrWhiteSpace(search) ? null : $"%{search.Trim().ToLower()}%";
+                    stockList = (await dbInv.QueryAsync<StockReportModel>(sqlStock, new { 
+                        tenant_code, 
+                        warehousecode, 
+                        fromdate = effectiveFrom, 
+                        todate = effectiveTo,
+                        itemcode,
+                        search = searchPattern
+                    })).ToList();
                 }
 
 
@@ -12978,9 +13056,10 @@ WHERE lrd.requestguid::text = @requestguid::text
 
                     CompanyEmail = (string?)(companyInfo?.contact_email),
 
-                    reporttype = "Stock Master Report",
-
-                    asofdate = date
+                    reporttype = "Product Stock & Sales Movement Report",
+                    asofdate = date ?? todate ?? DateTime.Today,
+                    fromdate = effectiveFrom,
+                    todate = effectiveTo
 
                 };
 
@@ -15166,10 +15245,30 @@ COALESCE(NULLIF(regexp_replace(op.token_no, '\D', '', 'g'), '')::numeric, COALES
                 if (master == null)
 
                     return null;
-                master.billdate = AppTimeZoneHelper.ToLocalTimeSafe(master.billdate);
-                master.invoicedate = AppTimeZoneHelper.ToLocalTimeSafe(master.invoicedate);
                 master.createddate = AppTimeZoneHelper.ToLocalTimeSafe(master.createddate);
                 master.modifieddate = AppTimeZoneHelper.ToLocalTimeSafe(master.modifieddate);
+                master.invoicedate = AppTimeZoneHelper.ToLocalTimeSafe(master.invoicedate);
+
+                // If billdate only contains date or 05:30 (midnight shifted), combine with actual createddate/modifieddate time
+                DateTime? actualTxTime = null;
+                if (master.createddate.HasValue && master.createddate.Value.TimeOfDay != TimeSpan.Zero && master.createddate.Value.TimeOfDay != TimeSpan.FromHours(5.5))
+                {
+                    actualTxTime = master.createddate.Value;
+                }
+                else if (master.modifieddate.HasValue && master.modifieddate.Value.TimeOfDay != TimeSpan.Zero && master.modifieddate.Value.TimeOfDay != TimeSpan.FromHours(5.5))
+                {
+                    actualTxTime = master.modifieddate.Value;
+                }
+
+                DateTime baseBillDt = master.billdate != default ? master.billdate.Date : (master.invoicedate?.Date ?? actualTxTime?.Date ?? DateTime.Today);
+                if (actualTxTime.HasValue)
+                {
+                    master.billdate = baseBillDt.Add(actualTxTime.Value.TimeOfDay);
+                }
+                else
+                {
+                    master.billdate = AppTimeZoneHelper.ToLocalTimeSafe(master.billdate);
+                }
 
                 // Resolve Doctor Name from doctor_master -> name by dcode
                 using (IDbConnection mainDb = new NpgsqlConnection(_conn))
