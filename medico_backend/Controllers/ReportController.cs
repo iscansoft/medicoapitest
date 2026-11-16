@@ -453,12 +453,12 @@ namespace medico_backend.Controllers
         }
 
         [HttpGet("stock-report")]
-        public async Task<IActionResult> GetStockReport([FromQuery] string? warehousecode, [FromQuery] DateTime? date)
+        public async Task<IActionResult> GetStockReport([FromQuery] string? warehousecode, [FromQuery] DateTime? date, [FromQuery] DateTime? fromdate, [FromQuery] DateTime? todate, [FromQuery] long? itemcode, [FromQuery] string? search)
         {
             if (string.IsNullOrWhiteSpace(T))
                 return BadRequest(new { success = false, message = "tenant_code header required" });
 
-            var res = await _reportClass.StockReportPDF(T, warehousecode, date);
+            var res = await _reportClass.StockReportPDF(T, warehousecode, date, fromdate, todate, itemcode, search);
             return Ok(res);
         }
 
