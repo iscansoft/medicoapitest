@@ -3895,55 +3895,81 @@ WHERE stockcode=@stockcode;";
             {
                 foreach (var item in request.items)
                 {
+                    if (item.returnqty <= 0)
+                        throw new Exception($"Return quantity must be greater than zero (sales detail {item.salesdetailcode}).");
+
+                    decimal packsize = item.packsize > 0 ? item.packsize : 1m;
+                    decimal totalqty = item.returnqty * packsize;
+
                     // ==========================
-                    // 1) Pull sales_detail row (for rate / audit fields)
+                    // 1) Lock the ORIGINAL sale line (also joins the bill to make sure it is not deleted)
                     // ==========================
                     var detail = await db.QueryFirstOrDefaultAsync<sales_detail>(@"
 SELECT
-    salesdetailcode, salescode, itemcode, quantity, freequantity, uomcode, rate,
-    discountpercentage, discountamount, taxpercentage, taxamount,
-    amount, totalamount, batchno, manufacturingdate, expirydate,
-    soldqty, COALESCE(returnedqty,0) AS returnedqty,
-    warehousecode, tenantcode
-FROM public.sales_detail
-WHERE salesdetailcode = @salesdetailcode
-  AND tenantcode = @tenantcode;",
+    sd.salesdetailcode, sd.salescode, sd.itemcode, sd.quantity, sd.freequantity, sd.uomcode, sd.rate,
+    sd.discountpercentage, sd.discountamount, sd.taxpercentage, sd.taxamount,
+    sd.amount, sd.totalamount, sd.batchno, sd.manufacturingdate, sd.expirydate,
+    sd.soldqty, COALESCE(sd.returnedqty,0) AS returnedqty,
+    sd.warehousecode, sd.tenantcode
+FROM public.sales_detail sd
+JOIN public.sales_master sm
+  ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+WHERE sd.salesdetailcode = @salesdetailcode
+  AND sd.tenantcode = @tenantcode
+  AND sm.deleted = false
+FOR UPDATE OF sd;",
                         new { item.salesdetailcode, request.tenantcode }, transaction);
 
                     if (detail == null)
-                        throw new Exception($"Sales detail not found for salesdetailcode={item.salesdetailcode}");
+                        throw new Exception($"Sales detail not found (or bill deleted) for salesdetailcode={item.salesdetailcode}");
 
-                    decimal totalqty = item.returnqty * item.packsize;
+                    if (detail.salescode != item.salescode || detail.itemcode != item.itemcode)
+                        throw new Exception($"Sales detail {item.salesdetailcode} does not match the given bill / item.");
 
                     // ==========================
-                    // 1b) Validate against ACTUAL stock
+                    // 2) Validate against what was SOLD minus what was already RETURNED
+                    //    (NOT against current stock — a return adds stock back)
                     // ==========================
+                    decimal returnable = detail.quantity - detail.returnedqty;
+
+                    if (totalqty > returnable)
+                        throw new Exception(
+                            $"Cannot return {totalqty} for item {detail.itemcode}; " +
+                            $"sold {detail.quantity}, already returned {detail.returnedqty}, " +
+                            $"only {returnable} can be returned.");
+
+                    // ==========================
+                    // 3) Find the stock row the sale was taken from (batch optional, same as InsertSales)
+                    // ==========================
+                    long? warehouse = detail.warehousecode ?? item.warehousecode;
+
                     var stock = await db.QueryFirstOrDefaultAsync<stock_master>(@"
-    SELECT stockcode, closingstock, unitcost
-    FROM public.stock_master
-    WHERE itemcode = @itemcode
-      AND batchno = @batchno
-      AND tenantcode = @tenantcode
-      AND deleted = false
-      AND (@warehousecode IS NULL OR warehousecode = @warehousecode);",
+SELECT stockcode, closingstock, unitcost
+FROM public.stock_master
+WHERE itemcode = @itemcode
+  AND COALESCE(batchno,'') = COALESCE(@batchno,'')
+  AND (@warehousecode::bigint IS NULL OR warehousecode = @warehousecode::bigint)
+  AND tenantcode = @tenantcode
+  AND deleted = false
+ORDER BY stockcode
+LIMIT 1
+FOR UPDATE;",
                         new
                         {
-                            item.itemcode,
-                            item.batchno,
-                            request.tenantcode,
-                            item.warehousecode
+                            itemcode = detail.itemcode,
+                            batchno = NormBatch(detail.batchno),
+                            warehousecode = warehouse,
+                            request.tenantcode
                         }, transaction);
 
                     if (stock == null)
-                        throw new Exception($"Stock not found for item {item.itemcode}, batch {item.batchno}");
-
-                    if (totalqty > stock.closingstock)
-                        throw new Exception($"Cannot return {totalqty} for item {item.itemcode}; only {stock.closingstock} available");
+                        throw new Exception(
+                            $"Stock not found for item {detail.itemcode}, batch {(string.IsNullOrEmpty(detail.batchno) ? "(none)" : detail.batchno)}");
 
                     decimal amount = totalqty * detail.rate;
 
                     // ==========================
-                    // 2) Update sales_detail.returnedqty
+                    // 4) Update sales_detail.returnedqty
                     // ==========================
                     await db.ExecuteAsync(@"
 UPDATE public.sales_detail
@@ -3952,12 +3978,11 @@ WHERE salesdetailcode = @salesdetailcode;",
                         new { totalqty, item.salesdetailcode }, transaction);
 
                     // ==========================
-                    // 3) Update stock_master by stockcode
+                    // 5) Put the goods back into stock
                     // ==========================
                     await db.ExecuteAsync(@"
 UPDATE public.stock_master
-SET
-    damagedqty   = COALESCE(damagedqty,0) + @totalqty,
+SET soldqty      = GREATEST(COALESCE(soldqty,0) - @totalqty, 0),
     closingstock = closingstock + @totalqty,
     stockvalue   = (closingstock + @totalqty) * unitcost,
     modifieddate = CURRENT_TIMESTAMP
@@ -3965,7 +3990,7 @@ WHERE stockcode = @stockcode;",
                         new { totalqty, stockcode = stock.stockcode }, transaction);
 
                     // ==========================
-                    // 4) Insert the return record for THIS item
+                    // 6) Insert the return record
                     // ==========================
                     long returncode = await db.ExecuteScalarAsync<long>(@"
 INSERT INTO public.sales_return_master
@@ -3986,22 +4011,25 @@ RETURNING salesreturncode;",
                         new
                         {
                             item.salesdetailcode,
-                            item.salescode,
-                            item.itemcode,
+                            detail.salescode,
+                            detail.itemcode,
                             request.customercode,
-                            item.batchno,
+                            batchno = detail.batchno,
                             item.returnqty,
-                            item.packsize,
+                            packsize,
                             totalqty,
                             rate = detail.rate,
                             amount,
-                            item.warehousecode,
+                            warehousecode = warehouse,
                             remarks = item.remarks ?? request.remarks,
                             request.usercode,
                             request.tenantcode
                         }, transaction);
 
                     returncodes.Add(returncode);
+
+                    // keep item master MRP in sync (stock changed)
+                    await RefreshItemMasterPrice(db, transaction, detail.itemcode, request.tenantcode!);
                 }
 
                 transaction.Commit();

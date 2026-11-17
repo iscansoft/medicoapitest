@@ -588,7 +588,7 @@ VALUES
                    WHERE  b.isdeleted   = false
                    AND    b.tenant_code = @tenant_code
                    ORDER  BY b.appointment_date DESC, b.token_no";
-
+           
             var res = await db.QueryAsync<AppointmentBookingListModel>(sql, new { tenant_code });
             return res.ToList();
         }
