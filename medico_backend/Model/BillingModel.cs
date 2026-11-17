@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Dapper.Contrib.Extensions;
 
@@ -848,9 +848,8 @@ namespace medico_backend.Model
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
+        public double advance_adjusted { get; set; }
         public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
-
-
     }
 
     public class HmsOpServiceAmountRow
@@ -870,6 +869,7 @@ namespace medico_backend.Model
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
+        public double advance_adjusted { get; set; }
         public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
     }
 
@@ -895,6 +895,53 @@ namespace medico_backend.Model
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
         public double due_amount { get; set; }
+        public double advance_adjusted { get; set; }
+    }
+
+    public class HmsOldDueClearedBillRow
+    {
+        public string receipt_guid { get; set; } = "";
+        public string? receipt_no { get; set; }
+        public DateTime? receipt_date { get; set; }
+        public string requestguid { get; set; } = "";
+        public string? bill_no { get; set; }
+        public DateTime? bill_date { get; set; }
+        public decimal? custid { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobileno { get; set; }
+        public double bill_total { get; set; }
+        public double amount_cleared { get; set; }
+        public string paymode { get; set; } = "";
+        public decimal? pmcode { get; set; }
+        public string? reference_no { get; set; }
+        public string? doctor_name { get; set; }
+        public string? counter_name { get; set; }
+        public string? user_name { get; set; }
+    }
+
+    public class HmsOldDueClearedDateSummary
+    {
+        public DateTime bill_date { get; set; }
+        public string bill_date_str { get; set; } = "";
+        public int bill_count { get; set; }
+        public double total_cleared { get; set; }
+        public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
+    }
+
+    public class HmsCancelledBillSummaryRow
+    {
+        public string requestguid { get; set; } = "";
+        public string? bill_no { get; set; }
+        public DateTime? bill_date { get; set; }
+        public decimal? custid { get; set; }
+        public string? patient_name { get; set; }
+        public string? mobileno { get; set; }
+        public double total_amount { get; set; }
+        public double gross_amount { get; set; }
+        public double discount_amount { get; set; }
+        public string? doctor_name { get; set; }
+        public string? cancellation_reason { get; set; }
+        public string? cancelled_by { get; set; }
     }
 
     public class HmsOpCategoryCollectionResponse
@@ -912,6 +959,37 @@ namespace medico_backend.Model
         public double total_due { get; set; }
         public double total_ip_cost { get; set; }
         public double total_pharmacy_cost { get; set; }
+
+        // ── IP Summary ────────────────────────────────────────────────
+        public double total_ip_amount { get; set; }
+        public double ip_advance_used { get; set; }
+        public List<HmsOpPaymodeAmount> ip_paymodes { get; set; } = new();
+
+        // ── Advance summary ───────────────────────────────────────────
+        public double advance_collected { get; set; }
+        public double total_advance_collected { get; set; }
+        public double advance_used { get; set; }
+        public double total_advance_used { get; set; }
+        public double advance_refunded { get; set; }
+        public double total_advance_refunded { get; set; }
+        public double total_advance_adjusted { get; set; }
+        public List<HmsOpPaymodeAmount> advance_collected_by_paymode { get; set; } = new();
+
+        // ── Old due cleared today ─────────────────────────────────────
+        public double total_due_cleared { get; set; }
+        public double due_cleared_today { get; set; }
+        public List<HmsOpPaymodeAmount> due_cleared_by_paymode { get; set; } = new();
+        public List<HmsOldDueClearedDateSummary> due_cleared_by_bill_date { get; set; } = new();
+        public List<HmsOldDueClearedBillRow> due_cleared_bills { get; set; } = new();
+
+        // ── Cancelled bills ───────────────────────────────────────────
+        public int cancelled_bill_count { get; set; }
+        public double cancelled_bill_total_amount { get; set; }
+        public List<HmsCancelledBillSummaryRow> cancelled_bills { get; set; } = new();
+
+        // ── Net Counter Cash Closing ──────────────────────────────────
+        public double net_counter_collection { get; set; }
+
         public List<HmsOpPaymodeAmount> paymode_totals { get; set; } = new();
         public List<HmsOpCategoryAmountRow> categories { get; set; } = new();
         public List<HmsOpServiceAmountRow> services { get; set; } = new();
@@ -937,7 +1015,10 @@ namespace medico_backend.Model
         public double discount { get; set; }
         public double net { get; set; }
         public double paid { get; set; }
+        public double advance_adjusted { get; set; }
         public double ratio { get; set; }
+        public double bill_paid { get; set; }
+        public double bill_advance { get; set; }
     }
 
     public class HmsOpBillPayRow

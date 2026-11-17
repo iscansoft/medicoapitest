@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Linq;
@@ -1990,6 +1990,7 @@ namespace medico_backend.Class
         public static class HmsOpCategories
         {
             public const string Consultation = "CONSULTATION";
+            public const string VisitingConsultation = "VISITING CONSULTATION";
             public const string Dressing = "DRESSING";
             public const string Observation = "OBSERVATION";
             public const string Service = "SERVICE";
@@ -2001,14 +2002,14 @@ namespace medico_backend.Class
             public const string Ip = "IP";
             public const string Pharmacy = "PHARMACY";
 
-            // Display order in the report (same as before)
+            // Display order in the report
             public static readonly string[] Order =
             {
-        Consultation, Dressing, Observation, Service, Physio, Lab, Scan, Ecg, Echo, Ip, Pharmacy
-    };
+                Consultation, VisitingConsultation, Dressing, Observation, Service, Physio, Lab, Scan, Ecg, Echo, Ip, Pharmacy
+            };
 
             // Shown only when at least one item exists
-            public static readonly HashSet<string> Optional = new() { Echo };
+            public static readonly HashSet<string> Optional = new() { Echo, VisitingConsultation };
         }
         public async Task<HmsPayModeCollectionResponse> GetPayModeCollectionReport(
      DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, string tenantCode)
@@ -2102,7 +2103,7 @@ namespace medico_backend.Class
             };
         }
         public async Task<HmsOpCategoryCollectionResponse> GetOpCategoryCollectionReport(
-DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
+            DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, string tenantCode)
         {
             if (string.IsNullOrWhiteSpace(tenantCode))
                 throw new ArgumentException("tenant_code is required.", nameof(tenantCode));
@@ -2138,6 +2139,7 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
             lrm.requestsnoprint                              AS bill_no,
             COALESCE(lrm.totalamount, 0)                     AS bill_total,
             COALESCE(lrm.paidamount, 0)                      AS bill_paid,
+            COALESCE(lrm.advanceamount, 0)                   AS bill_advance,
             UPPER(COALESCE(lrd.chargetype, ''))              AS chargetype,
             COALESCE(NULLIF(lrd.item_name, ''), tm.name, '') AS item_name,
             COALESCE(tm.name, '')                            AS test_name,
@@ -2180,14 +2182,13 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 ON tm.tcode = lrd.tcode AND tm.tenant_code = lrm.tenant_code
         LEFT JOIN group_master gm
                 ON gm.gcode = tm.gcode AND gm.tenant_code = lrm.tenant_code
-        LEFT JOIN LATERAL (
-            SELECT s.service_id, s.service_name
-              FROM service_type_master s
-             WHERE s.tenant_code = lrm.tenant_code
-               AND COALESCE(s.deleted, false) = false
-               AND LOWER(TRIM(s.service_name)) = LOWER(TRIM(COALESCE(NULLIF(lrd.item_name, ''), tm.name, '')))
-             LIMIT 1
-        ) svc ON true
+        LEFT JOIN service_type_master svc
+                ON svc.tenant_code = lrm.tenant_code
+               AND COALESCE(svc.deleted, false) = false
+               AND LOWER(svc.service_name) = LOWER(COALESCE(NULLIF(lrd.item_name, ''), tm.name, ''))
+        LEFT JOIN ip_registration ipr_sheet
+                ON ipr_sheet.tenant_code = lrm.tenant_code
+               AND (ipr_sheet.ip_no = lrm.sheet_id OR ipr_sheet.ip_no = lrm.opvisitid)
         WHERE lrm.tenant_code = @t
           AND lrm.bill_category = 'HMS'
           AND COALESCE(lrm.isdeleted, false) = false
@@ -2195,10 +2196,10 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
           AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
           -- STRICTLY EXCLUDE IP BILLS SO THEY DON'T GET MIXED INTO OP
           AND lrm.ip_id IS NULL
-          AND (lrm.sheet_id IS NULL OR (lrm.sheet_id NOT ILIKE 'IP%' AND NOT EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = lrm.tenant_code AND (ipr.ip_id::text = lrm.sheet_id OR ipr.ip_no = lrm.sheet_id))))
-          AND (lrm.opvisitid IS NULL OR (lrm.opvisitid NOT ILIKE 'IP%' AND NOT EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = lrm.tenant_code AND (ipr.ip_id::text = lrm.opvisitid OR ipr.ip_no = lrm.opvisitid))))
-          AND NOT EXISTS (SELECT 1 FROM unbilledcharges uc WHERE uc.tenant_code = lrm.tenant_code AND uc.billid = lrm.requestguid AND uc.ip_id IS NOT NULL)
+          AND (lrm.sheet_id IS NULL OR lrm.sheet_id NOT ILIKE 'IP%')
+          AND (lrm.opvisitid IS NULL OR lrm.opvisitid NOT ILIKE 'IP%')
           AND UPPER(COALESCE(lrm.billtype, '')) NOT LIKE '%IP%'
+          AND ipr_sheet.ip_id IS NULL
           {extra}
     ),
     cat AS (
@@ -2241,54 +2242,70 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                      OR b.chargetype = 'SERVICE'
                      OR LOWER(TRIM(b.item_name)) LIKE 'service%'                        THEN 'SERVICE'
 
+                -- VISITING CONSULTATION: visiting doctor consultation fee (separate from regular consultation)
+                WHEN b.chargetype = 'VISITING CONSULTATION'
+                     OR b.chargetype LIKE '%VISIT%'
+                     OR LOWER(TRIM(b.item_name)) LIKE '%visiting%'
+                     OR LOWER(TRIM(b.test_name)) LIKE '%visiting%'                      THEN 'VISITING CONSULTATION'
+
                 -- CONSULTATION: doctor consultation fee (evaluated before Lab so consultation items with tcode/group are properly matched)
                 WHEN b.chargetype = 'CONSULTATION'
                      OR b.chargetype LIKE '%CONSULT%'
                      OR LOWER(TRIM(b.item_name)) LIKE '%consultation%'
                      OR LOWER(TRIM(b.test_name)) LIKE '%consultation%'
                      OR LOWER(TRIM(b.item_name)) LIKE 'dr.%'
-                     OR LOWER(TRIM(b.item_name)) LIKE 'dr %'
-                     OR LOWER(TRIM(b.item_name)) LIKE '%doctor%'
-                     OR (b.service_id IS NULL
-                         AND NOT b.isscan
-                         AND NOT b.islab
-                         AND (b.chargetype IN ('CONSULTATION', 'OP', '') OR b.chargetype IS NULL)
-                         AND (LOWER(b.op_visit_type) IN ('newvisit', 'consultation', 'followup', 'review', 'routine', 'waiting', 'in_consultation', 'completed') OR b.op_visit_type = ''))
-                                                                                        THEN 'CONSULTATION'
+                     OR LOWER(TRIM(b.item_name)) LIKE 'dr %'                            THEN 'CONSULTATION'
 
-                -- LAB: lab tests / investigations
+                -- LAB: islab flag, or chargetype LAB, or test_master item (tcode > 0)
                 WHEN b.islab
-                     OR b.chargetype IN ('LAB', 'INVESTIGATION', 'TEST')
-                     OR (b.tcode IS NOT NULL AND b.groupname != '')
-                     OR (b.groupname != '' AND NOT b.isscan)
-                     OR LOWER(TRIM(b.item_name)) ~ 'test|profile|panel|culture|urine|blood|serum|stool|cbc|esr|smear|biopsy|widal|dengue'
-                     OR b.tcode IS NOT NULL
-                                                                                        THEN 'LAB'
+                     OR b.chargetype = 'LAB'
+                     OR b.tcode > 0                                                     THEN 'LAB'
 
-                ELSE 'SERVICE'
-            END AS category,
-            CASE WHEN b.bill_lines_total > 0 THEN b.line_net / b.bill_lines_total
-                 WHEN b.bill_lines_gross_sum > 0 THEN b.line_gross / b.bill_lines_gross_sum
-                 ELSE 0 END AS ratio,
-            GREATEST(
-                b.bill_discount,
-                b.bill_lines_discount_sum,
-                b.bill_gross - b.bill_total,
-                b.bill_lines_gross_sum - b.bill_total,
-                0
-            ) AS actual_bill_discount
+                -- Fallback to chargetype, then OTHER
+                WHEN b.chargetype <> ''                                                THEN b.chargetype
+                ELSE 'OTHER'
+            END AS category
         FROM base b
     )
-    SELECT op_id, op_no, token_no, visit_date, patient_name, custid, requestguid, bill_no,
-           item_name, service_id, service_name, category,
-           GREATEST(
-               line_gross,
-               (bill_total * ratio) + GREATEST(line_discount, actual_bill_discount * ratio)
-           )::float8                                                      AS gross,
-           GREATEST(line_discount, (actual_bill_discount * ratio))::float8 AS discount,
-           (bill_total * ratio)::float8  AS net,
-           (bill_paid  * ratio)::float8  AS paid,
-           ratio::float8                 AS ratio
+    SELECT
+        op_id,
+        op_no,
+        token_no,
+        visit_date,
+        patient_name,
+        custid,
+        requestguid,
+        bill_no,
+        service_id,
+        service_name,
+        item_name,
+        category,
+        bill_total,
+        bill_paid,
+        bill_advance,
+        CASE
+            WHEN bill_lines_gross_sum > 0
+                THEN line_gross - (bill_discount * (line_gross / bill_lines_gross_sum))
+            WHEN bill_lines_total > 0
+                THEN line_net - (bill_discount * (line_net / bill_lines_total))
+            ELSE line_net
+        END AS net,
+        CASE
+            WHEN bill_lines_gross_sum > 0
+                THEN bill_discount * (line_gross / bill_lines_gross_sum)
+            WHEN bill_lines_total > 0
+                THEN bill_discount * (line_net / bill_lines_total)
+            ELSE line_discount
+        END AS discount,
+        CASE
+            WHEN bill_total > 0 AND bill_lines_gross_sum > 0
+                THEN (line_gross - (bill_discount * (line_gross / bill_lines_gross_sum))) / bill_total
+            WHEN bill_total > 0 AND bill_lines_total > 0
+                THEN (line_net - (bill_discount * (line_net / bill_lines_total))) / bill_total
+            WHEN bill_total > 0
+                THEN line_net / bill_total
+            ELSE 0
+        END AS ratio
     FROM cat
     ORDER BY visit_date, op_no";
 
@@ -2319,22 +2336,63 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
             GROUP BY 1, 2",
                     new { t = tenantCode, guids = billGuids })).ToList();
 
-            var payByBill = payRows.ToLookup(x => x.requestguid);
-            var billPaid = lines.GroupBy(l => l.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.paid));
-            var billKnown = payRows.GroupBy(x => x.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.amount));
+            // Separate real-money payments from advance usage for each bill
+            var realPayRows = payRows.Where(x => x.paymode != "ADVANCE ADJUSTED").ToList();
+            var advPayRows = payRows.Where(x => x.paymode == "ADVANCE ADJUSTED").ToList();
+
+            var payByBillReal = realPayRows.ToLookup(x => x.requestguid);
+            var advByBill = advPayRows.GroupBy(x => x.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.amount));
+            var billKnownReal = realPayRows.GroupBy(x => x.requestguid).ToDictionary(g => g.Key, g => g.Sum(x => x.amount));
+
+            // Extract master advance and paid directly from the lines query (saves a database roundtrip)
+            var billMasterInfo = lines
+                .GroupBy(l => l.requestguid)
+                .ToDictionary(g => g.Key, g => (advanceamount: g.First().bill_advance, paidamount: g.First().bill_paid));
+
+            var billRealPaid = new Dictionary<string, double>();
+            var billAdvAdjusted = new Dictionary<string, double>();
+
+            foreach (var guid in billGuids)
+            {
+                double advFromBcb = advByBill.TryGetValue(guid, out var aBcb) ? aBcb : 0;
+                double paidFromMaster = billMasterInfo.TryGetValue(guid, out var m) ? m.paidamount : 0;
+                double advFromMaster = billMasterInfo.TryGetValue(guid, out var m2) ? m2.advanceamount : 0;
+
+                double totalAdv = advFromBcb > 0.01 ? advFromBcb : Math.Min(advFromMaster, paidFromMaster);
+                double realPaid = Math.Max(paidFromMaster - totalAdv, 0);
+
+                double knownReal = billKnownReal.TryGetValue(guid, out var kr) ? kr : 0;
+                if (knownReal > 0.01 && realPaid == 0)
+                {
+                    realPaid = knownReal;
+                }
+
+                billRealPaid[guid] = realPaid;
+                billAdvAdjusted[guid] = totalAdv;
+            }
 
             double R(double v) => Math.Round(v, 2);
 
+            // Update lines with real paid and advance adjusted:
+            foreach (var l in lines)
+            {
+                double realPaid = billRealPaid.TryGetValue(l.requestguid, out var rp) ? rp : 0;
+                double advAdj = billAdvAdjusted.TryGetValue(l.requestguid, out var aa) ? aa : 0;
+
+                l.paid = R(realPaid * l.ratio);
+                l.advance_adjusted = R(advAdj * l.ratio);
+            }
+
             IEnumerable<(string paymode, decimal? pmcode, double amount)> Split(HmsOpCategoryLine l)
             {
-                double paidTotal = billPaid.TryGetValue(l.requestguid, out var pt) ? pt : 0;
-                double known = billKnown.TryGetValue(l.requestguid, out var k) ? k : 0;
-                double scale = (known > paidTotal + 0.01 && known > 0) ? paidTotal / known : 1.0;
+                double paidReal = billRealPaid.TryGetValue(l.requestguid, out var pt) ? pt : 0;
+                double known = billKnownReal.TryGetValue(l.requestguid, out var k) ? k : 0;
+                double scale = (known > paidReal + 0.01 && known > 0) ? paidReal / known : 1.0;
 
-                foreach (var pr in payByBill[l.requestguid])
+                foreach (var pr in payByBillReal[l.requestguid])
                     yield return (pr.paymode, pr.pmcode, pr.amount * scale * l.ratio);
 
-                double unspecified = paidTotal - known * scale;
+                double unspecified = paidReal - known * scale;
                 if (unspecified > 0.01)
                     yield return ("UNSPECIFIED", null, unspecified * l.ratio);
             }
@@ -2352,8 +2410,10 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                    .OrderByDescending(x => x.amount)
                    .ToList();
 
-            // â”€â”€ IP Category Row (All IP bills with IP number / ID + Unbilled IP) â”€â”€â”€â”€
+            // ── IP Category Row (All IP bills with IP number / ID + Unbilled IP) ────
             var ipCategoryRow = new HmsOpCategoryAmountRow { category = HmsOpCategories.Ip };
+            var ipPaymodes = new List<HmsOpPaymodeAmount>();
+            double ipAdvanceUsed = 0;
             try
             {
                 string ipExtra = "";
@@ -2365,93 +2425,63 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 if (cntcode.HasValue) { ipExtra += " AND lrm.cntcode = @cnt "; ipParams.Add("cnt", cntcode.Value); }
                 if (dcode.HasValue)
                 {
-                    ipExtra += @" AND (
-                        lrm.dcode = @dcode 
-                        OR lrm.consultantdcode = @dcode 
-                        OR EXISTS (
-                            SELECT 1 FROM ip_registration ipr 
-                            WHERE ipr.tenant_code = @t 
-                              AND (ipr.ip_id = lrm.ip_id OR ipr.ip_id::text = lrm.sheet_id OR ipr.ip_no = lrm.sheet_id OR ipr.ip_id::text = lrm.opvisitid OR ipr.ip_no = lrm.opvisitid) 
-                              AND ipr.dcode = @dcode
-                        )
-                    ) ";
+                    ipExtra += " AND (lrm.dcode = @dcode OR lrm.consultantdcode = @dcode) ";
                     ipParams.Add("dcode", dcode.Value);
                 }
 
-                // 1. Billed IP: Matches ip_id, sheet_id with IP, opvisitid with IP, unbilledcharges link, or billtype IP
-                string sqlIpBilled = $@"
+                // Single batched query for Billed IP, Item Count, IP Paymodes, and Unbilled IP (1 roundtrip)
+                string sqlIpCombined = $@"
+                    -- 1. Billed IP summary (Restores initial accurate net/gross calculation, apart from lab)
                     SELECT 
                         COUNT(DISTINCT lrm.requestguid) AS bill_count,
-                        COUNT(DISTINCT COALESCE(
-                            lrm.ip_id::text, 
-                            NULLIF(lrm.sheet_id, ''), 
-                            NULLIF(lrm.opvisitid, ''), 
-                            lrm.requestguid
-                        )) AS visit_count,
+                        COUNT(DISTINCT COALESCE(lrm.ip_id::text, NULLIF(lrm.sheet_id, ''), NULLIF(lrm.opvisitid, ''), lrm.requestguid)) AS visit_count,
                         COALESCE(SUM(COALESCE(lrm.requestamount, lrm.totalamount + ABS(COALESCE(lrm.discountamount, 0)) + ABS(COALESCE(lrm.specialdiscount, 0)) + ABS(COALESCE(lrm.ourdiscount, 0)))), 0)::float8 AS gross,
                         COALESCE(SUM(ABS(COALESCE(lrm.discountamount, 0)) + ABS(COALESCE(lrm.specialdiscount, 0)) + ABS(COALESCE(lrm.ourdiscount, 0))), 0)::float8 AS discount,
                         COALESCE(SUM(lrm.totalamount), 0)::float8 AS net,
-                        COALESCE(SUM(lrm.paidamount), 0)::float8 AS paid
+                        COALESCE(SUM(lrm.paidamount), 0)::float8 AS paid,
+                        COALESCE(SUM(COALESCE(lrm.advanceamount, 0)), 0)::float8 AS advance_adjusted
                     FROM lab_request_master lrm
+                    LEFT JOIN ip_registration ipr_sheet ON ipr_sheet.tenant_code = lrm.tenant_code AND (ipr_sheet.ip_no = lrm.sheet_id OR ipr_sheet.ip_no = lrm.opvisitid)
                     WHERE lrm.tenant_code = @t
                       AND (
                           lrm.ip_id IS NOT NULL 
-                          OR (lrm.sheet_id IS NOT NULL AND (
-                              lrm.sheet_id ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.sheet_id OR ipr.ip_no = lrm.sheet_id))
-                          ))
-                          OR (lrm.opvisitid IS NOT NULL AND (
-                              lrm.opvisitid ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.opvisitid OR ipr.ip_no = lrm.opvisitid))
-                          ))
-                          OR EXISTS (
-                              SELECT 1 FROM unbilledcharges uc 
-                              WHERE uc.tenant_code = @t AND uc.billid = lrm.requestguid AND uc.ip_id IS NOT NULL
-                          )
+                          OR (lrm.sheet_id IS NOT NULL AND lrm.sheet_id ILIKE 'IP%')
+                          OR (lrm.opvisitid IS NOT NULL AND lrm.opvisitid ILIKE 'IP%')
                           OR UPPER(COALESCE(lrm.billtype, '')) LIKE '%IP%'
+                          OR ipr_sheet.ip_id IS NOT NULL
                       )
+                      AND UPPER(COALESCE(lrm.chargetype, '')) <> 'LAB'
+                      AND COALESCE(lrm.isinvestigation, false) = false
                       AND COALESCE(lrm.isdeleted, false) = false
                       AND COALESCE(lrm.deleted, false) = false
                       AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
-                      {ipExtra}";
+                      {ipExtra};
 
-                var billedIp = await db.QueryFirstOrDefaultAsync<dynamic>(sqlIpBilled, ipParams);
-
-                // Billed items count
-                string sqlIpItems = $@"
+                    -- 2. Billed Items Count (apart from lab)
                     SELECT COUNT(1)
                     FROM lab_request_details lrd
                     INNER JOIN lab_request_master lrm ON lrm.requestguid = lrd.requestguid
+                    LEFT JOIN ip_registration ipr_sheet ON ipr_sheet.tenant_code = lrm.tenant_code AND (ipr_sheet.ip_no = lrm.sheet_id OR ipr_sheet.ip_no = lrm.opvisitid)
                     WHERE lrm.tenant_code = @t
                       AND (
                           lrm.ip_id IS NOT NULL 
-                          OR (lrm.sheet_id IS NOT NULL AND (
-                              lrm.sheet_id ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.sheet_id OR ipr.ip_no = lrm.sheet_id))
-                          ))
-                          OR (lrm.opvisitid IS NOT NULL AND (
-                              lrm.opvisitid ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.opvisitid OR ipr.ip_no = lrm.opvisitid))
-                          ))
-                          OR EXISTS (
-                              SELECT 1 FROM unbilledcharges uc 
-                              WHERE uc.tenant_code = @t AND uc.billid = lrm.requestguid AND uc.ip_id IS NOT NULL
-                          )
+                          OR (lrm.sheet_id IS NOT NULL AND lrm.sheet_id ILIKE 'IP%')
+                          OR (lrm.opvisitid IS NOT NULL AND lrm.opvisitid ILIKE 'IP%')
                           OR UPPER(COALESCE(lrm.billtype, '')) LIKE '%IP%'
+                          OR ipr_sheet.ip_id IS NOT NULL
                       )
+                      AND UPPER(COALESCE(lrm.chargetype, '')) <> 'LAB'
+                      AND COALESCE(lrm.isinvestigation, false) = false
                       AND COALESCE(lrm.isdeleted, false) = false
                       AND COALESCE(lrm.deleted, false) = false
                       AND COALESCE(lrd.isdeleted, false) = false
                       AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
-                      {ipExtra}";
+                      {ipExtra};
 
-                int billedItemsCount = await db.ExecuteScalarAsync<int>(sqlIpItems, ipParams);
-
-                // Billed IP Paymodes
-                string sqlIpPay = $@"
+                    -- 3. IP Paymodes (apart from lab)
                     SELECT 
                         CASE WHEN UPPER(COALESCE(bcb.collection_type, '')) = 'ADVANCE'
-                             THEN 'ADVANCE ADJUSTED'
+                             THEN 'ADVANCE'
                              ELSE UPPER(COALESCE(NULLIF(TRIM(pm.name), ''),
                                                  NULLIF(TRIM(bcb.collection_type), ''),
                                                  'UNSPECIFIED')) END AS paymode,
@@ -2460,61 +2490,46 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                     FROM balancecollectionby bcb
                     INNER JOIN lab_request_master lrm ON lrm.requestguid = bcb.request_guid
                     LEFT JOIN paymode_master pm ON pm.pmcode = bcb.pmcode AND pm.tenant_code = bcb.tenant_code AND COALESCE(pm.deleted, false) = false
+                    LEFT JOIN ip_registration ipr_sheet ON ipr_sheet.tenant_code = lrm.tenant_code AND (ipr_sheet.ip_no = lrm.sheet_id OR ipr_sheet.ip_no = lrm.opvisitid)
                     WHERE bcb.tenant_code = @t
                       AND COALESCE(bcb.deleted, false) = false
                       AND (
                           lrm.ip_id IS NOT NULL 
-                          OR (lrm.sheet_id IS NOT NULL AND (
-                              lrm.sheet_id ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.sheet_id OR ipr.ip_no = lrm.sheet_id))
-                          ))
-                          OR (lrm.opvisitid IS NOT NULL AND (
-                              lrm.opvisitid ILIKE 'IP%' 
-                              OR EXISTS (SELECT 1 FROM ip_registration ipr WHERE ipr.tenant_code = @t AND (ipr.ip_id::text = lrm.opvisitid OR ipr.ip_no = lrm.opvisitid))
-                          ))
-                          OR EXISTS (
-                              SELECT 1 FROM unbilledcharges uc 
-                              WHERE uc.tenant_code = @t AND uc.billid = lrm.requestguid AND uc.ip_id IS NOT NULL
-                          )
+                          OR (lrm.sheet_id IS NOT NULL AND lrm.sheet_id ILIKE 'IP%')
+                          OR (lrm.opvisitid IS NOT NULL AND lrm.opvisitid ILIKE 'IP%')
                           OR UPPER(COALESCE(lrm.billtype, '')) LIKE '%IP%'
+                          OR ipr_sheet.ip_id IS NOT NULL
                       )
+                      AND UPPER(COALESCE(lrm.chargetype, '')) <> 'LAB'
+                      AND COALESCE(lrm.isinvestigation, false) = false
                       AND COALESCE(lrm.isdeleted, false) = false
                       AND COALESCE(lrm.deleted, false) = false
                       AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
                       {ipExtra}
                     GROUP BY 1
-                    HAVING COALESCE(SUM(bcb.collectedamount), 0) > 0.004";
+                    HAVING COALESCE(SUM(bcb.collectedamount), 0) > 0.004;
 
-                var ipPaymodes = (await db.QueryAsync<HmsOpPaymodeAmount>(sqlIpPay, ipParams)).ToList();
+                    -- 4. IP Unbilled
+                    SELECT 
+                        COUNT(DISTINCT uc.ip_id) AS visit_count,
+                        COUNT(1) AS item_count,
+                        COALESCE(SUM(CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END), 0)::float8 AS gross,
+                        COALESCE(SUM(ABS(COALESCE(uc.discount, 0))), 0)::float8 AS discount,
+                        COALESCE(SUM((CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) - ABS(COALESCE(uc.discount, 0))), 0)::float8 AS net
+                    FROM unbilledcharges uc
+                    WHERE uc.tenant_code = @t
+                      AND uc.ip_id IS NOT NULL
+                      AND (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL)
+                      AND (
+                          (uc.chargedate >= @fromUtc AND uc.chargedate < @toUtc)
+                          OR (uc.chargedate IS NULL AND uc.billeddate >= @fromUtc AND uc.billeddate < @toUtc)
+                      );";
 
-                // 2. Unbilled IP charges from unbilledcharges (when counter not filtered)
-                double unbilledGross = 0, unbilledDiscount = 0, unbilledNet = 0;
-                int unbilledItems = 0, unbilledVisits = 0;
-                if (!cntcode.HasValue)
-                {
-                    string sqlIpUnbilled = @"
-                        SELECT 
-                            COUNT(DISTINCT uc.ip_id) AS visit_count,
-                            COUNT(1) AS item_count,
-                            COALESCE(SUM(CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END), 0)::float8 AS gross,
-                            COALESCE(SUM(ABS(COALESCE(uc.discount, 0))), 0)::float8 AS discount,
-                            COALESCE(SUM((CASE WHEN COALESCE(uc.amount, 0) = 0 THEN COALESCE(uc.quantity, 1) * COALESCE(uc.rate, 0) ELSE uc.amount END) - ABS(COALESCE(uc.discount, 0))), 0)::float8 AS net
-                        FROM unbilledcharges uc
-                        WHERE uc.tenant_code = @t
-                          AND uc.ip_id IS NOT NULL
-                          AND (COALESCE(uc.billedstatus, false) = false OR uc.billid IS NULL)
-                          AND COALESCE(uc.chargedate, uc.billeddate) >= @fromUtc AND COALESCE(uc.chargedate, uc.billeddate) < @toUtc";
-
-                    var unbilledRes = await db.QueryFirstOrDefaultAsync<dynamic>(sqlIpUnbilled, ipParams);
-                    if (unbilledRes != null)
-                    {
-                        unbilledVisits = (int)(unbilledRes.visit_count ?? 0);
-                        unbilledItems = (int)(unbilledRes.item_count ?? 0);
-                        unbilledGross = (double)(unbilledRes.gross ?? 0);
-                        unbilledDiscount = (double)(unbilledRes.discount ?? 0);
-                        unbilledNet = (double)(unbilledRes.net ?? 0);
-                    }
-                }
+                using var ipMulti = await db.QueryMultipleAsync(sqlIpCombined, ipParams);
+                var billedIp = await ipMulti.ReadFirstOrDefaultAsync<dynamic>();
+                int billedItemsCount = await ipMulti.ReadFirstOrDefaultAsync<int>();
+                var ipAllPaymodes = (await ipMulti.ReadAsync<HmsOpPaymodeAmount>()).ToList();
+                var unbilledRes = cntcode.HasValue ? null : await ipMulti.ReadFirstOrDefaultAsync<dynamic>();
 
                 int billedVisits = (int)(billedIp?.visit_count ?? 0);
                 int billedBills = (int)(billedIp?.bill_count ?? 0);
@@ -2522,22 +2537,58 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 double billedDiscount = (double)(billedIp?.discount ?? 0);
                 double billedNet = (double)(billedIp?.net ?? 0);
                 double billedPaid = (double)(billedIp?.paid ?? 0);
+                double billedAdvFromMaster = (double)(billedIp?.advance_adjusted ?? 0);
+
+                double unbilledGross = (double)(unbilledRes?.gross ?? 0);
+                double unbilledDiscount = (double)(unbilledRes?.discount ?? 0);
+                double unbilledNet = (double)(unbilledRes?.net ?? 0);
+                int unbilledVisits = (int)(unbilledRes?.visit_count ?? 0);
+                int unbilledItems = (int)(unbilledRes?.item_count ?? 0);
 
                 double ipNet = billedNet + unbilledNet;
                 double ipGross = billedGross + unbilledGross;
                 double ipDiscount = Math.Abs(billedDiscount) + Math.Abs(unbilledDiscount);
-                double ipCollected = billedPaid;
-                double ipDue = Math.Max(ipNet - ipCollected, 0);
 
-                double knownIpPay = ipPaymodes.Sum(x => x.amount);
-                if (ipCollected - knownIpPay > 0.01)
+                // Advance used against IP bills
+                double ipAdvAdjusted = ipAllPaymodes.Where(x => x.paymode == "ADVANCE" || x.paymode == "ADVANCE ADJUSTED").Sum(x => x.amount);
+                if (ipAdvAdjusted < 0.01 && billedAdvFromMaster > 0.01) ipAdvAdjusted = billedAdvFromMaster;
+                ipAdvanceUsed = R(ipAdvAdjusted);
+
+                // Paymodes list for IP: include both real paymodes (Cash/UPI/Card) AND Advance
+                ipPaymodes = new List<HmsOpPaymodeAmount>();
+                foreach (var pRow in ipAllPaymodes)
+                {
+                    if (pRow.paymode == "ADVANCE" || pRow.paymode == "ADVANCE ADJUSTED")
+                    {
+                        ipPaymodes.Add(new HmsOpPaymodeAmount
+                        {
+                            paymode = "ADVANCE",
+                            pmcode = pRow.pmcode,
+                            amount = R(pRow.amount)
+                        });
+                    }
+                    else
+                    {
+                        ipPaymodes.Add(pRow);
+                    }
+                }
+                if (ipAdvanceUsed > 0.004 && !ipPaymodes.Any(x => x.paymode == "ADVANCE"))
                 {
                     ipPaymodes.Add(new HmsOpPaymodeAmount
                     {
-                        paymode = "UNSPECIFIED",
-                        amount = R(ipCollected - knownIpPay)
+                        paymode = "ADVANCE",
+                        amount = ipAdvanceUsed
                     });
                 }
+
+                // Real money collected on IP bills (Cash, UPI, Card, etc.) - excludes advance
+                double ipRealPaid = R(ipPaymodes.Where(x => x.paymode != "ADVANCE").Sum(x => x.amount));
+                if (ipRealPaid == 0 && billedPaid > ipAdvanceUsed)
+                {
+                    ipRealPaid = R(billedPaid - ipAdvanceUsed);
+                }
+
+                double ipDue = R(Math.Max(ipNet - ipRealPaid - ipAdvanceUsed, 0));
 
                 ipCategoryRow.visit_count = Math.Max(billedVisits, unbilledVisits);
                 ipCategoryRow.bill_count = billedBills;
@@ -2548,11 +2599,12 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 ipCategoryRow.discount = R(ipDiscount);
                 ipCategoryRow.net_amount = R(ipNet);
                 ipCategoryRow.net = R(ipNet);
-                ipCategoryRow.collected_amount = R(ipCollected);
-                ipCategoryRow.collected = R(ipCollected);
-                ipCategoryRow.due_amount = R(ipDue);
-                ipCategoryRow.due = R(ipDue);
-                ipCategoryRow.paymodes = ipPaymodes;
+                ipCategoryRow.collected_amount = ipRealPaid;  // 0 if only advance was used
+                ipCategoryRow.collected = ipRealPaid;
+                ipCategoryRow.advance_adjusted = ipAdvanceUsed;
+                ipCategoryRow.due_amount = ipDue;
+                ipCategoryRow.due = ipDue;
+                ipCategoryRow.paymodes = ipPaymodes;  // Displays ADVANCE and/or Cash/UPI
             }
             catch (Exception ex)
             {
@@ -2563,8 +2615,16 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
             try
             {
                 var connStringsToTry = new List<string>();
-                if (!string.IsNullOrWhiteSpace(_inventoryConn)) connStringsToTry.Add(_inventoryConn);
-                if (!string.IsNullOrWhiteSpace(_conn) && !connStringsToTry.Contains(_conn)) connStringsToTry.Add(_conn);
+                if (!string.IsNullOrWhiteSpace(_conn)) connStringsToTry.Add(_conn);
+                if (!string.IsNullOrWhiteSpace(_inventoryConn) && !connStringsToTry.Contains(_inventoryConn))
+                {
+                    try
+                    {
+                        var b = new NpgsqlConnectionStringBuilder(_inventoryConn) { Timeout = 2, CommandTimeout = 3 };
+                        connStringsToTry.Add(b.ConnectionString);
+                    }
+                    catch { connStringsToTry.Add(_inventoryConn); }
+                }
 
                 foreach (var connStr in connStringsToTry)
                 {
@@ -2625,30 +2685,22 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                             int pharmItemsCount = 0;
                             try
                             {
-                                bool hasSalesDetail = await invDb.ExecuteScalarAsync<bool>(@"
-                                    SELECT EXISTS (
-                                        SELECT 1 FROM information_schema.tables 
-                                        WHERE table_schema = 'public' AND table_name = 'sales_detail'
-                                    )");
-                                if (hasSalesDetail)
-                                {
-                                    string sqlPharmItems = $@"
-                                        SELECT COUNT(1)
-                                        FROM public.sales_detail sd
-                                        INNER JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
-                                        WHERE COALESCE(sm.deleted, false) = false
-                                          AND (
-                                              sm.tenantcode = @t 
-                                              OR TRIM(sm.tenantcode) = TRIM(@t) 
-                                              OR TRIM(LEADING '0' FROM sm.tenantcode) = TRIM(LEADING '0' FROM @t)
-                                          )
-                                          AND (
-                                              (sm.billdate >= @fromdate AND sm.billdate < @todate)
-                                              OR (COALESCE(sm.billdate, sm.createddate) >= @fromUtc AND COALESCE(sm.billdate, sm.createddate) < @toUtc)
-                                          )
-                                          {pharmExtra}";
-                                    pharmItemsCount = await invDb.ExecuteScalarAsync<int>(sqlPharmItems, pharmParams);
-                                }
+                                string sqlPharmItems = $@"
+                                    SELECT COUNT(1)
+                                    FROM public.sales_detail sd
+                                    INNER JOIN public.sales_master sm ON sm.salescode = sd.salescode AND sm.tenantcode = sd.tenantcode
+                                    WHERE COALESCE(sm.deleted, false) = false
+                                      AND (
+                                          sm.tenantcode = @t 
+                                          OR TRIM(sm.tenantcode) = TRIM(@t) 
+                                          OR TRIM(LEADING '0' FROM sm.tenantcode) = TRIM(LEADING '0' FROM @t)
+                                      )
+                                      AND (
+                                          (sm.billdate >= @fromdate AND sm.billdate < @todate)
+                                          OR (COALESCE(sm.billdate, sm.createddate) >= @fromUtc AND COALESCE(sm.billdate, sm.createddate) < @toUtc)
+                                      )
+                                      {pharmExtra}";
+                                pharmItemsCount = await invDb.ExecuteScalarAsync<int>(sqlPharmItems, pharmParams);
                             }
                             catch { }
 
@@ -2686,7 +2738,6 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                             double pAmt = (double)(pharmRes.paid ?? 0);
                             double dueAmt = (double)(pharmRes.due ?? 0);
 
-                            // Calculate discount if zero but gross > net, or align gross
                             if (dAmt == 0 && gAmt > nAmt) dAmt = gAmt - nAmt;
                             if (gAmt < nAmt + dAmt) gAmt = nAmt + dAmt;
                             dAmt = Math.Abs(dAmt);
@@ -2705,6 +2756,7 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                             pharmCategoryRow.net = R(nAmt);
                             pharmCategoryRow.collected_amount = R(pAmt);
                             pharmCategoryRow.collected = R(pAmt);
+                            pharmCategoryRow.advance_adjusted = 0;
                             pharmCategoryRow.due_amount = R(dueAmt);
                             pharmCategoryRow.due = R(dueAmt);
                             pharmCategoryRow.paymodes = pharmPaymodes;
@@ -2723,7 +2775,7 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 _logger.LogWarning(ex, "Failed to compute Pharmacy category row for tenant {Tenant}", tenantCode);
             }
 
-            // â”€â”€ Category summary (All breakdown categories including IP & Pharmacy) 
+            // ── Category summary (All breakdown categories including IP & Pharmacy) 
             var order = HmsOpCategories.Order;
             var optional = HmsOpCategories.Optional;
 
@@ -2736,8 +2788,9 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                         return pharmCategoryRow;
 
                     var g = lines.Where(l => l.category == c).ToList();
-                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), discount = Math.Abs(g.Sum(x => x.discount));
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), advAdj = g.Sum(x => x.advance_adjusted), discount = Math.Abs(g.Sum(x => x.discount));
                     double gross = net + discount;
+                    double due = Math.Max(net - paid - advAdj, 0);
                     return new HmsOpCategoryAmountRow
                     {
                         category = c,
@@ -2752,8 +2805,9 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                         net = R(net),
                         collected_amount = R(paid),
                         collected = R(paid),
-                        due_amount = R(Math.Max(net - paid, 0)),
-                        due = R(Math.Max(net - paid, 0)),
+                        advance_adjusted = R(advAdj),
+                        due_amount = R(due),
+                        due = R(due),
                         paymodes = Agg(g)
                     };
                 })
@@ -2765,8 +2819,9 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 .GroupBy(l => new { l.service_id, name = l.service_name ?? l.item_name ?? "Service" })
                 .Select(g =>
                 {
-                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), discount = Math.Abs(g.Sum(x => x.discount));
+                    double net = g.Sum(x => x.net), paid = g.Sum(x => x.paid), advAdj = g.Sum(x => x.advance_adjusted), discount = Math.Abs(g.Sum(x => x.discount));
                     double gross = net + discount;
+                    double due = Math.Max(net - paid - advAdj, 0);
                     return new HmsOpServiceAmountRow
                     {
                         service_id = g.Key.service_id ?? g.Select(x => x.service_id).FirstOrDefault(x => x.HasValue),
@@ -2784,8 +2839,9 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                         net = R(net),
                         collected_amount = R(paid),
                         collected = R(paid),
-                        due_amount = R(Math.Max(net - paid, 0)),
-                        due = R(Math.Max(net - paid, 0)),
+                        advance_adjusted = R(advAdj),
+                        due_amount = R(due),
+                        due = R(due),
                         paymodes = Agg(g)
                     };
                 })
@@ -2823,16 +2879,18 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                     row.gross = row.gross_amount;
                     row.collected_amount = R(g.Sum(x => x.paid));
                     row.collected = row.collected_amount;
-                    row.due_amount = R(Math.Max(row.net_amount - row.collected_amount, 0));
+                    row.advance_adjusted = R(g.Sum(x => x.advance_adjusted));
+                    row.due_amount = R(Math.Max(row.net_amount - row.collected_amount - row.advance_adjusted, 0));
                     row.due = row.due_amount;
                     return row;
                 })
                 .OrderBy(v => v.visit_date).ThenBy(v => v.op_no)
                 .ToList();
 
+            // Combined paymodes across OP, IP (real cash/upi/card), and Pharmacy for cash drawer closing
             var allPaymodes = Agg(lines);
             var combinedPaymodes = allPaymodes
-                .Concat(ipCategoryRow.paymodes)
+                .Concat(ipCategoryRow.paymodes.Where(x => x.paymode != "ADVANCE"))
                 .Concat(pharmCategoryRow.paymodes)
                 .GroupBy(p => p.paymode, StringComparer.OrdinalIgnoreCase)
                 .Select(g => new HmsOpPaymodeAmount
@@ -2850,6 +2908,210 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
             double totalNet = categories.Sum(c => c.net_amount);
             double totalCollected = categories.Sum(c => c.collected_amount);
             double totalDue = categories.Sum(c => c.due_amount);
+            double totalAdvanceAdjusted = R(categories.Sum(c => c.advance_adjusted));
+
+            // ── Combined Batch: Advance Summary + Old Due Cleared + Cancelled Bills (1 Roundtrip) ─────
+            string advExtraRm = "";
+            string advExtraBcb = "";
+            if (bhcode.HasValue) { advExtraRm += " AND rm.enteredbhcode = @bh "; advExtraBcb += " AND bcb.bhcode = @bh "; }
+            if (cntcode.HasValue) { advExtraRm += " AND rm.cntcode = @cnt "; advExtraBcb += " AND bcb.cntcode = @cnt "; }
+
+            string dueExtra = "";
+            if (bhcode.HasValue) { dueExtra += " AND (rm.enteredbhcode = @bh OR lrm.enteredbhcode = @bh) "; }
+            if (cntcode.HasValue) { dueExtra += " AND rm.cntcode = @cnt "; }
+            if (dcode.HasValue) { dueExtra += " AND lrm.dcode = @dcode "; }
+
+            string cancelExtra = "";
+            if (bhcode.HasValue) { cancelExtra += " AND (lrm.enteredbhcode = @bh OR lrm.alteredbhcode = @bh) "; }
+            if (cntcode.HasValue) { cancelExtra += " AND lrm.cntcode = @cnt "; }
+            if (dcode.HasValue) { cancelExtra += " AND lrm.dcode = @dcode "; }
+
+            string sqlCombinedFinal = $@"
+                -- 1. Advance deposits collected today
+                SELECT 
+                    UPPER(COALESCE(
+                        NULLIF(TRIM(pm.name), ''), 
+                        NULLIF(TRIM(bcb.collection_type), ''),
+                        'CASH'
+                    )) AS paymode,
+                    rm.pmcode,
+                    COALESCE(SUM(rm.amountpaid), 0)::float8 AS amount
+                FROM receipt_master rm
+                LEFT JOIN paymode_master pm 
+                       ON pm.pmcode = rm.pmcode 
+                      AND pm.tenant_code = rm.tenant_code 
+                      AND COALESCE(pm.deleted, false) = false
+                LEFT JOIN balancecollectionby bcb
+                       ON bcb.receipt_guid = rm.receiptguid
+                      AND bcb.tenant_code = rm.tenant_code
+                      AND COALESCE(bcb.deleted, false) = false
+                WHERE rm.tenant_code = @t
+                  AND rm.receipttype = 'ADVANCE'
+                  AND COALESCE(rm.isdeleted, false) = false
+                  AND COALESCE(rm.deleted, false) = false
+                  AND rm.receiptdate >= @fromUtc AND rm.receiptdate < @toUtc
+                  {advExtraRm}
+                GROUP BY 1, 2
+                ORDER BY amount DESC;
+
+                -- 2. Advance used today across all bills
+                SELECT COALESCE(SUM(bcb.collectedamount), 0)::float8
+                FROM balancecollectionby bcb
+                WHERE bcb.tenant_code = @t
+                  AND COALESCE(bcb.deleted, false) = false
+                  AND UPPER(COALESCE(bcb.collection_type, '')) = 'ADVANCE'
+                  AND (
+                      (bcb.collected_date >= @fromUtc AND bcb.collected_date < @toUtc)
+                      OR (bcb.collected_date IS NULL AND bcb.entereddate >= @fromUtc AND bcb.entereddate < @toUtc)
+                  )
+                  {advExtraBcb};
+
+                -- 3. Advance refunded today
+                SELECT COALESCE(SUM(rm.amountpaid), 0)::float8
+                FROM receipt_master rm
+                WHERE rm.tenant_code = @t
+                  AND rm.receipttype = 'ADVANCE_REFUND'
+                  AND COALESCE(rm.isdeleted, false) = false
+                  AND COALESCE(rm.deleted, false) = false
+                  AND rm.receiptdate >= @fromUtc AND rm.receiptdate < @toUtc
+                  {advExtraRm};
+
+                -- 4. Old Due Cleared Today
+                SELECT
+                    rm.receiptguid,
+                    rm.receiptsnoprint AS receipt_no,
+                    rm.receiptdate AS receipt_date,
+                    lrm.requestguid,
+                    lrm.requestsnoprint AS bill_no,
+                    lrm.requestdatetime AS bill_date,
+                    lrm.custid,
+                    lrm.name AS patient_name,
+                    lrm.mobileno,
+                    COALESCE(lrm.totalamount, 0)::float8 AS bill_total,
+                    COALESCE(rd.receiptamount, rm.amountpaid, 0)::float8 AS amount_cleared,
+                    UPPER(COALESCE(
+                        NULLIF(TRIM(pm.name), ''), 
+                        NULLIF(TRIM(bcb.collection_type), ''),
+                        'CASH'
+                    )) AS paymode,
+                    COALESCE(rm.pmcode, bcb.pmcode) AS pmcode,
+                    rm.paymentreference AS reference_no,
+                    dm.name AS doctor_name,
+                    cnt.name AS counter_name,
+                    um.name AS user_name
+                FROM receipt_master rm
+                LEFT JOIN receipt_details rd 
+                        ON rd.receiptguid = rm.receiptguid 
+                       AND rd.tenant_code = rm.tenant_code 
+                       AND COALESCE(rd.deleted, false) = false
+                LEFT JOIN lab_request_master lrm 
+                        ON lrm.requestguid = rd.requestguid 
+                       AND lrm.tenant_code = rm.tenant_code
+                LEFT JOIN paymode_master pm 
+                       ON pm.pmcode = rm.pmcode 
+                      AND pm.tenant_code = rm.tenant_code 
+                      AND COALESCE(pm.deleted, false) = false
+                LEFT JOIN balancecollectionby bcb
+                       ON bcb.receipt_guid = rm.receiptguid
+                      AND bcb.tenant_code = rm.tenant_code
+                      AND COALESCE(bcb.deleted, false) = false
+                LEFT JOIN doctor_master dm 
+                       ON dm.dcode = lrm.dcode 
+                      AND dm.tenant_code = lrm.tenant_code
+                LEFT JOIN counter_master cnt 
+                       ON cnt.cntcode = rm.cntcode 
+                      AND cnt.tenant_code = rm.tenant_code
+                LEFT JOIN mastertenant.user_master um 
+                       ON um.user_code = rm.usercode
+                WHERE rm.tenant_code = @t
+                  AND rm.receipttype = 'DUE'
+                  AND COALESCE(rm.isdeleted, false) = false
+                  AND COALESCE(rm.deleted, false) = false
+                  AND rm.receiptdate >= @fromUtc AND rm.receiptdate < @toUtc
+                  {dueExtra}
+                ORDER BY rm.receiptdate DESC, lrm.requestdatetime DESC;
+
+                -- 5. Cancelled Bills
+                SELECT 
+                    lrm.requestguid,
+                    lrm.requestsnoprint AS bill_no,
+                    lrm.requestdatetime AS bill_date,
+                    lrm.custid,
+                    lrm.name AS patient_name,
+                    lrm.mobileno,
+                    COALESCE(lrm.totalamount, lrm.requestamount, 0)::float8 AS total_amount,
+                    COALESCE(lrm.requestamount, lrm.totalamount, 0)::float8 AS gross_amount,
+                    (COALESCE(lrm.discountamount, 0) + COALESCE(lrm.specialdiscount, 0) + COALESCE(lrm.ourdiscount, 0))::float8 AS discount_amount,
+                    dm.name AS doctor_name,
+                    lrm.concessionreason AS cancellation_reason,
+                    um.name AS cancelled_by
+                FROM lab_request_master lrm
+                LEFT JOIN doctor_master dm ON dm.dcode = lrm.dcode AND dm.tenant_code = lrm.tenant_code
+                LEFT JOIN mastertenant.user_master um ON um.user_code = lrm.usercode
+                WHERE lrm.tenant_code = @t
+                  AND (COALESCE(lrm.isdeleted, false) = true OR COALESCE(lrm.deleted, false) = true)
+                  AND COALESCE(lrm.bill_category, 'HMS') = 'HMS'
+                  AND lrm.requestdatetime >= @fromUtc AND lrm.requestdatetime < @toUtc
+                  {cancelExtra}
+                ORDER BY lrm.requestdatetime DESC;";
+
+            var multiFinalParams = new DynamicParameters();
+            multiFinalParams.Add("t", tenantCode);
+            multiFinalParams.Add("fromUtc", fromUtc);
+            multiFinalParams.Add("toUtc", toUtc);
+            if (bhcode.HasValue) multiFinalParams.Add("bh", bhcode.Value);
+            if (cntcode.HasValue) multiFinalParams.Add("cnt", cntcode.Value);
+            if (dcode.HasValue) multiFinalParams.Add("dcode", dcode.Value);
+
+            using var multiFinal = await db.QueryMultipleAsync(sqlCombinedFinal, multiFinalParams);
+            var advCollectedPaymodes = (await multiFinal.ReadAsync<HmsOpPaymodeAmount>()).ToList();
+            double advanceUsed = R(await multiFinal.ReadFirstOrDefaultAsync<double>());
+            double advanceRefunded = R(await multiFinal.ReadFirstOrDefaultAsync<double>());
+            var dueClearedBills = (await multiFinal.ReadAsync<HmsOldDueClearedBillRow>()).ToList();
+            var cancelledBills = (await multiFinal.ReadAsync<HmsCancelledBillSummaryRow>()).ToList();
+
+            double advanceCollected = R(advCollectedPaymodes.Sum(x => x.amount));
+            if (advanceUsed < 0.01 && totalAdvanceAdjusted > 0.01) advanceUsed = totalAdvanceAdjusted;
+
+            var dueClearedByPaymode = dueClearedBills
+                .GroupBy(x => x.paymode, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new HmsOpPaymodeAmount
+                {
+                    paymode = g.Key,
+                    pmcode = g.Select(x => x.pmcode).FirstOrDefault(x => x.HasValue),
+                    amount = R(g.Sum(x => x.amount_cleared))
+                })
+                .OrderByDescending(x => x.amount)
+                .ToList();
+
+            var dueClearedByDate = dueClearedBills
+                .Where(b => b.bill_date.HasValue)
+                .GroupBy(b => b.bill_date!.Value.Date)
+                .Select(g => new HmsOldDueClearedDateSummary
+                {
+                    bill_date = g.Key,
+                    bill_date_str = g.Key.ToString("yyyy-MM-dd"),
+                    bill_count = g.Select(x => x.requestguid).Distinct().Count(),
+                    total_cleared = R(g.Sum(x => x.amount_cleared)),
+                    paymodes = g.GroupBy(x => x.paymode, StringComparer.OrdinalIgnoreCase)
+                                .Select(pg => new HmsOpPaymodeAmount
+                                {
+                                    paymode = pg.Key,
+                                    pmcode = pg.Select(x => x.pmcode).FirstOrDefault(x => x.HasValue),
+                                    amount = R(pg.Sum(x => x.amount_cleared))
+                                })
+                                .OrderByDescending(x => x.amount)
+                                .ToList()
+                })
+                .OrderBy(d => d.bill_date)
+                .ToList();
+
+            double totalDueCleared = R(dueClearedBills.Sum(x => x.amount_cleared));
+            int cancelledBillCount = cancelledBills.Count;
+            double cancelledBillTotalAmount = R(cancelledBills.Sum(x => x.total_amount));
+
+            // ── Net Counter Collection (Cash Closing Total) ───────────────────────
+            double netCounterCollection = R(totalCollected + totalDueCleared + advanceCollected - advanceRefunded);
 
             return new HmsOpCategoryCollectionResponse
             {
@@ -2865,7 +3127,36 @@ DateTime fromdate, DateTime todate, int? bhcode, int? cntcode, int? dcode, strin
                 total_collected = R(totalCollected),
                 total_due = R(totalDue),
                 total_ip_cost = ipCategoryRow.net_amount,
+                total_ip_amount = ipCategoryRow.net_amount,
+                ip_advance_used = ipAdvanceUsed,
+                ip_paymodes = ipPaymodes,
                 total_pharmacy_cost = pharmCategoryRow.net_amount,
+
+                // Advance summary
+                advance_collected = advanceCollected,
+                total_advance_collected = advanceCollected,
+                advance_used = advanceUsed,
+                total_advance_used = advanceUsed,
+                advance_refunded = advanceRefunded,
+                total_advance_refunded = advanceRefunded,
+                total_advance_adjusted = totalAdvanceAdjusted,
+                advance_collected_by_paymode = advCollectedPaymodes,
+
+                // Old due cleared
+                total_due_cleared = totalDueCleared,
+                due_cleared_today = totalDueCleared,
+                due_cleared_by_paymode = dueClearedByPaymode,
+                due_cleared_by_bill_date = dueClearedByDate,
+                due_cleared_bills = dueClearedBills,
+
+                // Cancelled bills
+                cancelled_bill_count = cancelledBillCount,
+                cancelled_bill_total_amount = cancelledBillTotalAmount,
+                cancelled_bills = cancelledBills,
+
+                // Net Counter Cash Closing
+                net_counter_collection = netCounterCollection,
+
                 paymode_totals = combinedPaymodes,
                 categories = categories,
                 services = services,
