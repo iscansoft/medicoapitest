@@ -2697,20 +2697,6 @@ AND b.tenant_code = @tenant_code
                 (bool?)row?.is_slot_required ?? true
             );
         }
-        // ─────────────────────────────────────────
-        // ADD SERVICES TO AN EXISTING OP VISIT
-        // For a patient already registered (consultation/service/dressing/combo),
-        // bolt on extra SERVICE/DRESSING charges against the SAME op_id — no
-        // token, no new op_registration row. Purely unbilled-charge inserts,
-        // same as ComboRegistration's additional_items loop, but standalone.
-        // ─────────────────────────────────────────
-        // ─────────────────────────────────────────
-        // ADD SERVICES TO AN EXISTING OP VISIT
-        // SERVICE and DRESSING items are both pushed to unbilled charges
-        // against the SAME op_id (no token, no new op_registration row).
-        // If auto_route_billing_after_register is ON, everything added here
-        // (services + dressing) is auto-billed to the cash counter.
-        // ─────────────────────────────────────────
         public async Task<string> AddServicesToOp(AddServicesToOpRequest req, string tenant_code)
         {
             try
@@ -2735,9 +2721,9 @@ AND b.tenant_code = @tenant_code
 
                 var op = await db.QueryFirstOrDefaultAsync<OpRegistrationModel>(
                     @"SELECT * FROM op_registration
-              WHERE op_id       = @op_id
-              AND   tenant_code = @tenant_code
-              AND   isdeleted   = false",
+      WHERE op_id       = @op_id
+      AND   tenant_code = @tenant_code
+      AND   isdeleted   = false",
                     new { req.op_id, tenant_code });
 
                 if (op == null)
@@ -2749,6 +2735,26 @@ AND b.tenant_code = @tenant_code
 
                 if (op.visit_status == "CANCELLED")
                     return "Cannot add services to a cancelled visit";
+
+                // ── Snapshot of unbilled rows that already exist for this visit (lab, consultation, etc.).
+                // Whatever appears after the loop and isn't in this snapshot = the rows added by THIS call.
+                string opIdText = op.op_id.ToString();
+
+                async Task<List<string>> GetUnbilledIds() =>
+                    (await db.QueryAsync<string>(
+                        @"SELECT unbilledid::text FROM unbilledcharges
+                  WHERE opvisitid   = @opIdText
+                  AND   tenant_code = @tenant_code
+                  AND   COALESCE(billedstatus, false) = false",
+                        new { opIdText, tenant_code })).ToList();
+
+                var existingUnbilledIds = (await GetUnbilledIds()).ToHashSet();
+
+                async Task<List<string>> GetNewlyAddedIds()
+                {
+                    var now = await GetUnbilledIds();
+                    return now.Where(id => !existingUnbilledIds.Contains(id)).ToList();
+                }
 
                 var billedItems = new List<string>();
                 int billableCount = 0;
@@ -2766,9 +2772,9 @@ AND b.tenant_code = @tenant_code
                     {
                         var svc = await db.QueryFirstOrDefaultAsync<ServiceTypeModel>(
                             @"SELECT * FROM service_type_master
-                      WHERE service_id  = @service_id
-                      AND   tenant_code = @tenant_code
-                      AND   deleted     = false",
+              WHERE service_id  = @service_id
+              AND   tenant_code = @tenant_code
+              AND   deleted     = false",
                             new { item.service_id, tenant_code });
 
                         if (svc == null)
@@ -2796,9 +2802,9 @@ AND b.tenant_code = @tenant_code
                     var addRes = await _unbilledCls.AddVisitAdditionalCharge(itemReq, itemType, tenant_code);
                     if (!addRes.StartsWith("Success", StringComparison.OrdinalIgnoreCase))
                     {
-                        // Items added before the failure are kept; still try to auto-bill them below
+                        // Items added before the failure are kept; bill ONLY those, not the old lab rows
                         if (billableCount > 0)
-                            await TryAutoBill(db, op, req, tenant_code);
+                            await TryAutoBill(db, op, req, tenant_code, await GetNewlyAddedIds());
 
                         return $"Success-Partial|OpId:{op.op_id}|OpNo:{op.op_no}|Items:{string.Join(",", billedItems)}|Error:{serviceName}: {addRes}";
                     }
@@ -2812,22 +2818,26 @@ AND b.tenant_code = @tenant_code
 
                 await db.ExecuteAsync(
                     @"UPDATE op_registration
-              SET notes = @newNotes, updated_at = now()
-              WHERE op_id = @op_id AND tenant_code = @tenant_code",
+      SET notes = @newNotes, updated_at = now()
+      WHERE op_id = @op_id AND tenant_code = @tenant_code",
                     new { newNotes, req.op_id, tenant_code });
 
                 bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
                     @"SELECT auto_route_billing_after_register FROM lab_settings
-              WHERE tenant_code = @tenant_code AND deleted = false
-              ORDER BY (bh_code IS NULL) LIMIT 1",
+      WHERE tenant_code = @tenant_code AND deleted = false
+      ORDER BY (bh_code IS NULL) LIMIT 1",
                     new { tenant_code }) ?? false;
 
                 string autoBillTag = "";
                 if (routeToBilling && billableCount > 0)
                 {
+                    // Bill ONLY the rows added in this call — existing lab/other unbilled rows stay unbilled
+                    var newIds = await GetNewlyAddedIds();
+
                     var (billStatus, billData) = await _billingCls.AutoBillOpVisit(
                         op.op_id.ToString(), op.custid, op.dcode,
-                        req.enteredbhcode, req.cntcode, tenant_code);
+                        req.enteredbhcode, req.cntcode, tenant_code,
+                        onlyChargeIds: newIds);
 
                     autoBillTag = billStatus.StartsWith("SUCCESS", StringComparison.OrdinalIgnoreCase)
                         ? $"|AutoBilled:true|BillNo:{billData?.bill_no}|BillGuid:{billData?.requestguid}|Balance:{billData?.balance_amount}"
@@ -2841,22 +2851,24 @@ AND b.tenant_code = @tenant_code
                 return ex.Message;
             }
         }
-
         // Best-effort auto-bill used on the partial-failure path
-        private async Task TryAutoBill(IDbConnection db, OpRegistrationModel op, AddServicesToOpRequest req, string tenant_code)
+        // Best-effort auto-bill used on the partial-failure path
+        private async Task TryAutoBill(IDbConnection db, OpRegistrationModel op, AddServicesToOpRequest req,
+            string tenant_code, List<string> onlyChargeIds)
         {
             try
             {
                 bool routeToBilling = await db.ExecuteScalarAsync<bool?>(
                     @"SELECT auto_route_billing_after_register FROM lab_settings
-              WHERE tenant_code = @tenant_code AND deleted = false
-              ORDER BY (bh_code IS NULL) LIMIT 1",
+      WHERE tenant_code = @tenant_code AND deleted = false
+      ORDER BY (bh_code IS NULL) LIMIT 1",
                     new { tenant_code }) ?? false;
 
                 if (routeToBilling)
                     await _billingCls.AutoBillOpVisit(
                         op.op_id.ToString(), op.custid, op.dcode,
-                        req.enteredbhcode, req.cntcode, tenant_code);
+                        req.enteredbhcode, req.cntcode, tenant_code,
+                        onlyChargeIds: onlyChargeIds);
             }
             catch (Exception ex)
             {

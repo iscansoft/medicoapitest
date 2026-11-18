@@ -847,8 +847,14 @@ namespace medico_backend.Model
         public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
+        public double total_collected { get; set; }
         public double due_amount { get; set; }
         public double advance_adjusted { get; set; }
+        public double advance_amount { get; set; }
+        public double cash_amount { get; set; }
+        public double upi_amount { get; set; }
+        public double other_amount { get; set; }
+        public double refund_amount { get; set; }
         public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
     }
 
@@ -868,8 +874,14 @@ namespace medico_backend.Model
         public double due { get; set; }
         public double net_amount { get; set; }
         public double collected_amount { get; set; }
+        public double total_collected { get; set; }
         public double due_amount { get; set; }
         public double advance_adjusted { get; set; }
+        public double advance_amount { get; set; }
+        public double cash_amount { get; set; }
+        public double upi_amount { get; set; }
+        public double other_amount { get; set; }
+        public double refund_amount { get; set; }
         public List<HmsOpPaymodeAmount> paymodes { get; set; } = new();
     }
 
@@ -903,6 +915,7 @@ namespace medico_backend.Model
         public string receipt_guid { get; set; } = "";
         public string? receipt_no { get; set; }
         public DateTime? receipt_date { get; set; }
+        public DateTime? cleared_date { get; set; }
         public string requestguid { get; set; } = "";
         public string? bill_no { get; set; }
         public DateTime? bill_date { get; set; }
@@ -962,7 +975,15 @@ namespace medico_backend.Model
 
         // ── IP Summary ────────────────────────────────────────────────
         public double total_ip_amount { get; set; }
+        public double total_bill_amount { get; set; }
         public double ip_advance_used { get; set; }
+        public double ip_total_collected { get; set; }
+        public double ip_advance_collected { get; set; }
+        public double ip_cash_collected { get; set; }
+        public double ip_upi_collected { get; set; }
+        public double ip_other_collected { get; set; }
+        public double ip_advance_refunded { get; set; }
+        public double total_amount_refunded { get; set; }
         public List<HmsOpPaymodeAmount> ip_paymodes { get; set; } = new();
 
         // ── Advance summary ───────────────────────────────────────────
