@@ -11,6 +11,7 @@
     <PackageReference Include="AWSSDK.Extensions.NETCore.Setup" Version="4.0.3.36" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.22.2" />
     <PackageReference Include="BCrypt.Net-Next" Version="4.1.0" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="Dapper.Contrib" Version="2.0.78" />
     <PackageReference Include="EPPlus" Version="8.5.4" />
@@ -20,7 +21,6 @@
     <PackageReference Include="Minio" Version="7.0.0" />
     <PackageReference Include="Npgsql" Version="10.0.2" />
     <PackageReference Include="Renci.SshNet.Async" Version="1.4.0" />
-    <PackageReference Include="SSH.NET" Version="2025.1.0" />
     <PackageReference Include="SkiaSharp" Version="2.88.9" />
   </ItemGroup>
 
